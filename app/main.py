@@ -1,0 +1,55 @@
+import os
+from dotenv import load_dotenv
+from litestar import Litestar
+from litestar.config.cors import CORSConfig
+from litestar.datastructures import State
+
+# 1. Cargar las variables del archivo .env al entorno de Python
+load_dotenv()
+
+# Importaciones de tus capas
+from app.infrastructure.database import DatabaseManager
+from app.infrastructure.repositories import AppointmentRepository
+from app.infrastructure.external_api import NotificationService
+from app.domain.services import BusinessLogicService
+from app.application.appointment_controller import AppointmentController
+from app.application.contract_controller import ContractController
+
+# 2. Extraer las variables del entorno usando os.getenv()
+# El segundo parámetro es un valor por defecto si la variable no existe en el .env
+DB_HOST = os.getenv("DB_HOST")
+DB_USER = os.getenv("DB_USER")
+DB_PASS = os.getenv("DB_PASSWORD")
+DB_NAME = os.getenv("DB_NAME", "inkmanager_db")
+N8N_URL = os.getenv("N8N_WEBHOOK_URL")
+APP_PORT = int(os.getenv("PORT", 5000))
+IS_DEBUG = os.getenv("DEBUG", "True").lower() == "true"
+
+# 3. Pasar las variables a las clases de Infraestructura
+# Aquí las variables del .env entran a los constructores (__init__) de tus clases
+db_mgr = DatabaseManager(
+    host=DB_HOST, 
+    user=DB_USER, 
+    password=DB_PASS, 
+    database=DB_NAME
+)
+
+repo = AppointmentRepository(db_mgr)
+
+notifier = NotificationService(webhook_url=N8N_URL)
+
+# 4. Inicializar Servicio de Dominio
+business_service = BusinessLogicService(repo, notifier)
+
+# 5. Configurar Litestar
+initial_state = State({"service": business_service})
+
+app = Litestar(
+    route_handlers=[AppointmentController, ContractController],
+    cors_config=CORSConfig(allow_origins=["*"]),
+    state=initial_state,
+    debug=IS_DEBUG
+)
+
+# Nota: Para correrlo respetando el puerto del .env usa:
+# uvicorn main:app --host 0.0.0.0 --port 5000
