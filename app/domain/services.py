@@ -1,67 +1,73 @@
+
 import asyncio
 from typing import Any
 from app.domain.models import AppointmentCreate, ContractSign
 
 class BusinessLogicService:
-    """Capa de Dominio: Contiene las reglas del estudio con tipado fuerte."""
+    """
+    Capa de Dominio: Contiene la lógica central del estudio.
+    Orquesta las operaciones entre los modelos, el repositorio y n8n.
+    """
     def __init__(self, repository, notifier):
         self.repository = repository
         self.notifier = notifier
 
-    async def register_appointment(self, data: AppointmentCreate):
+    async def register_appointment(self, data: AppointmentCreate) -> int:
         """
-        Registra una cita usando el modelo AppointmentCreate.
-        El objeto 'data' es una Dataclass, por lo que se accede con puntos (.).
+        Registra una nueva cita. 
+        Al ser un objeto de modelo, accedemos con puntos (data.name).
         """
-        # IMPORTANTE: El repositorio ya recibe el objeto AppointmentCreate.
-        # Se debe asegurar que el repositorio use data.name y no data['name'].
+        # 1. Guardar en la base de datos
         new_id = self.repository.create(data)
         
-        # Estructuramos el payload para n8n usando notación de punto (.)
-        notification_payload = {
-            "id": new_id, 
-            "name": data.name, 
+        # 2. Notificar a n8n de forma asíncrona para no retrasar la API
+        # Enviamos un evento de 'appointment_created'
+        asyncio.create_task(self._async_notify("appointment_created", {
+            "id": new_id,
+            "name": data.name,
             "phone": data.phone,
             "service": data.service,
-            "date": data.date,
-            "deposit": data.deposit,
-            "detail": data.detail
-        }
-        
-        # Disparar evento a n8n sin bloquear el flujo principal
-        asyncio.create_task(self._async_notify("appointment_created", notification_payload))
+            "date": data.date
+        }))
         
         return new_id
 
     async def process_contract_signature(self, data: ContractSign):
         """
-        Procesa la firma del contrato usando el modelo ContractSign.
+        Procesa la firma del contrato y la encuesta de salud.
         """
-        # Verificamos existencia de la cita antes de proceder.
-        # El repositorio get_by_id ahora devuelve un objeto AppointmentCreate o None.
+        # 1. Verificar que la cita exista
         appointment = self.repository.get_by_id(data.appointment_id)
         if not appointment:
-            raise ValueError(f"La cita con ID {data.appointment_id} no existe")
+            raise ValueError(f"Cita con ID {data.appointment_id} no encontrada.")
 
-        # Guardar los datos del contrato en MySQL pasando el objeto tipado
+        # 2. Guardar los datos del contrato en MySQL
         self.repository.create_contract(data)
 
-        # Regla de Negocio: Cambiar estado a 'Completado' tras la firma exitosa
+        # 3. Actualizar el estado de la cita a 'Completado'
         self.repository.update_status(data.appointment_id, "Completado")
         
-        # Payload para n8n: Información para disparar flujos de post-venta
+        # 4. Notificar a n8n para enviar cuidados y seguimiento
+        # Aquí enviamos también el health_data para que n8n pueda procesar alertas si es necesario
         notification_payload = {
             "appointment_id": data.appointment_id,
             "customer_name": appointment.name,
             "phone": appointment.phone,
             "service": appointment.service,
-            "is_minor": data.is_minor,
             "health_summary": data.health_data
         }
         
+        # Ejecutamos la notificación sin bloquear la respuesta al cliente
         asyncio.create_task(self._async_notify("contract_signed", notification_payload))
 
     async def _async_notify(self, event: str, payload: dict):
-        """Ejecuta la notificación a n8n en un hilo separado para optimizar tiempos de respuesta."""
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self.notifier.notify, event, payload)
+        """
+        Helper para ejecutar la notificación a n8n sin bloquear el flujo principal.
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            # Se ejecuta en un executor para no bloquear el bucle de eventos asíncrono
+            await loop.run_in_executor(None, self.notifier.notify, event, payload)
+        except Exception as e:
+            # Importante loggear el error de la tarea asíncrona si falla
+            print(f"Error en segundo plano al notificar n8n: {e}")

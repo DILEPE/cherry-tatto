@@ -25,6 +25,8 @@ class ContractSign:
     signature: str
     tutor_signature: Optional[str] = None
 
+
+
 # ==========================================
 # ESQUEMAS DE SALIDA (RESPONSES)
 # ==========================================

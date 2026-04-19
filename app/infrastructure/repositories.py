@@ -67,3 +67,30 @@ class AppointmentRepository:
         conn.commit()
         cursor.close()
         conn.close()
+
+        def create_contract(self, data: ContractSign) -> int:
+            """Guarda la firma y la encuesta de salud (NUEVO MÉTODO)."""
+            conn = self.db.get_connection()
+            try:
+                cursor = self._get_cursor(conn)
+                # Serializamos el diccionario de salud a JSON string
+                health_json = json.dumps(data.health_data)
+            
+                query = """INSERT INTO contracts 
+                           (appointment_id, is_minor, health_data, client_signature, tutor_signature) 
+                           VALUES (%s, %s, %s, %s, %s)"""
+            
+                values = (
+                    data.appointment_id,
+                    data.is_minor,
+                    health_json,
+                    data.signature,
+                    data.tutor_signature
+                )
+            
+                cursor.execute(query, values)
+                contract_id = cursor.lastrowid
+                conn.commit()
+                return contract_id
+            finally:
+                if conn: conn.close()
