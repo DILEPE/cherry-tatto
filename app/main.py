@@ -14,6 +14,9 @@ from app.infrastructure.external_api import NotificationService
 from app.domain.services import BusinessLogicService
 from app.application.appointment_controller import AppointmentController
 from app.application.contract_controller import ContractController
+from app.application.survey_controller import SurveyController
+from app.application.template_controller import TemplateController
+
 
 # 2. Extraer las variables del entorno usando os.getenv()
 # El segundo parámetro es un valor por defecto si la variable no existe en el .env
@@ -45,10 +48,10 @@ business_service = BusinessLogicService(repo, notifier)
 initial_state = State({"service": business_service})
 
 app = Litestar(
-    route_handlers=[AppointmentController, ContractController],
+    route_handlers=[AppointmentController, ContractController, TemplateController, SurveyController],
     cors_config=CORSConfig(allow_origins=["*"]),
     state=initial_state,
-    debug=IS_DEBUG
+    debug=IS_DEBUG,
 )
 
 # Nota: Para correrlo respetando el puerto del .env usa:
