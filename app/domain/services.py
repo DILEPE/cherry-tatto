@@ -1,6 +1,13 @@
 import asyncio
-from typing import Any
-from app.domain.models import AppointmentCreate, ContractSign
+from typing import Any, Dict, List, Optional
+
+from app.domain.models import (
+    AppointmentCreate,
+    ContractSign,
+    ContractTemplate,
+    Survey,
+)
+
 
 class BusinessLogicService:
     """
@@ -11,9 +18,6 @@ class BusinessLogicService:
         self.repository = repository
         self.notifier = notifier
 
-    async def create_template(self, data: ContractTemplate) -> int:
-        """Crea una nueva versión de contrato."""
-        return self.repository.create_template(data)
     async def register_appointment(self, data: AppointmentCreate) -> int:
         """
         Registra una nueva cita. 
@@ -62,13 +66,10 @@ class BusinessLogicService:
         # Ejecutamos la notificación sin bloquear la respuesta al cliente
         asyncio.create_task(self._async_notify("contract_signed", notification_payload))
 
-        # --- Gestión de Encuestas (SOLUCIÓN AL ERROR) ---
     async def register_survey(self, data: Survey) -> int:
         """
         Registra la encuesta y alerta si la calificación es baja (1-2).
         """
-        # IMPORTANTE: El error dice que BusinessLogicService no tiene este atributo.
-        # Al guardar este archivo, el atributo 'register_survey' quedará definido.
         new_id = self.repository.create_survey(data)
         
         if data.rating <= 2:
@@ -85,12 +86,14 @@ class BusinessLogicService:
 
     # --- Gestión de Plantillas ---
     async def get_templates(self, only_active: bool = False) -> List[ContractTemplate]:
-        return self.repository.get_templates(only_active)
+        rows = self.repository.get_templates(only_active)
+        return [self._template_row_to_model(row) for row in rows]
 
     async def get_template_by_id(self, template_id: int) -> Optional[ContractTemplate]:
         return self.repository.get_template_by_id(template_id)
 
     async def create_template(self, data: ContractTemplate) -> int:
+        """Crea una nueva versión de plantilla de contrato."""
         return self.repository.create_template(data)
 
     async def update_template(self, template_id: int, data: ContractTemplate):
@@ -103,6 +106,22 @@ class BusinessLogicService:
     async def get_financial_report(self, start_date: str, end_date: str) -> List[Dict[str, Any]]:
         """Obtiene datos detallados para el reporte de Andrés."""
         return self.repository.get_detailed_report(start_date, end_date)
+
+    async def list_appointments(self) -> List[Dict[str, Any]]:
+        return self.repository.get_all()
+
+    async def list_surveys(self) -> List[Dict[str, Any]]:
+        return self.repository.get_surveys()
+
+    @staticmethod
+    def _template_row_to_model(row: Dict[str, Any]) -> ContractTemplate:
+        return ContractTemplate(
+            id=row["id"],
+            name=row["name"],
+            version=row["version"],
+            content=row["content"],
+            is_active=bool(row["is_active"]),
+        )
 
     # --- Helpers Asíncronos ---
     async def _async_notify(self, event: str, payload: dict):

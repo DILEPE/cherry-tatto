@@ -1,15 +1,11 @@
-from litestar import Controller, post, get, status_codes
+from typing import Any, Dict, List
+
+from litestar import Controller, get, post, status_codes
 from litestar.datastructures import State
 from litestar.exceptions import HTTPException
-from app.domain.models import Survey, APIResponse
-from typing import List, Dict, Any, Optional
-from app.domain.models import AppointmentCreate, ContractSign, ContractTemplate, Survey
 
+from app.domain.models import APIResponse, Survey
 
-class BusinessLogicService:
-    def __init__(self, repository, notifier):
-        self.repository = repository
-        self.notifier = notifier
 
 class SurveyController(Controller):
     """Controlador para manejar las encuestas de satisfacción."""
@@ -23,7 +19,7 @@ class SurveyController(Controller):
             return APIResponse(
                 status="success",
                 message="Survey registered successfully.",
-                id=new_id
+                id=new_id,
             )
         except Exception as e:
             raise HTTPException(detail=f"Error: {str(e)}", status_code=500)
@@ -31,4 +27,7 @@ class SurveyController(Controller):
     @get("/")
     async def list_surveys(self, state: State) -> List[Dict[str, Any]]:
         """Lista todas las encuestas registradas."""
-        return state.service.repository.get_surveys()
+        try:
+            return await state.service.list_surveys()
+        except Exception as e:
+            raise HTTPException(detail=f"Error al listar encuestas: {str(e)}", status_code=500)

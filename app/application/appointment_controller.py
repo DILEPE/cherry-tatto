@@ -13,9 +13,7 @@ class AppointmentController(Controller):
     async def list_all(self, state: State) -> List[AppointmentResponse]:
         """Lista todas las citas registradas."""
         try:
-            # Accedemos al repositorio a través del servicio o directamente si es necesario
-            # En arquitectura limpia, el controlador pide al servicio los datos
-            appointments = state.service.repository.get_all()
+            appointments = await state.service.list_appointments()
             return [AppointmentResponse(id=appt["id"], status="success", message="Cita obtenida") for appt in appointments]
         except Exception as e:
             raise HTTPException(detail=f"Error al obtener citas: {str(e)}", status_code=500)
