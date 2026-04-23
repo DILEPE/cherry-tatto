@@ -1,6 +1,6 @@
 import json
 from typing import List, Dict, Any, Optional
-from app.domain.models import AppointmentCreate, ContractSign, ContractTemplate
+from app.domain.models import AppointmentCreate, ContractSign, ContractTemplate, Survey
 
 class AppointmentRepository:
     """
@@ -101,13 +101,13 @@ class AppointmentRepository:
         finally:
             if conn: conn.close()
 
+    # --- Encuestas ---
 
-       # --- Gestión de Encuestas (SOLUCIÓN AL ERROR ACTUAL) ---
     def create_survey(self, data: Survey) -> int:
         """Persiste la encuesta de satisfacción en la base de datos."""
         conn = self.db.get_connection()
         try:
-            cursor = conn.cursor()
+            cursor = self._get_cursor(conn)
             query = """
                 INSERT INTO surveys (appointment_id, rating, comments, would_recommend)
                 VALUES (%s, %s, %s, %s)
@@ -127,12 +127,22 @@ class AppointmentRepository:
     def get_survey_by_appointment(self, appointment_id: int) -> Optional[Dict[str, Any]]:
         conn = self.db.get_connection()
         try:
-            cursor = conn.cursor(dictionary=True)
+            cursor = self._get_cursor(conn, dictionary=True)
             cursor.execute("SELECT * FROM surveys WHERE appointment_id = %s", (appointment_id,))
             return cursor.fetchone()
         finally:
             if conn: conn.close()
-    # --- Métodos de Plantillas ---
+
+    def get_surveys(self) -> List[Dict[str, Any]]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute("SELECT * FROM surveys ORDER BY id DESC")
+            return cursor.fetchall()
+        finally:
+            if conn: conn.close()
+
+    # --- Plantillas ---
 
     def create_template(self, data: ContractTemplate) -> int:
         """Crea una nueva plantilla de contrato en la base de datos."""
@@ -176,5 +186,47 @@ class AppointmentRepository:
                     is_active=bool(res['is_active'])
                 )
             return None
+        finally:
+            if conn: conn.close()
+
+    def update_template(self, template_id: int, data: ContractTemplate) -> None:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                """UPDATE contract_templates
+                   SET name = %s, version = %s, content = %s, is_active = %s
+                   WHERE id = %s""",
+                (data.name, data.version, data.content, data.is_active, template_id),
+            )
+            conn.commit()
+        finally:
+            if conn: conn.close()
+
+    def delete_template(self, template_id: int) -> None:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute("DELETE FROM contract_templates WHERE id = %s", (template_id,))
+            conn.commit()
+        finally:
+            if conn: conn.close()
+
+    def get_detailed_report(self, start_date: str, end_date: str) -> List[Dict[str, Any]]:
+        """Citas en rango de fechas con campos útiles para reporte financiero."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT id, customer_name, phone, service_type, appointment_date,
+                       deposit, status, created_at
+                FROM appointments
+                WHERE DATE(appointment_date) BETWEEN DATE(%s) AND DATE(%s)
+                ORDER BY appointment_date ASC
+                """,
+                (start_date, end_date),
+            )
+            return cursor.fetchall()
         finally:
             if conn: conn.close()
