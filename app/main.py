@@ -54,5 +54,6 @@ app = Litestar(
     debug=IS_DEBUG,
 )
 
-# Nota: Para correrlo respetando el puerto del .env usa:
-# uvicorn main:app --host 0.0.0.0 --port 5000
+# Arranque (desde la raíz del repo, con venv activo):
+#   python -m uvicorn app.main:app --host 127.0.0.1 --port 5000
+# El puerto lo toma de la variable PORT en .env (por defecto 5000).

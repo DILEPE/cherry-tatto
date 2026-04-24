@@ -1,0 +1,6 @@
+litestar[standard]
+python-dotenv
+mysql-connector-python
+requests
+uvicorn
+streamlit
