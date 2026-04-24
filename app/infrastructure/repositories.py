@@ -1,6 +1,7 @@
 import json
 from typing import List, Dict, Any, Optional
 from app.domain.models import AppointmentCreate, ContractSign, ContractTemplate, Survey
+from app.domain.service_types import resolve_service_type
 
 class AppointmentRepository:
     """
@@ -34,7 +35,8 @@ class AppointmentRepository:
             query = """INSERT INTO appointments 
                        (customer_name, phone, service_type, detail, appointment_date, deposit) 
                        VALUES (%s, %s, %s, %s, %s, %s)"""
-            values = (data.name, data.phone, data.service, data.detail or '', data.date, data.deposit or 0)
+            service_type = resolve_service_type(data.service)
+            values = (data.name, data.phone, service_type, data.detail or '', data.date, data.deposit or 0)
             cursor.execute(query, values)
             new_id = cursor.lastrowid
             conn.commit()
