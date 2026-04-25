@@ -28,21 +28,40 @@ class AppointmentRepository:
         finally:
             if conn: conn.close()
 
-    def create(self, data: AppointmentCreate) -> int:
-        conn = self.db.get_connection()
+    def create(
+        self,
+        data: AppointmentCreate,
+        customer_id: Optional[int] = None,
+        conn=None,
+    ) -> int:
+        own = conn is None
+        if own:
+            conn = self.db.get_connection()
+        if conn is None:
+            raise ConnectionError("No se pudo establecer conexión con MySQL.")
         try:
             cursor = self._get_cursor(conn)
-            query = """INSERT INTO appointments 
-                       (customer_name, phone, service_type, detail, appointment_date, deposit) 
-                       VALUES (%s, %s, %s, %s, %s, %s)"""
+            query = """INSERT INTO appointments
+                       (customer_id, customer_name, phone, service_type, detail, appointment_date, deposit)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)"""
             service_type = resolve_service_type(data.service)
-            values = (data.name, data.phone, service_type, data.detail or '', data.date, data.deposit or 0)
+            values = (
+                customer_id,
+                data.name,
+                data.phone,
+                service_type,
+                data.detail or "",
+                data.date,
+                data.deposit or 0,
+            )
             cursor.execute(query, values)
             new_id = cursor.lastrowid
-            conn.commit()
-            return new_id
+            if own:
+                conn.commit()
+            return int(new_id)
         finally:
-            if conn: conn.close()
+            if own and conn:
+                conn.close()
 
     def get_by_id(self, appointment_id: int) -> Optional[Any]:
         conn = self.db.get_connection()

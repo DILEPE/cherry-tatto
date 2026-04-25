@@ -23,11 +23,10 @@ if str(_ROOT) not in sys.path:
 
 import streamlit as st
 
-from app.domain.service_types import configured_service_types
-
 from streamlit_app import api_client
+from streamlit_app.citas_tab import render_citas_tab
+from streamlit_app.customers_management import render_customers_management_tab
 from streamlit_app.validation import (
-    validate_appointment,
     validate_contract,
     validate_report_dates,
     validate_survey,
@@ -102,6 +101,14 @@ def _inject_material_neon_css() -> None:
             box-shadow: 0 0 12px rgba(167,154,255,0.2) !important;
           }
           hr { border-color: rgba(255,255,255,0.1) !important; }
+          [data-testid="stTextInput"] input,
+          [data-testid="stNumberInput"] input,
+          [data-testid="stTextArea"] textarea,
+          [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+            background-color: #2e2e2e !important;
+            color: #f2f2f2 !important;
+            border-color: rgba(255,255,255,0.22) !important;
+          }
         </style>
         """,
         unsafe_allow_html=True,
@@ -183,9 +190,10 @@ def main() -> None:
     st.markdown('<p class="neon-title">Panel de operaciones</p>', unsafe_allow_html=True)
     st.caption("Controles tipo Material · tema oscuro Cherry Ink / Rock City")
 
-    tab_citas, tab_contratos, tab_plantillas, tab_encuestas, tab_reporte = st.tabs(
+    tab_citas, tab_customers, tab_contratos, tab_plantillas, tab_encuestas, tab_reporte = st.tabs(
         [
             "Citas · Cherry Ink",
+            "Gestión de clientes",
             "Contratos",
             "Plantillas",
             "Encuestas · Rock City",
@@ -194,55 +202,10 @@ def main() -> None:
     )
 
     with tab_citas:
-        with st.expander("Nueva cita", expanded=True):
-            c1, c2 = st.columns(2)
-            with c1:
-                name = st.text_input("Nombre cliente *", placeholder="Nombre y apellido")
-                phone = st.text_input("Teléfono *", placeholder="+34 …")
-                svc_options = list(configured_service_types())
-                service = st.selectbox(
-                    "Tipo de servicio (ENUM en MySQL) *",
-                    options=svc_options,
-                    index=0,
-                    help="Debe coincidir con los valores del ENUM `service_type`. "
-                    "Configura SERVICE_TYPE_ENUM_VALUES en .env si tu lista es distinta.",
-                )
-            with c2:
-                date_str = st.text_input("Fecha cita *", placeholder="AAAA-MM-DD")
-                detail = st.text_area(
-                    "Detalle del trabajo",
-                    placeholder="Ej. manga neotradicional, lóbulo, retoque…",
-                    height=80,
-                )
-                deposit = st.number_input("Depósito (€)", min_value=0.0, value=0.0, step=10.0)
+        render_citas_tab()
 
-            if st.button("Crear cita", key="btn_appt_create"):
-                valid, errs = validate_appointment(name, phone, service, date_str, detail, deposit)
-                if not valid:
-                    _show_validation_errors(errs)
-                else:
-                    payload = {
-                        "name": name.strip(),
-                        "phone": phone.strip(),
-                        "service": service.strip(),
-                        "date": date_str.strip(),
-                        "detail": detail.strip() or None,
-                        "deposit": float(deposit),
-                    }
-                    ok, code, data = api_client.post_appointment(payload)
-                    if ok:
-                        body = json.dumps(data, ensure_ascii=False) if isinstance(data, dict) else str(data)
-                        st.markdown(f'<div class="m-success">Cita creada: {body}</div>', unsafe_allow_html=True)
-                    else:
-                        st.markdown(f'<div class="m-error">Error HTTP {code}: {_api_error(data)}</div>', unsafe_allow_html=True)
-
-        with st.expander("Listado de citas", expanded=False):
-            if st.button("Refrescar listado", key="btn_appt_list"):
-                ok, code, data = api_client.get_appointments()
-                if ok and isinstance(data, list):
-                    st.dataframe(data, use_container_width=True, hide_index=True)
-                else:
-                    st.markdown(f'<div class="m-error">HTTP {code}: {_api_error(data)}</div>', unsafe_allow_html=True)
+    with tab_customers:
+        render_customers_management_tab()
 
     with tab_contratos:
         with st.expander("Firma de contrato", expanded=True):

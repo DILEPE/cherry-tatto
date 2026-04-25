@@ -73,3 +73,37 @@ def post_survey(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
 
 def get_surveys() -> Tuple[bool, int, Any]:
     return _request("GET", "/api/surveys/")
+
+
+# --- Customers ---
+
+
+def get_customers(
+    *,
+    limit: int = 20,
+    offset: int = 0,
+    search: Optional[str] = None,
+    document_number: Optional[str] = None,
+) -> Tuple[bool, int, Any]:
+    params: Dict[str, Any] = {"limit": limit, "offset": offset}
+    if search:
+        params["search"] = search
+    if document_number:
+        params["document_number"] = document_number
+    return _request("GET", "/api/customers", params=params)
+
+
+def get_customer(customer_id: int) -> Tuple[bool, int, Any]:
+    return _request("GET", f"/api/customers/{customer_id}")
+
+
+def post_customer(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
+    return _request("POST", "/api/customers", json_body=payload)
+
+
+def put_customer(customer_id: int, payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
+    return _request("PUT", f"/api/customers/{customer_id}", json_body=payload)
+
+
+def delete_customer(customer_id: int) -> Tuple[bool, int, Any]:
+    return _request("DELETE", f"/api/customers/{customer_id}")
