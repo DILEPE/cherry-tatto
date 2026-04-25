@@ -142,12 +142,13 @@ class CustomerRepository:
         sql = """
             INSERT INTO customers (
                 first_name, last_name, birth_date, document_type, document_number,
+                document_issue_date,
                 email, phone_number, address, nationality, profession, secondary_email,
                 social_media, emergency_contact_name, emergency_contact_phone,
                 is_minor, guardian_name, guardian_document_type, guardian_document_number,
                 guardian_document_issue_date
             ) VALUES (
-                %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s
+                %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s
             )
         """
         values: tuple[object, ...] = (
@@ -156,6 +157,7 @@ class CustomerRepository:
             data.birth_date,
             data.document_type,
             data.document_number.strip(),
+            data.document_issue_date,
             str(data.email),
             data.phone_number,
             data.address,
@@ -181,6 +183,7 @@ class CustomerRepository:
         sql = """
             UPDATE customers SET
                 first_name=%s, last_name=%s, birth_date=%s, document_type=%s, document_number=%s,
+                document_issue_date=%s,
                 email=%s, phone_number=%s, address=%s, nationality=%s, profession=%s, secondary_email=%s,
                 social_media=%s, emergency_contact_name=%s, emergency_contact_phone=%s,
                 is_minor=%s, guardian_name=%s, guardian_document_type=%s, guardian_document_number=%s,
@@ -193,6 +196,7 @@ class CustomerRepository:
             data.birth_date,
             data.document_type,
             data.document_number.strip(),
+            data.document_issue_date,
             str(data.email),
             data.phone_number,
             data.address,

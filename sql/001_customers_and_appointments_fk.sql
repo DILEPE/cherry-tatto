@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS customers (
     birth_date DATE NOT NULL,
     document_type ENUM('CC', 'TI', 'CE', 'PAS') NOT NULL,
     document_number VARCHAR(32) NOT NULL,
+    document_issue_date DATE NULL,
     email VARCHAR(255) NOT NULL,
     phone_number VARCHAR(32) NOT NULL,
     address VARCHAR(500) NULL,

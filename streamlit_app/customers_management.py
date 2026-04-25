@@ -70,6 +70,12 @@ def _dialog_crear_cliente() -> None:
             key="dlg_cc_dt",
         )
         c_dn = st.text_input("Número de documento *", key="dlg_cc_dn")
+        c_has_ddi = st.checkbox("Registrar fecha de expedición del documento del cliente", key="dlg_cc_has_ddi")
+        c_ddi = st.date_input(
+            "Fecha de expedición del documento del cliente",
+            value=date(2015, 1, 1),
+            key="dlg_cc_ddi",
+        )
     with b:
         c_em = st.text_input("Correo electrónico *", key="dlg_cc_em")
         c_ph = st.text_input("Teléfono *", key="dlg_cc_ph")
@@ -86,16 +92,24 @@ def _dialog_crear_cliente() -> None:
         ecp = st.text_input("Teléfono contacto emergencia", key="dlg_cc_ecp")
 
     c_minor = st.checkbox("Es menor de edad", key="dlg_cc_minor")
-    with st.expander("Datos del tutor o representante", expanded=False):
-        gn = st.text_input("Nombre del tutor", key="dlg_cc_gn")
+    with st.expander("Datos del tutor o representante (menores de edad)", expanded=False):
+        gn = st.text_input("Nombre del tutor o representante", key="dlg_cc_gn")
         gdt = st.selectbox(
-            "Tipo documento tutor",
+            "Tipo de documento del tutor",
             ["CC", "TI", "CE", "PAS"],
             format_func=lambda x: {"CC": "CC — Cédula", "TI": "TI — Tarjeta identidad", "CE": "CE — Extranjería", "PAS": "PAS — Pasaporte"}[x],
             key="dlg_cc_gdt",
         )
-        gdn = st.text_input("Número documento tutor", key="dlg_cc_gdn")
-        gdi = st.date_input("Fecha expedición documento tutor", value=date(2000, 1, 1), key="dlg_cc_gdi")
+        gdn = st.text_input("Número de documento del tutor", key="dlg_cc_gdn")
+        g_has_gdi = st.checkbox(
+            "Registrar fecha de expedición del documento del tutor",
+            key="dlg_cc_has_gdi",
+        )
+        gdi = st.date_input(
+            "Fecha de expedición del documento del tutor",
+            value=date(2000, 1, 1),
+            key="dlg_cc_gdi",
+        )
 
     c1, c2 = st.columns(2)
     with c1:
@@ -106,6 +120,7 @@ def _dialog_crear_cliente() -> None:
                 "birth_date": c_bd.isoformat(),
                 "document_type": c_dt,
                 "document_number": c_dn.strip(),
+                "document_issue_date": c_ddi.isoformat() if c_has_ddi else None,
                 "email": c_em.strip(),
                 "phone_number": c_ph.strip(),
                 "address": c_addr.strip() or None,
@@ -119,7 +134,7 @@ def _dialog_crear_cliente() -> None:
                 "guardian_name": gn.strip() or None,
                 "guardian_document_type": gdt if c_minor else None,
                 "guardian_document_number": gdn.strip() or None,
-                "guardian_document_issue_date": gdi.isoformat() if c_minor else None,
+                "guardian_document_issue_date": gdi.isoformat() if c_minor and g_has_gdi else None,
             }
             ok, code, data = api_client.post_customer(payload)
             if ok:
@@ -142,9 +157,13 @@ def _dialog_ver_cliente(cliente_id: int) -> None:
         st.error(f"No se pudo cargar (HTTP {code}): {_detail(data)}")
     else:
         st.markdown(f"**ID:** {data.get('id')}")
+        doc_line = f"{data.get('document_type')} {data.get('document_number')}"
+        ddi = data.get("document_issue_date")
+        if ddi:
+            doc_line += f" (expedición: {ddi})"
         st.markdown(
             f"**Nombre:** {data.get('first_name', '')} {data.get('last_name', '')}  \n"
-            f"**Documento:** {data.get('document_type')} {data.get('document_number')}  \n"
+            f"**Documento:** {doc_line}  \n"
             f"**Correo:** {data.get('email')}  \n"
             f"**Teléfono:** {data.get('phone_number')}"
         )
@@ -186,6 +205,17 @@ def _dialog_editar_cliente(cliente_id: int) -> None:
             key="dlg_ed_dt",
         )
         edn = st.text_input("Número de documento *", value=ed.get("document_number", ""), key="dlg_ed_dn")
+        eddi_raw = ed.get("document_issue_date")
+        ehas_ddi = st.checkbox(
+            "Registrar fecha de expedición del documento del cliente",
+            value=bool(eddi_raw),
+            key="dlg_ed_has_ddi",
+        )
+        eddi = st.date_input(
+            "Fecha de expedición del documento del cliente",
+            value=_parse_date(eddi_raw) if eddi_raw else date(2015, 1, 1),
+            key="dlg_ed_ddi",
+        )
     with b:
         eem = st.text_input("Correo *", value=ed.get("email", ""), key="dlg_ed_em")
         eph = st.text_input("Teléfono *", value=ed.get("phone_number", ""), key="dlg_ed_ph")
@@ -207,16 +237,21 @@ def _dialog_editar_cliente(cliente_id: int) -> None:
         emin = st.checkbox("Es menor de edad", value=bool(ed.get("is_minor")), key="dlg_ed_minor")
         egn = st.text_input("Nombre del tutor", value=ed.get("guardian_name") or "", key="dlg_ed_gn")
         egdt = st.selectbox(
-            "Tipo documento tutor",
+            "Tipo de documento del tutor",
             ["CC", "TI", "CE", "PAS"],
             index=_doc_type_index(ed.get("guardian_document_type")),
             format_func=lambda x: {"CC": "CC — Cédula", "TI": "TI — Tarjeta identidad", "CE": "CE — Extranjería", "PAS": "PAS — Pasaporte"}[x],
             key="dlg_ed_gdt",
         )
-        egdn = st.text_input("Número documento tutor", value=ed.get("guardian_document_number") or "", key="dlg_ed_gdn")
+        egdn = st.text_input("Número de documento del tutor", value=ed.get("guardian_document_number") or "", key="dlg_ed_gdn")
         egdi_raw = ed.get("guardian_document_issue_date")
+        ehas_gdi = st.checkbox(
+            "Registrar fecha de expedición del documento del tutor",
+            value=bool(egdi_raw),
+            key="dlg_ed_has_gdi",
+        )
         egdi = st.date_input(
-            "Fecha expedición documento tutor",
+            "Fecha de expedición del documento del tutor",
             value=_parse_date(egdi_raw) if egdi_raw else date(2000, 1, 1),
             key="dlg_ed_gdi",
         )
@@ -230,6 +265,7 @@ def _dialog_editar_cliente(cliente_id: int) -> None:
                 "birth_date": eb.isoformat(),
                 "document_type": edt,
                 "document_number": edn.strip(),
+                "document_issue_date": eddi.isoformat() if ehas_ddi else None,
                 "email": eem.strip(),
                 "phone_number": eph.strip(),
                 "address": eaddr.strip() or None,
@@ -243,7 +279,7 @@ def _dialog_editar_cliente(cliente_id: int) -> None:
                 "guardian_name": egn.strip() or None,
                 "guardian_document_type": egdt if emin else None,
                 "guardian_document_number": egdn.strip() or None,
-                "guardian_document_issue_date": egdi.isoformat() if emin else None,
+                "guardian_document_issue_date": egdi.isoformat() if emin and ehas_gdi else None,
             }
             ok, code, data = api_client.put_customer(cliente_id, payload)
             if ok:
