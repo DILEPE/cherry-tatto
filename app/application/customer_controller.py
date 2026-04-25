@@ -9,6 +9,7 @@ from litestar.datastructures import State
 from litestar.exceptions import HTTPException
 from litestar.params import Parameter
 
+from app.schemas.common import CustomerCreatedResponse, MessageResponse
 from app.schemas.customer import (
     CustomerCreate,
     CustomerListResponse,
@@ -23,10 +24,12 @@ class CustomerController(Controller):
     path = "/api/customers"
 
     @post(status_code=status_codes.HTTP_201_CREATED)
-    async def create_customer(self, data: CustomerCreate, state: State) -> dict:
+    async def create_customer(self, data: CustomerCreate, state: State) -> CustomerCreatedResponse:
         try:
             cid = await state.service.create_customer(data)
-            return {"id": cid, "status": "success", "message": "Customer created"}
+            return CustomerCreatedResponse(
+                id=cid, status="success", message="Customer created"
+            )
         except ValueError as e:
             raise HTTPException(detail=str(e), status_code=400) from e
         except Exception as e:
@@ -56,7 +59,7 @@ class CustomerController(Controller):
             row = await state.service.get_customer(customer_id)
             if not row:
                 raise HTTPException(detail="Customer not found", status_code=404)
-            return CustomerPublic.model_validate(row)
+            return row
         except HTTPException:
             raise
         except Exception as e:
@@ -64,10 +67,12 @@ class CustomerController(Controller):
             raise HTTPException(detail=str(e), status_code=500) from e
 
     @put("/{customer_id:int}")
-    async def update_customer(self, customer_id: int, data: CustomerUpdate, state: State) -> dict:
+    async def update_customer(
+        self, customer_id: int, data: CustomerUpdate, state: State
+    ) -> MessageResponse:
         try:
             await state.service.update_customer(customer_id, data)
-            return {"status": "success", "message": "Customer updated"}
+            return MessageResponse(status="success", message="Customer updated")
         except ValueError as e:
             raise HTTPException(detail=str(e), status_code=404) from e
         except Exception as e:
@@ -75,10 +80,10 @@ class CustomerController(Controller):
             raise HTTPException(detail=str(e), status_code=400) from e
 
     @delete("/{customer_id:int}", status_code=status_codes.HTTP_200_OK)
-    async def delete_customer(self, customer_id: int, state: State) -> dict:
+    async def delete_customer(self, customer_id: int, state: State) -> MessageResponse:
         try:
             await state.service.soft_delete_customer(customer_id)
-            return {"status": "success", "message": "Customer deleted"}
+            return MessageResponse(status="success", message="Customer deleted")
         except ValueError as e:
             raise HTTPException(detail=str(e), status_code=404) from e
         except Exception as e:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict, Any, Optional
+from typing import Optional
+
+from app.types.json_value import JsonValue
 
 # ==========================================
 # ESQUEMAS DE ENTRADA (REQUESTS)
@@ -16,14 +18,15 @@ class AppointmentCreate:
     detail: Optional[str] = None
     deposit: float = 0.0
     customer_id: Optional[int] = None
-    customer: Optional[Dict[str, Any]] = None  # cuerpo validado con Pydantic en el servicio
+    # Dict serializado compatible con `CustomerCreate` (vía Pydantic en el servicio)
+    customer: Optional[dict[str, JsonValue]] = None
 
 @dataclass
 class ContractSign:
     """Esquema para el procesamiento de la firma de un contrato."""
     appointment_id: int
     is_minor: bool
-    health_data: Dict[str, Any]
+    health_data: dict[str, JsonValue]
     signature: str
     tutor_signature: Optional[str] = None
     template_id: Optional[int] = None  # Para vincular con una plantilla específica 

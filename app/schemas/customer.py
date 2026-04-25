@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Dict, Literal, Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, JsonValue, field_validator, model_validator
 
 DocumentType = Literal["CC", "TI", "CE", "PAS"]
 
@@ -23,7 +23,7 @@ class CustomerCreate(BaseModel):
     nationality: Optional[str] = Field(None, max_length=100)
     profession: Optional[str] = Field(None, max_length=150)
     secondary_email: Optional[EmailStr] = None
-    social_media: Optional[Dict[str, Any]] = None
+    social_media: Optional[dict[str, JsonValue]] = None
     emergency_contact_name: Optional[str] = Field(None, max_length=150)
     emergency_contact_phone: Optional[str] = Field(None, max_length=32)
     is_minor: bool = False
@@ -57,7 +57,7 @@ class CustomerUpdate(BaseModel):
     nationality: Optional[str] = Field(None, max_length=100)
     profession: Optional[str] = Field(None, max_length=150)
     secondary_email: Optional[EmailStr] = None
-    social_media: Optional[Dict[str, Any]] = None
+    social_media: Optional[dict[str, JsonValue]] = None
     emergency_contact_name: Optional[str] = Field(None, max_length=150)
     emergency_contact_phone: Optional[str] = Field(None, max_length=32)
     is_minor: bool = False
@@ -92,7 +92,7 @@ class CustomerPublic(BaseModel):
     nationality: Optional[str] = None
     profession: Optional[str] = None
     secondary_email: Optional[str] = None
-    social_media: Optional[Dict[str, Any]] = None
+    social_media: Optional[dict[str, JsonValue]] = None
     emergency_contact_name: Optional[str] = None
     emergency_contact_phone: Optional[str] = None
     is_minor: bool
@@ -105,7 +105,7 @@ class CustomerPublic(BaseModel):
 
     @field_validator("is_minor", mode="before")
     @classmethod
-    def _coerce_bool(cls, v: Any) -> bool:
+    def _coerce_bool(cls, v: object) -> bool:
         if v in (0, 1, "0", "1"):
             return bool(int(v))
         return bool(v)
