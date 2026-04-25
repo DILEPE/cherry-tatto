@@ -1,3 +1,4 @@
+import logging
 import os
 from dotenv import load_dotenv
 from litestar import Litestar
@@ -6,16 +7,21 @@ from litestar.datastructures import State
 
 # 1. Cargar las variables del archivo .env al entorno de Python
 load_dotenv()
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
 # Importaciones de tus capas
+from litestar.plugins.pydantic import PydanticPlugin
+
 from app.infrastructure.database import DatabaseManager
 from app.infrastructure.repositories import AppointmentRepository
+from app.infrastructure.customer_repository import CustomerRepository
 from app.infrastructure.external_api import NotificationService
 from app.domain.services import BusinessLogicService
 from app.application.appointment_controller import AppointmentController
 from app.application.contract_controller import ContractController
 from app.application.survey_controller import SurveyController
 from app.application.template_controller import TemplateController
+from app.application.customer_controller import CustomerController
 
 
 # 2. Extraer las variables del entorno usando os.getenv()
@@ -38,17 +44,25 @@ db_mgr = DatabaseManager(
 )
 
 repo = AppointmentRepository(db_mgr)
+customer_repo = CustomerRepository(db_mgr)
 
 notifier = NotificationService(webhook_url=N8N_URL)
 
 # 4. Inicializar Servicio de Dominio
-business_service = BusinessLogicService(repo, notifier)
+business_service = BusinessLogicService(repo, customer_repo, notifier)
 
 # 5. Configurar Litestar
 initial_state = State({"service": business_service})
 
 app = Litestar(
-    route_handlers=[AppointmentController, ContractController, TemplateController, SurveyController],
+    route_handlers=[
+        AppointmentController,
+        ContractController,
+        TemplateController,
+        SurveyController,
+        CustomerController,
+    ],
+    plugins=[PydanticPlugin()],
     cors_config=CORSConfig(allow_origins=["*"]),
     state=initial_state,
     debug=IS_DEBUG,

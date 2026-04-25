@@ -1,0 +1,78 @@
+# Customers API (Litestar) — examples (bash / Git Bash)
+# Replace BASE and JSON as needed.
+
+BASE=http://127.0.0.1:5000
+
+# List (paginated + search)
+curl -s "$BASE/api/customers?limit=10&offset=0&search=juan"
+
+# List by exact document number
+curl -s "$BASE/api/customers?document_number=1234567890&limit=5&offset=0"
+
+# Get by id
+curl -s "$BASE/api/customers/1"
+
+# Create
+curl -s -X POST "$BASE/api/customers" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "first_name":"Ana",
+    "last_name":"Pérez",
+    "birth_date":"2000-05-01",
+    "document_type":"CC",
+    "document_number":"1234567890",
+    "email":"ana@example.com",
+    "phone_number":"3001234567",
+    "is_minor": false
+  }'
+
+# Update
+curl -s -X PUT "$BASE/api/customers/1" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "first_name":"Ana",
+    "last_name":"Pérez",
+    "birth_date":"2000-05-01",
+    "document_type":"CC",
+    "document_number":"1234567890",
+    "email":"ana@example.com",
+    "phone_number":"3001234567",
+    "is_minor": false
+  }'
+
+# Soft delete
+curl -s -X DELETE "$BASE/api/customers/1"
+
+# Appointment with existing customer id
+curl -s -X POST "$BASE/api/appointments" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name":"Ana Pérez",
+    "phone":"3001234567",
+    "service":"tattoo",
+    "date":"2026-05-10",
+    "detail":"Sesión 1",
+    "deposit":50000,
+    "customer_id": 1
+  }'
+
+# Appointment with embedded customer (server upsert + link in one transaction)
+curl -s -X POST "$BASE/api/appointments" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name":"Ana Pérez",
+    "phone":"3001234567",
+    "service":"tattoo",
+    "date":"2026-05-10",
+    "deposit":0,
+    "customer": {
+      "first_name":"Ana",
+      "last_name":"Pérez",
+      "birth_date":"2000-05-01",
+      "document_type":"CC",
+      "document_number":"1234567890",
+      "email":"ana@example.com",
+      "phone_number":"3001234567",
+      "is_minor": false
+    }
+  }'

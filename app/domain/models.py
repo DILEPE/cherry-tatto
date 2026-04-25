@@ -15,6 +15,8 @@ class AppointmentCreate:
     date: str
     detail: Optional[str] = None
     deposit: float = 0.0
+    customer_id: Optional[int] = None
+    customer: Optional[Dict[str, Any]] = None  # cuerpo validado con Pydantic en el servicio
 
 @dataclass
 class ContractSign:
