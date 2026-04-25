@@ -17,6 +17,7 @@ class CustomerCreate(BaseModel):
     birth_date: date
     document_type: DocumentType
     document_number: str = Field(..., min_length=5, max_length=32)
+    document_issue_date: Optional[date] = None
     email: EmailStr
     phone_number: str = Field(..., min_length=7, max_length=32)
     address: Optional[str] = Field(None, max_length=500)
@@ -51,6 +52,7 @@ class CustomerUpdate(BaseModel):
     birth_date: date
     document_type: DocumentType
     document_number: str = Field(..., min_length=5, max_length=32)
+    document_issue_date: Optional[date] = None
     email: EmailStr
     phone_number: str = Field(..., min_length=7, max_length=32)
     address: Optional[str] = Field(None, max_length=500)
@@ -86,6 +88,7 @@ class CustomerPublic(BaseModel):
     birth_date: date
     document_type: str
     document_number: str
+    document_issue_date: Optional[date] = None
     email: str
     phone_number: str
     address: Optional[str] = None

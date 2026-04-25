@@ -60,6 +60,9 @@ def _apply_customer_row_to_session(row: Dict[str, Any]) -> None:
     """
     st.session_state["ap_doc_t"] = row.get("document_type") or "CC"
     st.session_state["ap_doc_n"] = (row.get("document_number") or "").strip()
+    ddi = row.get("document_issue_date")
+    st.session_state["ap_has_ddi"] = bool(ddi)
+    st.session_state["ap_ddi"] = _parse_date(ddi) if ddi else date(2015, 1, 1)
     st.session_state["ap_fn"] = (row.get("first_name") or "").strip()
     st.session_state["ap_ln"] = (row.get("last_name") or "").strip()
     st.session_state["ap_bd"] = _parse_date(row.get("birth_date"))
@@ -77,6 +80,7 @@ def _apply_customer_row_to_session(row: Dict[str, Any]) -> None:
     st.session_state["ap_gdt"] = gtype if gtype in ("CC", "TI", "CE", "PAS") else "CC"
     st.session_state["ap_gdn"] = (row.get("guardian_document_number") or "").strip() or ""
     gdiv = row.get("guardian_document_issue_date")
+    st.session_state["ap_has_gdi"] = bool(gdiv)
     st.session_state["ap_gdi"] = _parse_date(gdiv) if gdiv else date(2000, 1, 1)
     st.session_state["ap_phone"] = (row.get("phone_number") or "").strip()
     st.session_state["_ap_last_loaded_id"] = row.get("id")
@@ -102,10 +106,13 @@ def _reset_customer_fields_keep_doc(doc_keep: str) -> None:
     st.session_state["ap_gn"] = ""
     st.session_state["ap_gdt"] = "CC"
     st.session_state["ap_gdn"] = ""
+    st.session_state["ap_has_gdi"] = False
     st.session_state["ap_gdi"] = date(2000, 1, 1)
     st.session_state["ap_phone"] = ""
     st.session_state["ap_doc_t"] = "CC"
     st.session_state["ap_doc_n"] = doc_keep
+    st.session_state["ap_has_ddi"] = False
+    st.session_state["ap_ddi"] = date(2015, 1, 1)
     st.session_state["_ap_prefill_meta"] = None
     st.session_state["_ap_last_loaded_id"] = None
 
@@ -117,6 +124,8 @@ def _init_appt_form_state_once() -> None:
     defaults: Dict[str, Any] = {
         "ap_doc_t": "CC",
         "ap_doc_n": "",
+        "ap_has_ddi": False,
+        "ap_ddi": date(2015, 1, 1),
         "ap_fn": "",
         "ap_ln": "",
         "ap_bd": date(1990, 1, 1),
@@ -132,6 +141,7 @@ def _init_appt_form_state_once() -> None:
         "ap_gn": "",
         "ap_gdt": "CC",
         "ap_gdn": "",
+        "ap_has_gdi": False,
         "ap_gdi": date(2000, 1, 1),
         "ap_phone": "",
         "ap_ad": date.today(),
@@ -200,6 +210,11 @@ def render_citas_tab() -> None:
                 }[x],
             )
             doc_number = st.text_input("Número documento *", key="ap_doc_n", placeholder="Sin espacios")
+            st.checkbox("Registrar fecha de expedición del documento del cliente", key="ap_has_ddi")
+            st.date_input(
+                "Fecha expedición del documento del cliente",
+                key="ap_ddi",
+            )
         with d2:
             if st.button("Buscar por documento", type="primary", key="ap_doc_lookup"):
                 doc = (st.session_state.get("ap_doc_n") or "").strip()
@@ -241,20 +256,24 @@ def render_citas_tab() -> None:
 
         st.checkbox("Es menor de edad", key="ap_minor")
         with st.expander("Tutor / representante (solo menores)", expanded=False):
-            st.text_input("Nombre tutor", key="ap_gn")
+            st.text_input("Nombre del tutor o representante", key="ap_gn")
             st.selectbox(
-                "Tipo doc tutor",
+                "Tipo de documento del tutor",
                 ["CC", "TI", "CE", "PAS"],
                 key="ap_gdt",
                 format_func=lambda x: {
                     "CC": "CC — Cédula",
-                    "TI": "TI",
-                    "CE": "CE",
-                    "PAS": "PAS",
+                    "TI": "TI — Tarjeta identidad",
+                    "CE": "CE — Extranjería",
+                    "PAS": "PAS — Pasaporte",
                 }[x],
             )
-            st.text_input("Documento tutor", key="ap_gdn")
-            st.date_input("Fecha expedición doc tutor", key="ap_gdi")
+            st.text_input("Número de documento del tutor", key="ap_gdn")
+            st.checkbox("Registrar fecha de expedición del documento del tutor", key="ap_has_gdi")
+            st.date_input(
+                "Fecha expedición del documento del tutor",
+                key="ap_gdi",
+            )
 
         st.markdown("##### Cita")
         c1, c2 = st.columns(2)
@@ -294,6 +313,11 @@ def render_citas_tab() -> None:
                             "birth_date": birth_d.isoformat(),
                             "document_type": doc_t,
                             "document_number": (st.session_state.get("ap_doc_n") or "").strip(),
+                            "document_issue_date": (
+                                st.session_state.get("ap_ddi").isoformat()
+                                if st.session_state.get("ap_has_ddi")
+                                else None
+                            ),
                             "email": (email or "").strip(),
                             "phone_number": (phone or "").strip(),
                             "address": (st.session_state.get("ap_addr") or "").strip() or None,
@@ -312,7 +336,7 @@ def render_citas_tab() -> None:
                             "guardian_document_issue_date": (
                                 st.session_state.get("ap_gdi").isoformat()
                                 if st.session_state.get("ap_minor")
-                                and st.session_state.get("ap_gdi")
+                                and st.session_state.get("ap_has_gdi")
                                 else None
                             ),
                         }
