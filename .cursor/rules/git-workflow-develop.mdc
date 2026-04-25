@@ -19,8 +19,9 @@ alwaysApply: true
 
 5. Hacer **`git push`** de la rama feature (si hace falta: `git push -u origin <rama>`).
 6. **Comprobar** si se puede abrir un **pull request hacia `develop`**:
-   - Si existe **GitHub CLI** (`gh`) autenticado: `gh pr create --base develop` (título y cuerpo alineados con el bloque de trabajo).
-   - Si **no** hay `gh` o falla la autenticación: indicar al usuario que cree el PR manualmente en la web (**base: `develop`**, compare: la rama feature) y dar la URL del remoto si es útil.
+   - Con **GitHub CLI** autenticado: `gh pr create --base develop --head <rama-feature>` (título y cuerpo alineados con el bloque de trabajo). Si el remoto no se infiere del directorio, usar `--repo <owner>/<repo>` (en este proyecto suele ser `DILEPE/cherry-tatto`).
+   - **Windows (Cursor / PowerShell):** si `gh` no está en el `PATH` pero la CLI está instalada, usar la ruta típica: `& "$env:ProgramFiles\GitHub CLI\gh.exe" ...` (equivalente cmd: `"%ProgramFiles%\GitHub CLI\gh.exe"`). Probar antes `gh auth status` con esa ruta.
+   - Si **no** hay `gh` instalado o falla la autenticación: indicar al usuario que cree el PR manualmente en la web (**base: `develop`**, compare: la rama feature). Tras `git push`, GitHub suele mostrar una URL del tipo `https://github.com/<owner>/<repo>/pull/new/<rama>`.
 
 ## Restricciones
 
