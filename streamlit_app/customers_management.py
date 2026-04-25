@@ -25,6 +25,55 @@ def _doc_type_index(val: Any) -> int:
     return opts.index(v)
 
 
+def _is_minor_by_birth_date(birth_date: date) -> bool:
+    today = date.today()
+    years = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+    return years < 18
+
+
+def _shift_years(base: date, years: int) -> date:
+    target_year = base.year + years
+    try:
+        return base.replace(year=target_year)
+    except ValueError:
+        return base.replace(year=target_year, day=28)
+
+
+def _date_range_100y() -> tuple[date, date]:
+    today = date.today()
+    return _shift_years(today, -100), today
+
+
+def _clamp_date(value: date, min_value: date, max_value: date) -> date:
+    if value < min_value:
+        return min_value
+    if value > max_value:
+        return max_value
+    return value
+
+
+def _validate_document_rules(
+    *,
+    birth_date: date,
+    document_type: str,
+    has_document_issue_date: bool,
+    document_issue_date: date,
+) -> Optional[str]:
+    today = date.today()
+    if not has_document_issue_date:
+        return None
+    if document_issue_date > today:
+        return "La fecha de expedición del documento no puede ser futura."
+    if document_type == "TI":
+        if not _is_minor_by_birth_date(birth_date):
+            return "Si el tipo de documento es TI, la fecha de nacimiento debe indicar menor de 18 años."
+        return None
+    adulthood_date = _shift_years(birth_date, 18)
+    if document_issue_date < adulthood_date:
+        return "Para documentos distintos de TI, la expedición debe ser al menos 18 años después del nacimiento."
+    return None
+
+
 def _detail(payload: Any) -> str:
     if isinstance(payload, dict):
         return str(payload.get("detail", payload))
@@ -55,14 +104,50 @@ def _close_dialogs() -> None:
         st.session_state.pop(k, None)
 
 
-@st.dialog("Registrar cliente", width="large")
+def _reset_create_customer_form_state() -> None:
+    keys = (
+        "dlg_cc_fn",
+        "dlg_cc_ln",
+        "dlg_cc_bd",
+        "dlg_cc_dt",
+        "dlg_cc_dn",
+        "dlg_cc_has_ddi",
+        "dlg_cc_ddi",
+        "dlg_cc_em",
+        "dlg_cc_ph",
+        "dlg_cc_nat",
+        "dlg_cc_prof",
+        "dlg_cc_addr",
+        "dlg_cc_se",
+        "dlg_cc_sm",
+        "dlg_cc_ecn",
+        "dlg_cc_ecp",
+        "dlg_cc_minor",
+        "dlg_cc_gn",
+        "dlg_cc_gdt",
+        "dlg_cc_gdn",
+        "dlg_cc_has_gdi",
+        "dlg_cc_gdi",
+    )
+    for key in keys:
+        st.session_state.pop(key, None)
+
+
+@st.dialog("Registrar cliente", width="large", dismissible=False)
 def _dialog_crear_cliente() -> None:
+    min_date_100, max_date_today = _date_range_100y()
     st.markdown("##### Datos personales")
     a, b = st.columns(2)
     with a:
         c_fn = st.text_input("Nombre *", key="dlg_cc_fn")
         c_ln = st.text_input("Apellido *", key="dlg_cc_ln")
-        c_bd = st.date_input("Fecha de nacimiento *", value=date(1990, 1, 1), key="dlg_cc_bd")
+        c_bd = st.date_input(
+            "Fecha de nacimiento *",
+            value=date(1990, 1, 1),
+            min_value=min_date_100,
+            max_value=max_date_today,
+            key="dlg_cc_bd",
+        )
         c_dt = st.selectbox(
             "Tipo de documento *",
             ["CC", "TI", "CE", "PAS"],
@@ -74,6 +159,8 @@ def _dialog_crear_cliente() -> None:
         c_ddi = st.date_input(
             "Fecha de expedición del documento del cliente",
             value=date(2015, 1, 1),
+            min_value=min_date_100,
+            max_value=max_date_today,
             key="dlg_cc_ddi",
         )
     with b:
@@ -92,7 +179,9 @@ def _dialog_crear_cliente() -> None:
         ecp = st.text_input("Teléfono contacto emergencia", key="dlg_cc_ecp")
 
     c_minor = st.checkbox("Es menor de edad", key="dlg_cc_minor")
-    with st.expander("Datos del tutor o representante (menores de edad)", expanded=False):
+    if c_minor:
+        st.info("Menor de edad: debes completar los datos del tutor.")
+    with st.expander("Datos del tutor o representante (menores de edad)", expanded=c_minor):
         gn = st.text_input("Nombre del tutor o representante", key="dlg_cc_gn")
         gdt = st.selectbox(
             "Tipo de documento del tutor",
@@ -108,12 +197,40 @@ def _dialog_crear_cliente() -> None:
         gdi = st.date_input(
             "Fecha de expedición del documento del tutor",
             value=date(2000, 1, 1),
+            min_value=min_date_100,
+            max_value=max_date_today,
             key="dlg_cc_gdi",
         )
 
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Registrar cliente", type="primary", use_container_width=True, key="dlg_cc_submit"):
+            expected_minor = _is_minor_by_birth_date(c_bd)
+            if bool(c_minor) != expected_minor:
+                st.error("El check de menor de edad no coincide con la fecha de nacimiento.")
+                return
+            doc_error = _validate_document_rules(
+                birth_date=c_bd,
+                document_type=c_dt,
+                has_document_issue_date=bool(c_has_ddi),
+                document_issue_date=c_ddi,
+            )
+            if doc_error:
+                st.error(doc_error)
+                return
+            if c_minor:
+                if not gn.strip() or not gdn.strip() or not g_has_gdi:
+                    st.error("Para menores: nombre tutor, documento tutor y fecha de expedición son obligatorios.")
+                    return
+                if gdt == "TI":
+                    st.error("El tipo de documento del tutor no puede ser TI.")
+                    return
+                today = date.today()
+                tutor_years_since_issue = today.year - gdi.year - ((today.month, today.day) < (gdi.month, gdi.day))
+                if tutor_years_since_issue < 18:
+                    st.error("La fecha de expedición del documento del tutor debe tener al menos 18 años respecto a hoy.")
+                    return
+
             payload: Dict[str, Any] = {
                 "first_name": c_fn.strip(),
                 "last_name": c_ln.strip(),
@@ -140,12 +257,14 @@ def _dialog_crear_cliente() -> None:
             if ok:
                 st.success("Cliente registrado correctamente.")
                 st.session_state["_cust_reload"] = True
+                _reset_create_customer_form_state()
                 _close_dialogs()
                 st.rerun()
             else:
                 st.error(f"No se pudo registrar (HTTP {code}): {_detail(data)}")
     with c2:
         if st.button("Cancelar", use_container_width=True, key="dlg_cc_cancel"):
+            _reset_create_customer_form_state()
             _close_dialogs()
             st.rerun()
 
@@ -191,12 +310,19 @@ def _dialog_editar_cliente(cliente_id: int) -> None:
 
     ed = st.session_state["_dlg_edit_payload"]
 
+    min_date_100, max_date_today = _date_range_100y()
     st.markdown("##### Datos personales")
     a, b = st.columns(2)
     with a:
         ef = st.text_input("Nombre *", value=ed.get("first_name", ""), key="dlg_ed_fn")
         el = st.text_input("Apellido *", value=ed.get("last_name", ""), key="dlg_ed_ln")
-        eb = st.date_input("Fecha de nacimiento *", value=_parse_date(ed.get("birth_date")), key="dlg_ed_bd")
+        eb = st.date_input(
+            "Fecha de nacimiento *",
+            value=_clamp_date(_parse_date(ed.get("birth_date")), min_date_100, max_date_today),
+            min_value=min_date_100,
+            max_value=max_date_today,
+            key="dlg_ed_bd",
+        )
         edt = st.selectbox(
             "Tipo de documento *",
             ["CC", "TI", "CE", "PAS"],
@@ -213,7 +339,11 @@ def _dialog_editar_cliente(cliente_id: int) -> None:
         )
         eddi = st.date_input(
             "Fecha de expedición del documento del cliente",
-            value=_parse_date(eddi_raw) if eddi_raw else date(2015, 1, 1),
+            value=_clamp_date(_parse_date(eddi_raw), min_date_100, max_date_today)
+            if eddi_raw
+            else date(2015, 1, 1),
+            min_value=min_date_100,
+            max_value=max_date_today,
             key="dlg_ed_ddi",
         )
     with b:
@@ -235,6 +365,8 @@ def _dialog_editar_cliente(cliente_id: int) -> None:
         een = st.text_input("Nombre contacto emergencia", value=ed.get("emergency_contact_name") or "", key="dlg_ed_ecn")
         eep = st.text_input("Teléfono contacto emergencia", value=ed.get("emergency_contact_phone") or "", key="dlg_ed_ecp")
         emin = st.checkbox("Es menor de edad", value=bool(ed.get("is_minor")), key="dlg_ed_minor")
+        if emin:
+            st.info("Menor de edad: debes completar los datos del tutor.")
         egn = st.text_input("Nombre del tutor", value=ed.get("guardian_name") or "", key="dlg_ed_gn")
         egdt = st.selectbox(
             "Tipo de documento del tutor",
@@ -252,13 +384,43 @@ def _dialog_editar_cliente(cliente_id: int) -> None:
         )
         egdi = st.date_input(
             "Fecha de expedición del documento del tutor",
-            value=_parse_date(egdi_raw) if egdi_raw else date(2000, 1, 1),
+            value=_clamp_date(_parse_date(egdi_raw), min_date_100, max_date_today)
+            if egdi_raw
+            else date(2000, 1, 1),
+            min_value=min_date_100,
+            max_value=max_date_today,
             key="dlg_ed_gdi",
         )
 
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Guardar cambios", type="primary", use_container_width=True, key="dlg_ed_save"):
+            expected_minor = _is_minor_by_birth_date(eb)
+            if bool(emin) != expected_minor:
+                st.error("El check de menor de edad no coincide con la fecha de nacimiento.")
+                return
+            doc_error = _validate_document_rules(
+                birth_date=eb,
+                document_type=edt,
+                has_document_issue_date=bool(ehas_ddi),
+                document_issue_date=eddi,
+            )
+            if doc_error:
+                st.error(doc_error)
+                return
+            if emin:
+                if not egn.strip() or not egdn.strip() or not ehas_gdi:
+                    st.error("Para menores: nombre tutor, documento tutor y fecha de expedición son obligatorios.")
+                    return
+                if egdt == "TI":
+                    st.error("El tipo de documento del tutor no puede ser TI.")
+                    return
+                today = date.today()
+                tutor_years_since_issue = today.year - egdi.year - ((today.month, today.day) < (egdi.month, egdi.day))
+                if tutor_years_since_issue < 18:
+                    st.error("La fecha de expedición del documento del tutor debe tener al menos 18 años respecto a hoy.")
+                    return
+
             payload = {
                 "first_name": ef.strip(),
                 "last_name": el.strip(),
@@ -429,24 +591,28 @@ def render_customers_management_tab() -> None:
 
     st.divider()
 
-    # Paginación al pie
-    p1, p2, p3, p4, p5 = st.columns([1, 1, 1.2, 1, 1])
+    # Paginación al pie (compacta)
+    p1, p2, p3, p4 = st.columns([1, 1, 1.2, 2.0])
     with p1:
+        st.write("")
         if st.button("◀ Anterior", disabled=page <= 0, use_container_width=True, key="cust_prev"):
             st.session_state["_cust_page"] = max(0, page - 1)
             st.session_state["_cust_reload"] = True
             st.rerun()
     with p2:
+        st.write("")
         if st.button("Siguiente ▶", disabled=(page + 1) * limit >= total if total else True, use_container_width=True, key="cust_next"):
             st.session_state["_cust_page"] = page + 1
             st.session_state["_cust_reload"] = True
             st.rerun()
     with p3:
+        st.caption("Registros por página")
         new_limit = st.selectbox(
             "Registros por página",
             options=[10, 20, 50, 100],
             index=[10, 20, 50, 100].index(limit) if limit in (10, 20, 50, 100) else 1,
             key="cust_limit_sel",
+            label_visibility="collapsed",
         )
         if new_limit != limit:
             st.session_state["_cust_limit"] = new_limit
@@ -454,9 +620,9 @@ def render_customers_management_tab() -> None:
             st.session_state["_cust_reload"] = True
             st.rerun()
     with p4:
-        st.metric("Página actual", page + 1)
-    with p5:
-        st.metric("Total registros", total)
+        st.write("")
+        total_pages = max(1, (total + limit - 1) // limit)
+        st.caption(f"Página {page + 1}/{total_pages} · Total: {total}")
 
     # Diálogos (invocación nativa Streamlit)
     dlg = st.session_state.get("_cust_dlg")

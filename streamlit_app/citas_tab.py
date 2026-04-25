@@ -40,6 +40,52 @@ def _parse_date(val: Any) -> date:
     return date(1990, 1, 1)
 
 
+def _is_minor_by_birth_date(birth_date: date) -> bool:
+    today = date.today()
+    years = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+    return years < 18
+
+
+def _shift_years(base: date, years: int) -> date:
+    target_year = base.year + years
+    try:
+        return base.replace(year=target_year)
+    except ValueError:
+        return base.replace(year=target_year, day=28)
+
+
+def _date_range_100y_past() -> tuple[date, date]:
+    today = date.today()
+    return _shift_years(today, -100), today
+
+
+def _date_range_100y_window() -> tuple[date, date]:
+    today = date.today()
+    return _shift_years(today, -100), _shift_years(today, 100)
+
+
+def _validate_document_rules(
+    *,
+    birth_date: date,
+    document_type: str,
+    has_document_issue_date: bool,
+    document_issue_date: date,
+) -> Optional[str]:
+    today = date.today()
+    if not has_document_issue_date:
+        return None
+    if document_issue_date > today:
+        return "La fecha de expedición del documento no puede ser futura."
+    if document_type == "TI":
+        if not _is_minor_by_birth_date(birth_date):
+            return "Si el documento es TI, la fecha de nacimiento debe indicar menor de 18 años."
+        return None
+    adulthood_date = _shift_years(birth_date, 18)
+    if document_issue_date < adulthood_date:
+        return "Para documentos distintos de TI, la expedición debe ser al menos 18 años después del nacimiento."
+    return None
+
+
 def _social_to_text(row: Optional[Dict[str, Any]]) -> str:
     if not row or not row.get("social_media"):
         return ""
@@ -87,6 +133,8 @@ def _apply_customer_row_to_session(row: Dict[str, Any]) -> None:
     st.session_state["_ap_prefill_meta"] = (
         f"{st.session_state['ap_fn']} {st.session_state['ap_ln']}".strip()
     )
+    st.session_state["_ap_doc_verified"] = True
+    st.session_state["_ap_doc_verified_doc"] = st.session_state["ap_doc_n"]
 
 
 def _reset_customer_fields_keep_doc(doc_keep: str) -> None:
@@ -115,6 +163,8 @@ def _reset_customer_fields_keep_doc(doc_keep: str) -> None:
     st.session_state["ap_ddi"] = date(2015, 1, 1)
     st.session_state["_ap_prefill_meta"] = None
     st.session_state["_ap_last_loaded_id"] = None
+    st.session_state["_ap_doc_verified"] = False
+    st.session_state["_ap_doc_verified_doc"] = ""
 
 
 def _init_appt_form_state_once() -> None:
@@ -147,6 +197,8 @@ def _init_appt_form_state_once() -> None:
         "ap_ad": date.today(),
         "ap_det": "",
         "ap_dep": 0.0,
+        "_ap_doc_verified": False,
+        "_ap_doc_verified_doc": "",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -175,216 +227,318 @@ def _process_pending_lookup() -> None:
         )
     elif action == "not_found" and pending.get("doc") is not None:
         _reset_customer_fields_keep_doc(str(pending["doc"]).strip())
+        st.session_state["_ap_doc_verified"] = True
+        st.session_state["_ap_doc_verified_doc"] = str(pending["doc"]).strip()
         st.session_state["_ap_flash"] = (
             "warning",
             "No hay cliente con ese documento. Completa los datos; se creará al guardar la cita.",
         )
 
 
-def render_citas_tab() -> None:
+def _reset_appointment_form_state() -> None:
+    keys = (
+        "ap_doc_t",
+        "ap_doc_n",
+        "ap_has_ddi",
+        "ap_ddi",
+        "ap_fn",
+        "ap_ln",
+        "ap_bd",
+        "ap_em",
+        "ap_addr",
+        "ap_nat",
+        "ap_prof",
+        "ap_se",
+        "ap_sm",
+        "ap_ecn",
+        "ap_ecp",
+        "ap_minor",
+        "ap_gn",
+        "ap_gdt",
+        "ap_gdn",
+        "ap_has_gdi",
+        "ap_gdi",
+        "ap_phone",
+        "ap_ad",
+        "ap_det",
+        "ap_dep",
+        "_ap_doc_verified",
+        "_ap_doc_verified_doc",
+        "_ap_last_loaded_id",
+        "_ap_prefill_meta",
+    )
+    for key in keys:
+        st.session_state.pop(key, None)
+    st.session_state.pop("_ap_pending_lookup", None)
+    st.session_state.pop("_ap_flash", None)
+    st.session_state["_ap_form_ready"] = False
+
+
+@st.dialog("Agendar cita", width="large", dismissible=False)
+def _dialog_agendar_cita() -> None:
     _init_appt_form_state_once()
     _process_pending_lookup()
+    min_date_100, max_date_today = _date_range_100y_past()
+    min_date_appt, max_date_appt = _date_range_100y_window()
 
-    with st.expander("Nueva cita", expanded=True):
-        fl = st.session_state.pop("_ap_flash", None)
-        if fl and len(fl) == 2:
-            if fl[0] == "success":
-                st.success(fl[1])
-            elif fl[0] == "warning":
-                st.warning(fl[1])
+    st.markdown("##### Verificación de cliente por cédula")
+    d1, d2 = st.columns([2, 1])
+    with d1:
+        st.selectbox("Tipo documento *", ["CC", "TI", "CE", "PAS"], key="ap_doc_t")
+        st.text_input("Número documento *", key="ap_doc_n", placeholder="Sin espacios")
+        current_doc = (st.session_state.get("ap_doc_n") or "").strip()
+        verified_doc = (st.session_state.get("_ap_doc_verified_doc") or "").strip()
+        if current_doc and verified_doc and current_doc != verified_doc:
+            st.session_state["_ap_doc_verified"] = False
+            st.session_state["_ap_doc_verified_doc"] = ""
+    with d2:
+        st.write("")
+        if st.button("Verificar cédula", type="primary", key="ap_doc_lookup"):
+            doc = (st.session_state.get("ap_doc_n") or "").strip()
+            if not doc or len(doc) < 3:
+                st.error("Escribe un número de documento válido (mín. 3 caracteres).")
             else:
-                st.info(fl[1])
-
-        st.markdown("##### Datos del cliente (obligatorios para vincular la cita)")
-        d1, d2, d3 = st.columns(3)
-        with d1:
-            doc_type = st.selectbox(
-                "Tipo documento *",
-                ["CC", "TI", "CE", "PAS"],
-                key="ap_doc_t",
-                format_func=lambda x: {
-                    "CC": "CC — Cédula",
-                    "TI": "TI — Tarjeta identidad",
-                    "CE": "CE — Extranjería",
-                    "PAS": "PAS — Pasaporte",
-                }[x],
-            )
-            doc_number = st.text_input("Número documento *", key="ap_doc_n", placeholder="Sin espacios")
-            st.checkbox("Registrar fecha de expedición del documento del cliente", key="ap_has_ddi")
-            st.date_input(
-                "Fecha expedición del documento del cliente",
-                key="ap_ddi",
-            )
-        with d2:
-            if st.button("Buscar por documento", type="primary", key="ap_doc_lookup"):
-                doc = (st.session_state.get("ap_doc_n") or "").strip()
-                if not doc or len(doc) < 3:
-                    st.error("Escribe un número de documento válido (mín. 3 caracteres).")
+                ok, msg, row = fetch_customer_by_document(doc)
+                if ok and msg == "ok" and row:
+                    st.session_state["_ap_pending_lookup"] = {"action": "apply", "row": row}
+                    st.rerun()
+                elif ok and msg == "not_found":
+                    st.session_state["_ap_pending_lookup"] = {"action": "not_found", "doc": doc}
+                    st.rerun()
                 else:
-                    ok, msg, row = fetch_customer_by_document(doc)
-                    if ok and msg == "ok" and row:
-                        st.session_state["_ap_pending_lookup"] = {"action": "apply", "row": row}
-                        st.rerun()
-                    elif ok and msg == "not_found":
-                        st.session_state["_ap_pending_lookup"] = {"action": "not_found", "doc": doc}
-                        st.rerun()
-                    else:
-                        st.error(msg)
-        with d3:
-            st.caption("Pulsa *Buscar por documento* para rellenar con datos de la **base de clientes**.")
-            if st.session_state.get("_ap_prefill_meta") or st.session_state.get("_ap_last_loaded_id"):
-                st.info(
-                    f"Cliente en formulario: **{st.session_state.get('_ap_prefill_meta', '—')}**  "
-                    f"(ID: {st.session_state.get('_ap_last_loaded_id', '—')})"
-                )
+                    st.error(msg)
 
-        st.divider()
-        st.caption("Campos rellenados al buscar; puedes corregirlos antes de agendar.")
-        fn = st.text_input("Nombre *", key="ap_fn")
-        ln = st.text_input("Apellido *", key="ap_ln")
-        birth_d = st.date_input("Fecha nacimiento *", key="ap_bd")
-        email = st.text_input("Email *", key="ap_em")
+    verified = bool(st.session_state.get("_ap_doc_verified")) and (
+        (st.session_state.get("_ap_doc_verified_doc") or "").strip()
+        == (st.session_state.get("ap_doc_n") or "").strip()
+    )
+    if not verified:
+        st.info("Primero confirma/verifica el número de documento para habilitar el formulario de cita.")
+        if st.button("Cerrar", use_container_width=True, key="btn_appt_close_unverified"):
+            _reset_appointment_form_state()
+            st.session_state.pop("_ap_dlg", None)
+            st.rerun()
+        return
 
-        with st.expander("Contacto adicional / redes / emergencia", expanded=False):
-            st.text_input("Dirección", key="ap_addr")
-            st.text_input("Nacionalidad", key="ap_nat")
-            st.text_input("Profesión", key="ap_prof")
-            st.text_input("Email secundario", key="ap_se")
-            st.text_area("Redes (JSON)", height=80, key="ap_sm")
-            st.text_input("Contacto emergencia — nombre", key="ap_ecn")
-            st.text_input("Contacto emergencia — teléfono", key="ap_ecp")
+    fn = st.text_input("Nombre *", key="ap_fn")
+    ln = st.text_input("Apellido *", key="ap_ln")
+    birth_d = st.date_input(
+        "Fecha nacimiento *",
+        key="ap_bd",
+        min_value=min_date_100,
+        max_value=max_date_today,
+    )
+    email = st.text_input("Email *", key="ap_em")
+    st.checkbox("Registrar fecha expedición documento cliente", key="ap_has_ddi")
+    st.date_input(
+        "Fecha expedición documento cliente",
+        key="ap_ddi",
+        min_value=min_date_100,
+        max_value=max_date_today,
+    )
+    st.checkbox("Es menor de edad", key="ap_minor")
 
-        st.checkbox("Es menor de edad", key="ap_minor")
-        with st.expander("Tutor / representante (solo menores)", expanded=False):
-            st.text_input("Nombre del tutor o representante", key="ap_gn")
-            st.selectbox(
-                "Tipo de documento del tutor",
-                ["CC", "TI", "CE", "PAS"],
-                key="ap_gdt",
-                format_func=lambda x: {
-                    "CC": "CC — Cédula",
-                    "TI": "TI — Tarjeta identidad",
-                    "CE": "CE — Extranjería",
-                    "PAS": "PAS — Pasaporte",
-                }[x],
-            )
-            st.text_input("Número de documento del tutor", key="ap_gdn")
-            st.checkbox("Registrar fecha de expedición del documento del tutor", key="ap_has_gdi")
+    if st.session_state.get("ap_minor"):
+        with st.expander("Tutor / representante (obligatorio para menores)", expanded=True):
+            st.text_input("Nombre del tutor *", key="ap_gn")
+            st.selectbox("Tipo de documento del tutor *", ["CC", "TI", "CE", "PAS"], key="ap_gdt")
+            st.text_input("Número de documento del tutor *", key="ap_gdn")
+            st.checkbox("Registrar fecha expedición documento tutor", key="ap_has_gdi")
             st.date_input(
-                "Fecha expedición del documento del tutor",
+                "Fecha expedición documento tutor",
                 key="ap_gdi",
+                min_value=min_date_100,
+                max_value=max_date_today,
             )
 
-        st.markdown("##### Cita")
-        c1, c2 = st.columns(2)
-        with c1:
-            phone = st.text_input("Teléfono cita *", key="ap_phone")
-            svc_options = list(configured_service_types())
-            cur = st.session_state.get("ap_svc", svc_options[0] if svc_options else "tattoo")
-            ix = 0
-            if cur in svc_options:
-                ix = svc_options.index(cur)
-            service = st.selectbox("Tipo de servicio *", options=svc_options, index=ix, key="ap_svc")
-        with c2:
-            appointment_date = st.date_input("Fecha cita *", key="ap_ad", format="DD/MM/YYYY")
+    phone = st.text_input("Teléfono cita *", key="ap_phone")
+    svc_options = list(configured_service_types())
+    cur = st.session_state.get("ap_svc", svc_options[0] if svc_options else "tattoo")
+    ix = svc_options.index(cur) if cur in svc_options else 0
+    service = st.selectbox("Tipo de servicio *", options=svc_options, index=ix, key="ap_svc")
+    appointment_date = st.date_input(
+        "Fecha cita *",
+        key="ap_ad",
+        min_value=min_date_appt,
+        max_value=max_date_appt,
+        format="DD/MM/YYYY",
+    )
+    detail = st.text_area("Detalle del trabajo", height=80, key="ap_det")
+    deposit = st.number_input("Depósito (COP) *", min_value=0.0, step=10000.0, key="ap_dep")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Crear cita", type="primary", use_container_width=True, key="btn_appt_create"):
+            doc = (st.session_state.get("ap_doc_n") or "").strip()
+            verified = bool(st.session_state.get("_ap_doc_verified")) and st.session_state.get(
+                "_ap_doc_verified_doc"
+            ) == doc
+            if not verified:
+                st.error("Debes verificar la cédula antes de agendar la cita.")
+                return
+
+            expected_minor = _is_minor_by_birth_date(birth_d)
+            if bool(st.session_state.get("ap_minor")) != expected_minor:
+                st.error("El check de menor de edad no coincide con la fecha de nacimiento.")
+                return
+            doc_error = _validate_document_rules(
+                birth_date=birth_d,
+                document_type=str(st.session_state.get("ap_doc_t") or "CC"),
+                has_document_issue_date=bool(st.session_state.get("ap_has_ddi")),
+                document_issue_date=st.session_state.get("ap_ddi"),
+            )
+            if doc_error:
+                st.error(doc_error)
+                return
+
+            if st.session_state.get("ap_minor"):
+                if not (st.session_state.get("ap_gn") or "").strip() or not (
+                    st.session_state.get("ap_gdn") or ""
+                ).strip() or not st.session_state.get("ap_has_gdi"):
+                    st.error("Para menores, los datos del tutor son obligatorios.")
+                    return
+                if st.session_state.get("ap_gdt") == "TI":
+                    st.error("El tipo de documento del tutor no puede ser TI.")
+                    return
+                gdi = st.session_state.get("ap_gdi")
+                today = date.today()
+                tutor_years_since_issue = today.year - gdi.year - ((today.month, today.day) < (gdi.month, gdi.day))
+                if tutor_years_since_issue < 18:
+                    st.error("La fecha de expedición del documento del tutor debe tener al menos 18 años respecto a hoy.")
+                    return
+
+            full_name = f"{(fn or '').strip()} {(ln or '').strip()}".strip()
             date_str = appointment_date.strftime("%Y-%m-%d")
-            detail = st.text_area("Detalle del trabajo", placeholder="Ej. manga…", height=80, key="ap_det")
-            deposit = st.number_input("Depósito (COP) *", min_value=0.0, step=10000.0, key="ap_dep")
-            st.caption(f"Valor: {_format_cop(deposit)}")
+            valid, errs = validate_appointment(full_name, (phone or "").strip(), service, date_str, detail, deposit)
+            if not valid:
+                _show_validation_errors(errs)
+                return
 
-        full_name = f"{(fn or '').strip()} {(ln or '').strip()}".strip()
-
-        if st.button("Crear cita", key="btn_appt_create"):
-            if st.session_state.get("_appt_submitting"):
-                st.warning("Solicitud en curso…")
+            cust_payload: Dict[str, Any] = {
+                "first_name": (fn or "").strip(),
+                "last_name": (ln or "").strip(),
+                "birth_date": birth_d.isoformat(),
+                "document_type": st.session_state.get("ap_doc_t"),
+                "document_number": doc,
+                "document_issue_date": st.session_state.get("ap_ddi").isoformat()
+                if st.session_state.get("ap_has_ddi")
+                else None,
+                "email": (email or "").strip(),
+                "phone_number": (phone or "").strip(),
+                "address": (st.session_state.get("ap_addr") or "").strip() or None,
+                "nationality": (st.session_state.get("ap_nat") or "").strip() or None,
+                "profession": (st.session_state.get("ap_prof") or "").strip() or None,
+                "secondary_email": (st.session_state.get("ap_se") or "").strip() or None,
+                "social_media": parse_social_media_json(st.session_state.get("ap_sm", "")),
+                "emergency_contact_name": (st.session_state.get("ap_ecn") or "").strip() or None,
+                "emergency_contact_phone": (st.session_state.get("ap_ecp") or "").strip() or None,
+                "is_minor": bool(st.session_state.get("ap_minor")),
+                "guardian_name": (st.session_state.get("ap_gn") or "").strip() or None,
+                "guardian_document_type": st.session_state.get("ap_gdt")
+                if st.session_state.get("ap_minor")
+                else None,
+                "guardian_document_number": (st.session_state.get("ap_gdn") or "").strip() or None,
+                "guardian_document_issue_date": st.session_state.get("ap_gdi").isoformat()
+                if st.session_state.get("ap_minor") and st.session_state.get("ap_has_gdi")
+                else None,
+            }
+            ok_c, msg_c, cid = sync_customer(cust_payload, doc)
+            if not ok_c or cid is None:
+                st.error(msg_c)
+                return
+            appt_payload = {
+                "name": full_name,
+                "phone": (phone or "").strip(),
+                "service": (service or "").strip(),
+                "date": date_str,
+                "detail": (detail or "").strip() or None,
+                "deposit": float(deposit),
+                "customer_id": cid,
+            }
+            ok_a, code_a, data_a = api_client.post_appointment(appt_payload)
+            if ok_a:
+                st.session_state["_ap_reload"] = True
+                st.success("Cita creada correctamente.")
+                _reset_appointment_form_state()
+                st.session_state.pop("_ap_dlg", None)
+                st.rerun()
             else:
-                st.session_state["_appt_submitting"] = True
-                try:
-                    valid, errs = validate_appointment(full_name, phone.strip(), service, date_str, detail, deposit)
-                    if not valid:
-                        _show_validation_errors(errs)
-                    elif not (st.session_state.get("ap_doc_n") or "").strip():
-                        st.error("El número de documento del cliente es obligatorio.")
-                    else:
-                        doc_t = st.session_state.get("ap_doc_t", doc_type)
-                        cust_payload: Dict[str, Any] = {
-                            "first_name": (fn or "").strip(),
-                            "last_name": (ln or "").strip(),
-                            "birth_date": birth_d.isoformat(),
-                            "document_type": doc_t,
-                            "document_number": (st.session_state.get("ap_doc_n") or "").strip(),
-                            "document_issue_date": (
-                                st.session_state.get("ap_ddi").isoformat()
-                                if st.session_state.get("ap_has_ddi")
-                                else None
-                            ),
-                            "email": (email or "").strip(),
-                            "phone_number": (phone or "").strip(),
-                            "address": (st.session_state.get("ap_addr") or "").strip() or None,
-                            "nationality": (st.session_state.get("ap_nat") or "").strip() or None,
-                            "profession": (st.session_state.get("ap_prof") or "").strip() or None,
-                            "secondary_email": (st.session_state.get("ap_se") or "").strip() or None,
-                            "social_media": parse_social_media_json(st.session_state.get("ap_sm", "")),
-                            "emergency_contact_name": (st.session_state.get("ap_ecn") or "").strip() or None,
-                            "emergency_contact_phone": (st.session_state.get("ap_ecp") or "").strip() or None,
-                            "is_minor": bool(st.session_state.get("ap_minor")),
-                            "guardian_name": (st.session_state.get("ap_gn") or "").strip() or None,
-                            "guardian_document_type": st.session_state.get("ap_gdt")
-                            if st.session_state.get("ap_minor")
-                            else None,
-                            "guardian_document_number": (st.session_state.get("ap_gdn") or "").strip() or None,
-                            "guardian_document_issue_date": (
-                                st.session_state.get("ap_gdi").isoformat()
-                                if st.session_state.get("ap_minor")
-                                and st.session_state.get("ap_has_gdi")
-                                else None
-                            ),
-                        }
-                        with st.spinner("Validando y sincronizando cliente…"):
-                            ok_c, msg_c, cid = sync_customer(
-                                cust_payload, (st.session_state.get("ap_doc_n") or "").strip()
-                            )
-                        if not ok_c or cid is None:
-                            st.error(msg_c)
-                        else:
-                            appt_payload = {
-                                "name": full_name,
-                                "phone": (phone or "").strip(),
-                                "service": (service or "").strip(),
-                                "date": date_str.strip(),
-                                "detail": (detail or "").strip() or None,
-                                "deposit": float(deposit),
-                                "customer_id": cid,
-                            }
-                            ok_a, code_a, data_a = api_client.post_appointment(appt_payload)
-                            if ok_a:
-                                body = (
-                                    json.dumps(data_a, ensure_ascii=False)
-                                    if isinstance(data_a, dict)
-                                    else str(data_a)
-                                )
-                                st.success(f"Cita creada: {body}")
-                            else:
-                                st.error(f"Error HTTP {code_a}: {_api_error(data_a)}")
-                finally:
-                    st.session_state["_appt_submitting"] = False
+                st.error(f"Error HTTP {code_a}: {_api_error(data_a)}")
+    with c2:
+        if st.button("Cancelar", use_container_width=True, key="btn_appt_cancel"):
+            _reset_appointment_form_state()
+            st.session_state.pop("_ap_dlg", None)
+            st.rerun()
 
-    with st.expander("Listado de citas", expanded=False):
-        if st.button("Refrescar listado", key="btn_appt_list"):
-            ok, code, data = api_client.get_appointments()
-            if ok and isinstance(data, list):
-                rows = []
-                for appt in data:
-                    rows.append(
-                        {
-                            "Nombre": appt.get("customer_name", appt.get("name", "")),
-                            "Tipo de trabajo": appt.get("service_type", appt.get("service", "")),
-                            "Depósito": _format_cop(appt.get("deposit", 0)),
-                        }
-                    )
-                st.dataframe(rows, use_container_width=True, hide_index=True)
-            else:
-                st.markdown(
-                    f'<div class="m-error">HTTP {code}: {_api_error(data)}</div>',
-                    unsafe_allow_html=True,
-                )
+
+def _fetch_appointments() -> None:
+    ok, code, data = api_client.get_appointments()
+    if ok and isinstance(data, list):
+        st.session_state["_ap_list"] = data
+        st.session_state["_ap_err"] = None
+    else:
+        st.session_state["_ap_list"] = []
+        st.session_state["_ap_err"] = f"HTTP {code}: {_api_error(data)}"
+
+
+def render_citas_tab() -> None:
+    if "_ap_page" not in st.session_state:
+        st.session_state["_ap_page"] = 0
+    if "_ap_limit" not in st.session_state:
+        st.session_state["_ap_limit"] = 10
+    if "_ap_reload" not in st.session_state:
+        st.session_state["_ap_reload"] = True
+
+    st.subheader("Agendamiento de citas")
+    b1, b2 = st.columns([1, 1])
+    with b1:
+        if st.button("➕ Agendar cita", type="primary", use_container_width=True):
+            st.session_state["_ap_dlg"] = "create"
+    with b2:
+        if st.button("Actualizar listado", use_container_width=True):
+            st.session_state["_ap_reload"] = True
+
+    if st.session_state.get("_ap_reload"):
+        _fetch_appointments()
+        st.session_state["_ap_reload"] = False
+
+    if st.session_state.get("_ap_err"):
+        st.error(st.session_state["_ap_err"])
+
+    items = list(st.session_state.get("_ap_list") or [])
+    total = len(items)
+    limit = int(st.session_state["_ap_limit"])
+    page = int(st.session_state["_ap_page"])
+    start = page * limit
+    rows = items[start : start + limit]
+
+    h1, h2, h3, h4 = st.columns([2.0, 1.4, 1.0, 1.0])
+    h1.markdown("**Nombre**")
+    h2.markdown("**Servicio**")
+    h3.markdown("**Fecha**")
+    h4.markdown("**Depósito**")
+    for r in rows:
+        c1, c2, c3, c4 = st.columns([2.0, 1.4, 1.0, 1.0])
+        c1.write(r.get("customer_name", r.get("name", "")))
+        c2.write(r.get("service_type", r.get("service", "")))
+        c3.write(str(r.get("appointment_date", r.get("date", ""))))
+        c4.write(_format_cop(r.get("deposit", 0)))
+
+    p1, p2, p3 = st.columns([1, 1, 2.5])
+    with p1:
+        st.write("")
+        if st.button("◀", disabled=page <= 0, use_container_width=True):
+            st.session_state["_ap_page"] = max(0, page - 1)
+            st.rerun()
+    with p2:
+        st.write("")
+        if st.button("▶", disabled=(page + 1) * limit >= total if total else True, use_container_width=True):
+            st.session_state["_ap_page"] = page + 1
+            st.rerun()
+    with p3:
+        st.write("")
+        total_pages = max(1, (total + limit - 1) // limit)
+        st.caption(f"Página {page + 1}/{total_pages} · Total: {total} cita(s)")
+
+    if st.session_state.get("_ap_dlg") == "create":
+        _dialog_agendar_cita()
