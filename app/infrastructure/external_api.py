@@ -1,13 +1,13 @@
-import requests
 import datetime
-from typing import Dict, Any
+import requests
+
 
 class NotificationService:
     """Servicio para comunicarse con el Webhook de n8n."""
     def __init__(self, webhook_url: str):
         self.webhook_url = webhook_url
 
-    def notify(self, event: str, data: Dict[str, Any]):
+    def notify(self, event: str, data: dict[str, object]) -> bool:
         payload = {
             "event": event,
             "data": data,

@@ -1,21 +1,24 @@
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
 import mysql.connector
 
 from app.domain.models import (
     AppointmentCreate,
     ContractSign,
-    ContractTemplate,
     Survey,
 )
+from app.schemas.appointment import AppointmentListItem
 from app.schemas.customer import (
     CustomerCreate,
     CustomerListResponse,
     CustomerPublic,
     CustomerUpdate,
 )
+from app.schemas.report import FinancialReportRow
+from app.schemas.survey import SurveyRow
+from app.schemas.template import ContractTemplateCreate, ContractTemplateRead, ContractTemplateUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +40,7 @@ class BusinessLogicService:
         Crea cita. Si viene `customer` (dict), valida con Pydantic y hace upsert por documento.
         Si viene `customer_id`, verifica existencia. Usa transacción para cliente + cita.
         """
-        resolved: Dict[str, Any] = {"customer_id": None}
-
-        def _sync_register() -> int:
+        def _sync_register() -> tuple[int, Optional[int]]:
             with self.repository.db.transaction() as conn:
                 resolved_id: Optional[int] = data.customer_id
                 if data.customer is not None:
@@ -50,32 +51,27 @@ class BusinessLogicService:
                     if row is None:
                         raise ValueError(f"Cliente id={resolved_id} no encontrado.")
                 new_id = self.repository.create(data, resolved_id, conn)
-                resolved["customer_id"] = resolved_id
                 logger.info(
                     "Appointment created id=%s customer_id=%s",
                     new_id,
                     resolved_id,
                 )
-                return new_id
+                return new_id, resolved_id
 
-        new_id = await asyncio.to_thread(_sync_register)
+        new_id, customer_id = await asyncio.to_thread(_sync_register)
 
-        asyncio.create_task(
-            self._async_notify(
-                "appointment_created",
-                {
-                    "id": new_id,
-                    "name": data.name,
-                    "phone": data.phone,
-                    "service": data.service,
-                    "date": data.date,
-                    "customer_id": resolved["customer_id"],
-                },
-            )
-        )
+        payload: dict[str, object] = {
+            "id": new_id,
+            "name": data.name,
+            "phone": data.phone,
+            "service": data.service,
+            "date": data.date,
+            "customer_id": customer_id,
+        }
+        asyncio.create_task(self._async_notify("appointment_created", payload))
         return new_id
 
-    async def process_contract_signature(self, data: ContractSign):
+    async def process_contract_signature(self, data: ContractSign) -> None:
         appointment = self.repository.get_by_id(data.appointment_id)
         if not appointment:
             raise ValueError(f"Cita con ID {data.appointment_id} no encontrada.")
@@ -83,7 +79,7 @@ class BusinessLogicService:
         self.repository.create_contract(data)
         self.repository.update_status(data.appointment_id, "Completado")
 
-        notification_payload = {
+        notification_payload: dict[str, object] = {
             "appointment_id": data.appointment_id,
             "customer_name": appointment.name,
             "phone": appointment.phone,
@@ -95,46 +91,77 @@ class BusinessLogicService:
     async def register_survey(self, data: Survey) -> int:
         new_id = self.repository.create_survey(data)
         if data.rating <= 2:
-            asyncio.create_task(
-                self._async_notify(
-                    "survey_low_rating",
-                    {
-                        "appointment_id": data.appointment_id,
-                        "rating": data.rating,
-                        "comments": data.comments,
-                    },
-                )
-            )
+            pl: dict[str, object] = {
+                "appointment_id": data.appointment_id,
+                "rating": data.rating,
+                "comments": data.comments,
+            }
+            asyncio.create_task(self._async_notify("survey_low_rating", pl))
         return new_id
 
-    async def get_survey_by_appointment(self, appointment_id: int) -> Optional[Dict[str, Any]]:
-        return self.repository.get_survey_by_appointment(appointment_id)
+    async def get_survey_by_appointment(self, appointment_id: int) -> Optional[SurveyRow]:
+
+        def _run() -> Optional[SurveyRow]:
+            row = self.repository.get_survey_by_appointment(appointment_id)
+            if row is None:
+                return None
+            return SurveyRow.model_validate(row)
+
+        return await asyncio.to_thread(_run)
 
     # --- Plantillas ---
-    async def get_templates(self, only_active: bool = False) -> List[ContractTemplate]:
-        rows = self.repository.get_templates(only_active)
-        return [self._template_row_to_model(row) for row in rows]
+    async def get_templates(self, only_active: bool = False) -> list[ContractTemplateRead]:
 
-    async def get_template_by_id(self, template_id: int) -> Optional[ContractTemplate]:
-        return self.repository.get_template_by_id(template_id)
+        def _run() -> list[ContractTemplateRead]:
+            rows = self.repository.get_templates(only_active)
+            return [ContractTemplateRead.model_validate(r) for r in rows]
 
-    async def create_template(self, data: ContractTemplate) -> int:
-        return self.repository.create_template(data)
+        return await asyncio.to_thread(_run)
 
-    async def update_template(self, template_id: int, data: ContractTemplate):
-        return self.repository.update_template(template_id, data)
+    async def get_template_by_id(self, template_id: int) -> Optional[ContractTemplateRead]:
 
-    async def delete_template(self, template_id: int):
-        return self.repository.delete_template(template_id)
+        def _run() -> Optional[ContractTemplateRead]:
+            t = self.repository.get_template_by_id(template_id)
+            if t is None:
+                return None
+            return ContractTemplateRead.model_validate(t)
 
-    async def get_financial_report(self, start_date: str, end_date: str) -> List[Dict[str, Any]]:
-        return self.repository.get_detailed_report(start_date, end_date)
+        return await asyncio.to_thread(_run)
 
-    async def list_appointments(self) -> List[Dict[str, Any]]:
-        return self.repository.get_all()
+    async def create_template(self, data: ContractTemplateCreate) -> int:
+        return await asyncio.to_thread(self.repository.create_template, data.to_domain())
 
-    async def list_surveys(self) -> List[Dict[str, Any]]:
-        return self.repository.get_surveys()
+    async def update_template(self, template_id: int, data: ContractTemplateUpdate) -> None:
+        return await asyncio.to_thread(self.repository.update_template, template_id, data.to_domain())
+
+    async def delete_template(self, template_id: int) -> None:
+        return await asyncio.to_thread(self.repository.delete_template, template_id)
+
+    async def get_financial_report(
+        self, start_date: str, end_date: str
+    ) -> list[FinancialReportRow]:
+
+        def _run() -> list[FinancialReportRow]:
+            rows = self.repository.get_detailed_report(start_date, end_date)
+            return [FinancialReportRow.model_validate(r) for r in rows]
+
+        return await asyncio.to_thread(_run)
+
+    async def list_appointments(self) -> list[AppointmentListItem]:
+
+        def _run() -> list[AppointmentListItem]:
+            rows = self.repository.get_all()
+            return [AppointmentListItem.model_validate(r) for r in rows]
+
+        return await asyncio.to_thread(_run)
+
+    async def list_surveys(self) -> list[SurveyRow]:
+
+        def _run() -> list[SurveyRow]:
+            rows = self.repository.get_surveys()
+            return [SurveyRow.model_validate(r) for r in rows]
+
+        return await asyncio.to_thread(_run)
 
     # --- Clientes ---
     async def create_customer(self, data: CustomerCreate) -> int:
@@ -160,8 +187,15 @@ class BusinessLogicService:
 
         await asyncio.to_thread(_run)
 
-    async def get_customer(self, customer_id: int) -> Optional[Dict[str, Any]]:
-        return await asyncio.to_thread(self.customers.get_by_id, customer_id)
+    async def get_customer(self, customer_id: int) -> Optional[CustomerPublic]:
+
+        def _run() -> Optional[CustomerPublic]:
+            row = self.customers.get_by_id(customer_id)
+            if row is None:
+                return None
+            return CustomerPublic.model_validate(row)
+
+        return await asyncio.to_thread(_run)
 
     async def list_customers(
         self,
@@ -188,17 +222,7 @@ class BusinessLogicService:
             raise ValueError("Customer not found")
         await asyncio.to_thread(self.customers.soft_delete, customer_id)
 
-    @staticmethod
-    def _template_row_to_model(row: Dict[str, Any]) -> ContractTemplate:
-        return ContractTemplate(
-            id=row["id"],
-            name=row["name"],
-            version=row["version"],
-            content=row["content"],
-            is_active=bool(row["is_active"]),
-        )
-
-    async def _async_notify(self, event: str, payload: dict):
+    async def _async_notify(self, event: str, payload: dict[str, object]) -> None:
         try:
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, self.notifier.notify, event, payload)

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Optional
 
 from mysql.connector.connection import MySQLConnection
 
@@ -19,9 +19,9 @@ class CustomerRepository:
     def _cursor(self, conn: MySQLConnection, dictionary: bool = False):
         return conn.cursor(dictionary=dictionary)
 
-    def _row_to_dict(self, row: Dict[str, Any]) -> Dict[str, Any]:
+    def _row_to_dict(self, row: dict[str, object] | None) -> dict[str, object] | None:
         if row is None:
-            return row
+            return None
         out = dict(row)
         sm = out.get("social_media")
         if isinstance(sm, (bytes, str)) and sm:
@@ -31,7 +31,7 @@ class CustomerRepository:
                 out["social_media"] = None
         return out
 
-    def get_by_id(self, customer_id: int, conn: Optional[MySQLConnection] = None) -> Optional[Dict[str, Any]]:
+    def get_by_id(self, customer_id: int, conn: Optional[MySQLConnection] = None) -> Optional[dict[str, object]]:
         own = conn is None
         if own:
             conn = self.db.get_connection()
@@ -51,7 +51,7 @@ class CustomerRepository:
 
     def get_by_document_number(
         self, document_number: str, conn: Optional[MySQLConnection] = None
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, object]]:
         own = conn is None
         if own:
             conn = self.db.get_connection()
@@ -81,7 +81,7 @@ class CustomerRepository:
         try:
             cur = self._cursor(conn, dictionary=True)
             where = ["deleted_at IS NULL"]
-            params: List[Any] = []
+            params: list[object] = []
             if document_number:
                 where.append("document_number = %s")
                 params.append(document_number.strip())
@@ -105,14 +105,14 @@ class CustomerRepository:
         offset: int,
         search: Optional[str] = None,
         document_number: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, object]]:
         conn = self.db.get_connection()
         if conn is None:
             raise ConnectionError("No se pudo establecer conexión con MySQL.")
         try:
             cur = self._cursor(conn, dictionary=True)
             where = ["deleted_at IS NULL"]
-            params: List[Any] = []
+            params: list[object] = []
             if document_number:
                 where.append("document_number = %s")
                 params.append(document_number.strip())
@@ -132,7 +132,7 @@ class CustomerRepository:
         finally:
             conn.close()
 
-    def _social_json(self, value: Optional[Dict[str, Any]]) -> Optional[str]:
+    def _social_json(self, value: Optional[dict[str, object]]) -> Optional[str]:
         if value is None:
             return None
         return json.dumps(value)
@@ -150,7 +150,7 @@ class CustomerRepository:
                 %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s
             )
         """
-        values: Tuple[Any, ...] = (
+        values: tuple[object, ...] = (
             data.first_name,
             data.last_name,
             data.birth_date,
@@ -187,7 +187,7 @@ class CustomerRepository:
                 guardian_document_issue_date=%s
             WHERE id=%s AND deleted_at IS NULL
         """
-        values: Tuple[Any, ...] = (
+        values: tuple[object, ...] = (
             data.first_name,
             data.last_name,
             data.birth_date,

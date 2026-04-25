@@ -1,5 +1,5 @@
 import json
-from typing import List, Dict, Any, Optional
+from typing import Any, Optional
 from app.domain.models import AppointmentCreate, ContractSign, ContractTemplate, Survey
 from app.domain.service_types import resolve_service_type
 
@@ -19,7 +19,7 @@ class AppointmentRepository:
 
     # --- Métodos de Citas ---
 
-    def get_all(self) -> List[Dict[str, Any]]:
+    def get_all(self) -> list[dict[str, object]]:
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn, dictionary=True)
@@ -145,7 +145,7 @@ class AppointmentRepository:
         finally:
             if conn: conn.close()
 
-    def get_survey_by_appointment(self, appointment_id: int) -> Optional[Dict[str, Any]]:
+    def get_survey_by_appointment(self, appointment_id: int) -> Optional[dict[str, object]]:
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn, dictionary=True)
@@ -154,7 +154,7 @@ class AppointmentRepository:
         finally:
             if conn: conn.close()
 
-    def get_surveys(self) -> List[Dict[str, Any]]:
+    def get_surveys(self) -> list[dict[str, object]]:
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn, dictionary=True)
@@ -180,7 +180,7 @@ class AppointmentRepository:
         finally:
             if conn: conn.close()
 
-    def get_templates(self, only_active: bool = False) -> List[Dict[str, Any]]:
+    def get_templates(self, only_active: bool = False) -> list[dict[str, object]]:
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn, dictionary=True)
@@ -233,7 +233,7 @@ class AppointmentRepository:
         finally:
             if conn: conn.close()
 
-    def get_detailed_report(self, start_date: str, end_date: str) -> List[Dict[str, Any]]:
+    def get_detailed_report(self, start_date: str, end_date: str) -> list[dict[str, object]]:
         """Citas en rango de fechas con campos útiles para reporte financiero."""
         conn = self.db.get_connection()
         try:
