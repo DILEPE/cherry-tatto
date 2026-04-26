@@ -25,6 +25,7 @@ import streamlit as st
 
 from streamlit_app import api_client
 from streamlit_app.citas_tab import render_citas_tab
+from streamlit_app.contracts_admin import render_contract_admin_tab
 from streamlit_app.customers_management import render_customers_management_tab
 from streamlit_app.validation import (
     validate_contract,
@@ -190,12 +191,12 @@ def main() -> None:
     st.markdown('<p class="neon-title">Panel de operaciones</p>', unsafe_allow_html=True)
     st.caption("Controles tipo Material · tema oscuro Cherry Ink / Rock City")
 
-    tab_citas, tab_customers, tab_contratos, tab_plantillas, tab_encuestas, tab_reporte = st.tabs(
+    tab_citas, tab_customers, tab_contratos, tab_admin_contratos, tab_encuestas, tab_reporte = st.tabs(
         [
             "Citas · Cherry Ink",
             "Gestión de clientes",
             "Contratos",
-            "Plantillas",
+            "Administrador contratos",
             "Encuestas · Rock City",
             "Reporte (validación)",
         ]
@@ -242,93 +243,8 @@ def main() -> None:
                     else:
                         st.markdown(f'<div class="m-error">HTTP {code}: {_api_error(data)}</div>', unsafe_allow_html=True)
 
-    with tab_plantillas:
-        with st.expander("Listar plantillas", expanded=True):
-            only_active = st.checkbox("Solo activas", value=False, key="tpl_only_active")
-            if st.button("Cargar plantillas", key="btn_tpl_list"):
-                ok, code, data = api_client.get_templates(only_active)
-                if ok:
-                    st.json(data if data is not None else [])
-                else:
-                    st.markdown(f'<div class="m-error">HTTP {code}: {_api_error(data)}</div>', unsafe_allow_html=True)
-
-        with st.expander("Detalle por ID", expanded=False):
-            tid_get = st.number_input("ID plantilla", min_value=1, value=1, step=1, key="tid_get")
-            if st.button("Obtener plantilla", key="btn_tpl_get"):
-                valid, errs = validate_template_id(int(tid_get))
-                if not valid:
-                    _show_validation_errors(errs)
-                else:
-                    ok, code, data = api_client.get_template(int(tid_get))
-                    if ok:
-                        st.json(data)
-                    else:
-                        st.markdown(f'<div class="m-error">HTTP {code}: {_api_error(data)}</div>', unsafe_allow_html=True)
-
-        with st.expander("Crear plantilla", expanded=False):
-            tname = st.text_input("Nombre *", key="tpl_name")
-            tver = st.text_input("Versión * (ej. 1.0.0)", key="tpl_ver")
-            tcontent = st.text_area("Contenido *", height=200, key="tpl_content")
-            tactive = st.checkbox("Activa", value=True, key="tpl_active")
-            if st.button("Crear", key="btn_tpl_create"):
-                valid, errs = validate_template(tname, tver, tcontent, tactive)
-                if not valid:
-                    _show_validation_errors(errs)
-                else:
-                    payload = {
-                        "id": None,
-                        "name": tname.strip(),
-                        "version": tver.strip(),
-                        "content": tcontent.strip(),
-                        "is_active": tactive,
-                    }
-                    ok, code, data = api_client.post_template(payload)
-                    if ok:
-                        body = json.dumps(data, ensure_ascii=False) if isinstance(data, dict) else str(data)
-                        st.markdown(f'<div class="m-success">{body}</div>', unsafe_allow_html=True)
-                    else:
-                        st.markdown(f'<div class="m-error">HTTP {code}: {_api_error(data)}</div>', unsafe_allow_html=True)
-
-        with st.expander("Actualizar plantilla", expanded=False):
-            tid_put = st.number_input("ID a actualizar", min_value=1, value=1, key="tid_put")
-            tname_u = st.text_input("Nombre *", key="tpl_name_u")
-            tver_u = st.text_input("Versión *", key="tpl_ver_u")
-            tcontent_u = st.text_area("Contenido *", height=160, key="tpl_content_u")
-            tactive_u = st.checkbox("Activa", value=True, key="tpl_active_u")
-            if st.button("Actualizar", key="btn_tpl_put"):
-                valid_id, errs_id = validate_template_id(int(tid_put))
-                valid_f, errs_f = validate_template(tname_u, tver_u, tcontent_u, tactive_u)
-                all_errs = errs_id + errs_f
-                if all_errs:
-                    _show_validation_errors(all_errs)
-                else:
-                    payload = {
-                        "id": int(tid_put),
-                        "name": tname_u.strip(),
-                        "version": tver_u.strip(),
-                        "content": tcontent_u.strip(),
-                        "is_active": tactive_u,
-                    }
-                    ok, code, data = api_client.put_template(int(tid_put), payload)
-                    if ok:
-                        body = json.dumps(data, ensure_ascii=False) if isinstance(data, dict) else str(data)
-                        st.markdown(f'<div class="m-success">{body}</div>', unsafe_allow_html=True)
-                    else:
-                        st.markdown(f'<div class="m-error">HTTP {code}: {_api_error(data)}</div>', unsafe_allow_html=True)
-
-        with st.expander("Eliminar plantilla", expanded=False):
-            tid_del = st.number_input("ID a eliminar", min_value=1, value=1, key="tid_del")
-            if st.button("Eliminar", key="btn_tpl_del", type="secondary"):
-                valid, errs = validate_template_id(int(tid_del))
-                if not valid:
-                    _show_validation_errors(errs)
-                else:
-                    ok, code, data = api_client.delete_template(int(tid_del))
-                    if ok:
-                        body = json.dumps(data, ensure_ascii=False) if isinstance(data, dict) else str(data)
-                        st.markdown(f'<div class="m-success">{body}</div>', unsafe_allow_html=True)
-                    else:
-                        st.markdown(f'<div class="m-error">HTTP {code}: {_api_error(data)}</div>', unsafe_allow_html=True)
+    with tab_admin_contratos:
+        render_contract_admin_tab()
 
     with tab_encuestas:
         st.markdown('<p class="sub-lavender">Satisfacción y seguimiento — Rock City</p>', unsafe_allow_html=True)
