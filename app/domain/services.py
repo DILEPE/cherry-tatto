@@ -88,6 +88,12 @@ class BusinessLogicService:
         }
         asyncio.create_task(self._async_notify("contract_signed", notification_payload))
 
+    async def list_contracts_by_customer(self, customer_id: int) -> list[dict[str, object]]:
+        return await asyncio.to_thread(self.repository.get_contracts_by_customer, customer_id)
+
+    async def get_contract(self, contract_id: int) -> Optional[dict[str, object]]:
+        return await asyncio.to_thread(self.repository.get_contract_by_id, contract_id)
+
     async def register_survey(self, data: Survey) -> int:
         new_id = self.repository.create_survey(data)
         if data.rating <= 2:

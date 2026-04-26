@@ -4,5 +4,6 @@ mysql-connector-python
 requests
 uvicorn
 streamlit
+streamlit-drawable-canvas
 pydantic>=2
 email-validator

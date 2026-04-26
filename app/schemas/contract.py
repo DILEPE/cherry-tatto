@@ -14,8 +14,12 @@ class ContractSignRequest(BaseModel):
     appointment_id: int = Field(..., ge=1)
     is_minor: bool = False
     health_data: dict[str, JsonValue]
-    signature: str = Field(..., min_length=1, max_length=2000)
-    tutor_signature: Optional[str] = Field(None, max_length=2000)
+    signature: str = Field(..., min_length=1, max_length=1_000_000)
+    tutor_signature: Optional[str] = Field(None, max_length=1_000_000)
+    artist_signature: Optional[str] = Field(None, max_length=1_000_000)
+    tutor_document_front: Optional[str] = None
+    tutor_document_back: Optional[str] = None
+    contract_text: Optional[str] = None
     template_id: Optional[int] = Field(None, ge=1)
 
     @field_validator("health_data")
@@ -33,5 +37,9 @@ def contract_sign_to_domain(req: ContractSignRequest) -> ContractSign:
         health_data=req.health_data,
         signature=req.signature,
         tutor_signature=req.tutor_signature,
+        artist_signature=req.artist_signature,
+        tutor_document_front=req.tutor_document_front,
+        tutor_document_back=req.tutor_document_back,
+        contract_text=req.contract_text,
         template_id=req.template_id,
     )

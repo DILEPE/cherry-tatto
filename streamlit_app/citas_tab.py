@@ -512,17 +512,27 @@ def render_citas_tab() -> None:
     start = page * limit
     rows = items[start : start + limit]
 
-    h1, h2, h3, h4 = st.columns([2.0, 1.4, 1.0, 1.0])
+    h1, h2, h3, h4, h5 = st.columns([2.0, 1.3, 1.0, 1.0, 1.0])
     h1.markdown("**Nombre**")
     h2.markdown("**Servicio**")
     h3.markdown("**Fecha**")
     h4.markdown("**Depósito**")
+    h5.markdown("**Contrato**")
     for r in rows:
-        c1, c2, c3, c4 = st.columns([2.0, 1.4, 1.0, 1.0])
+        c1, c2, c3, c4, c5 = st.columns([2.0, 1.3, 1.0, 1.0, 1.0])
         c1.write(r.get("customer_name", r.get("name", "")))
         c2.write(r.get("service_type", r.get("service", "")))
         c3.write(str(r.get("appointment_date", r.get("date", ""))))
         c4.write(_format_cop(r.get("deposit", 0)))
+        with c5:
+            appt_id = int(r.get("id", 0) or 0)
+            has_customer = r.get("customer_id") is not None
+            st.link_button(
+                "Firmar",
+                url=f"?view=contract_sign&appointment_id={appt_id}",
+                disabled=(appt_id <= 0 or not has_customer),
+                use_container_width=True,
+            )
 
     p1, p2, p3 = st.columns([1, 1, 2.5])
     with p1:

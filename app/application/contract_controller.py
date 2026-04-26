@@ -1,4 +1,4 @@
-from litestar import Controller, post, status_codes
+from litestar import Controller, get, post, status_codes
 from litestar.datastructures import State
 from litestar.exceptions import HTTPException
 
@@ -27,3 +27,22 @@ class ContractController(Controller):
             raise HTTPException(
                 detail=f"Error al procesar contrato: {str(e)}", status_code=500
             ) from e
+
+    @get("/customer/{customer_id:int}")
+    async def list_by_customer(self, customer_id: int, state: State) -> list[dict]:
+        try:
+            return await state.service.list_contracts_by_customer(customer_id)
+        except Exception as e:
+            raise HTTPException(detail=f"Error al listar contratos: {str(e)}", status_code=500) from e
+
+    @get("/{contract_id:int}")
+    async def get_contract(self, contract_id: int, state: State) -> dict:
+        try:
+            row = await state.service.get_contract(contract_id)
+            if row is None:
+                raise HTTPException(detail="Contrato no encontrado", status_code=404)
+            return row
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(detail=f"Error al obtener contrato: {str(e)}", status_code=500) from e

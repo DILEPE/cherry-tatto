@@ -100,6 +100,7 @@ def _close_dialogs() -> None:
         "_cust_dlg_id",
         "_cust_dlg_del_name",
         "_cust_dlg_del_confirm",
+        "_cust_dlg_contract_name",
     ):
         st.session_state.pop(k, None)
 
@@ -482,6 +483,40 @@ def _dialog_eliminar_cliente(cliente_id: int, nombre: str) -> None:
             st.rerun()
 
 
+@st.dialog("Contratos firmados del cliente", width="large", dismissible=False)
+def _dialog_contracts_cliente(cliente_id: int, nombre: str) -> None:
+    st.markdown(f"**Cliente:** {nombre} (ID {cliente_id})")
+    ok, code, data = api_client.get_customer_contracts(cliente_id)
+    if not ok or not isinstance(data, list):
+        st.error(f"No se pudo cargar contratos (HTTP {code}): {_detail(data)}")
+    elif not data:
+        st.info("Este cliente no tiene contratos firmados.")
+    else:
+        h1, h2, h3, h4, h5 = st.columns([0.9, 1.0, 1.3, 1.3, 1.0])
+        h1.markdown("**ID**")
+        h2.markdown("**Cita**")
+        h3.markdown("**Servicio**")
+        h4.markdown("**Fecha cita**")
+        h5.markdown("**Ver**")
+        for row in data:
+            c1, c2, c3, c4, c5 = st.columns([0.9, 1.0, 1.3, 1.3, 1.0])
+            c1.write(row.get("id"))
+            c2.write(row.get("appointment_id"))
+            c3.write(row.get("service_type", ""))
+            c4.write(str(row.get("appointment_date", "")))
+            with c5:
+                cid = int(row.get("id", 0) or 0)
+                st.link_button(
+                    "Contenido",
+                    url=f"?view=contract_read&contract_id={cid}",
+                    use_container_width=True,
+                    disabled=cid <= 0,
+                )
+    if st.button("Cerrar", use_container_width=True, key="dlg_contracts_close"):
+        _close_dialogs()
+        st.rerun()
+
+
 def render_customers_management_tab() -> None:
     st.subheader("Gestión de clientes")
     st.caption("Alta, consulta, edición y baja lógica. Usa los botones de cada fila.")
@@ -544,7 +579,7 @@ def render_customers_management_tab() -> None:
     st.markdown(f"**{total}** cliente(s) en total · mostrando página **{page + 1}** de **{max(1, (total + limit - 1) // limit)}**")
 
     # Cabecera de tabla manual
-    h1, h2, h3, h4, h5, h6, h7 = st.columns([1.8, 1.2, 1.6, 1.0, 0.55, 0.55, 0.55])
+    h1, h2, h3, h4, h5, h6, h7, h8 = st.columns([1.6, 1.2, 1.4, 1.0, 0.55, 0.55, 0.55, 0.75])
     with h1:
         st.markdown("**Nombre**")
     with h2:
@@ -559,12 +594,14 @@ def render_customers_management_tab() -> None:
         st.markdown("**Editar**")
     with h7:
         st.markdown("**Eliminar**")
+    with h8:
+        st.markdown("**Contratos**")
 
     for it in items:
         cid = int(it["id"])
         nombre = f"{it.get('first_name', '')} {it.get('last_name', '')}".strip()
         doc = f"{it.get('document_type', '')} {it.get('document_number', '')}".strip()
-        c1, c2, c3, c4, c5, c6, c7 = st.columns([1.8, 1.2, 1.6, 1.0, 0.55, 0.55, 0.55])
+        c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1.6, 1.2, 1.4, 1.0, 0.55, 0.55, 0.55, 0.75])
         with c1:
             st.write(nombre)
         with c2:
@@ -588,6 +625,11 @@ def render_customers_management_tab() -> None:
                 st.session_state["_cust_dlg"] = "delete"
                 st.session_state["_cust_dlg_id"] = cid
                 st.session_state["_cust_dlg_del_name"] = nombre
+        with c8:
+            if st.button("Contratos", key=f"cust_ct_{cid}", use_container_width=True):
+                st.session_state["_cust_dlg"] = "contracts"
+                st.session_state["_cust_dlg_id"] = cid
+                st.session_state["_cust_dlg_contract_name"] = nombre
 
     st.divider()
 
@@ -636,3 +678,5 @@ def render_customers_management_tab() -> None:
         _dialog_editar_cliente(int(dlg_id))
     elif dlg == "delete" and dlg_id:
         _dialog_eliminar_cliente(int(dlg_id), st.session_state.get("_cust_dlg_del_name", ""))
+    elif dlg == "contracts" and dlg_id:
+        _dialog_contracts_cliente(int(dlg_id), st.session_state.get("_cust_dlg_contract_name", ""))

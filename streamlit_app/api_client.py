@@ -47,6 +47,14 @@ def post_contract(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
     return _request("POST", "/api/contracts", json_body=payload)
 
 
+def get_customer_contracts(customer_id: int) -> Tuple[bool, int, Any]:
+    return _request("GET", f"/api/contracts/customer/{customer_id}")
+
+
+def get_contract(contract_id: int) -> Tuple[bool, int, Any]:
+    return _request("GET", f"/api/contracts/{contract_id}")
+
+
 def get_templates(only_active: bool) -> Tuple[bool, int, Any]:
     return _request("GET", "/api/templates/", params={"only_active": only_active})
 

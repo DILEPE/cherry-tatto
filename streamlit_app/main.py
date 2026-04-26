@@ -25,6 +25,8 @@ import streamlit as st
 
 from streamlit_app import api_client
 from streamlit_app.citas_tab import render_citas_tab
+from streamlit_app.contract_read_view import render_contract_read_view
+from streamlit_app.contract_signing import render_contract_signing_view
 from streamlit_app.contracts_admin import render_contract_admin_tab
 from streamlit_app.customers_management import render_customers_management_tab
 from streamlit_app.validation import (
@@ -155,6 +157,32 @@ def main() -> None:
         st.session_state["api_base_url"] = os.getenv("API_BASE_URL", api_client.DEFAULT_BASE)
 
     _inject_material_neon_css()
+
+    # URL dedicada para firma de contratos:
+    # ?view=contract_sign&appointment_id=<id>
+    view = st.query_params.get("view")
+    if view == "contract_sign":
+        appt_id_raw = st.query_params.get("appointment_id")
+        try:
+            appt_id = int(appt_id_raw) if appt_id_raw is not None else 0
+        except ValueError:
+            appt_id = 0
+        if appt_id <= 0:
+            st.error("URL inválida: falta appointment_id.")
+        else:
+            render_contract_signing_view(appt_id)
+        return
+    if view == "contract_read":
+        contract_id_raw = st.query_params.get("contract_id")
+        try:
+            contract_id = int(contract_id_raw) if contract_id_raw is not None else 0
+        except ValueError:
+            contract_id = 0
+        if contract_id <= 0:
+            st.error("URL inválida: falta contract_id.")
+        else:
+            render_contract_read_view(contract_id)
+        return
 
     with st.sidebar:
         logo = _logo_path()
