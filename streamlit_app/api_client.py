@@ -76,6 +76,18 @@ def patch_appointment_financials(
     )
 
 
+def get_appointment_payments(appointment_id: int) -> Tuple[bool, int, Any]:
+    return _request("GET", f"/api/appointments/{appointment_id}/payments")
+
+
+def post_appointment_payment(appointment_id: int, amount: float, note: Optional[str] = None) -> Tuple[bool, int, Any]:
+    return _request(
+        "POST",
+        f"/api/appointments/{appointment_id}/payments",
+        json_body={"amount": float(amount), "note": note},
+    )
+
+
 def post_contract(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
     return _request("POST", "/api/contracts", json_body=payload)
 

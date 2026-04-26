@@ -59,6 +59,16 @@ class BusinessLogicService:
                 return new_id, resolved_id
 
         new_id, customer_id = await asyncio.to_thread(_sync_register)
+        if data.deposit > 0:
+            try:
+                await asyncio.to_thread(
+                    self.repository.create_payment,
+                    new_id,
+                    float(data.deposit),
+                    "Abono inicial al agendar",
+                )
+            except Exception:
+                logger.warning("No fue posible registrar abono inicial en historial para cita id=%s", new_id)
 
         payload: dict[str, object] = {
             "id": new_id,
@@ -208,6 +218,27 @@ class BusinessLogicService:
             float(deposit),
             float(pending_balance),
         )
+
+    async def list_appointment_payments(self, appointment_id: int) -> list[dict[str, object]]:
+        appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
+        if appointment is None:
+            raise ValueError("Cita no encontrada")
+        return await asyncio.to_thread(self.repository.list_payments_by_appointment, appointment_id)
+
+    async def add_appointment_payment(self, appointment_id: int, amount: float, note: Optional[str] = None) -> None:
+        appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
+        if appointment is None:
+            raise ValueError("Cita no encontrada")
+        status = str(getattr(appointment, "status", "") or "")
+        if status not in {"Agendada", "Reprogramada"}:
+            raise ValueError("Solo puedes agregar abonos en citas Agendadas o Reprogramadas")
+        if amount <= 0:
+            raise ValueError("El abono adicional debe ser mayor a cero")
+        total_amount = float(getattr(appointment, "total_amount", 0) or 0)
+        current_deposit = float(getattr(appointment, "deposit", 0) or 0)
+        if current_deposit + amount > total_amount:
+            raise ValueError("El abono adicional excede el valor total del trabajo")
+        await asyncio.to_thread(self.repository.create_payment, appointment_id, float(amount), note)
 
     async def list_surveys(self) -> list[SurveyRow]:
 

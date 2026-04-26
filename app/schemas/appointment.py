@@ -124,3 +124,20 @@ class AppointmentFinancialUpdateRequest(BaseModel):
         if expected < 0:
             raise ValueError("pending_balance no puede ser negativo")
         return v
+
+
+class AppointmentPaymentCreateRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    amount: float = Field(gt=0)
+    note: Optional[str] = Field(default=None, max_length=300)
+
+
+class AppointmentPaymentItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    appointment_id: int
+    amount: float
+    note: Optional[str] = None
+    created_at: Optional[datetime | str] = None

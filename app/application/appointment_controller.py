@@ -8,6 +8,8 @@ from app.schemas.appointment import (
     AppointmentCreateRequest,
     AppointmentFinancialUpdateRequest,
     AppointmentListItem,
+    AppointmentPaymentCreateRequest,
+    AppointmentPaymentItem,
     AppointmentRescheduleRequest,
     AppointmentStatusUpdateRequest,
     appointment_request_to_domain,
@@ -94,3 +96,28 @@ class AppointmentController(Controller):
             raise HTTPException(detail=str(e), status_code=400) from e
         except Exception as e:
             raise HTTPException(detail=f"Error al actualizar montos: {str(e)}", status_code=400) from e
+
+    @get("/{appointment_id:int}/payments")
+    async def list_payments(self, appointment_id: int, state: State) -> list[AppointmentPaymentItem]:
+        try:
+            rows = await state.service.list_appointment_payments(appointment_id)
+            return [AppointmentPaymentItem.model_validate(r) for r in rows]
+        except ValueError as e:
+            raise HTTPException(detail=str(e), status_code=404) from e
+        except Exception as e:
+            raise HTTPException(detail=f"Error al obtener historial de abonos: {str(e)}", status_code=400) from e
+
+    @post("/{appointment_id:int}/payments")
+    async def add_payment(
+        self,
+        appointment_id: int,
+        data: AppointmentPaymentCreateRequest,
+        state: State,
+    ) -> MessageResponse:
+        try:
+            await state.service.add_appointment_payment(appointment_id, data.amount, data.note)
+            return MessageResponse(status="success", message="Abono registrado correctamente")
+        except ValueError as e:
+            raise HTTPException(detail=str(e), status_code=400) from e
+        except Exception as e:
+            raise HTTPException(detail=f"Error al registrar abono: {str(e)}", status_code=400) from e
