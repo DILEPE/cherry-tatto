@@ -39,6 +39,19 @@ def _to_float(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
+def _financial_row_values(row: dict[str, Any]) -> tuple[float, float, float]:
+    """
+    Normaliza montos para UI y resumen:
+    - total nunca menor que abonado (fallback datos legacy)
+    - pendiente se calcula siempre desde total - abonado
+    """
+    abonado = max(_to_float(row.get("deposit"), 0.0), 0.0)
+    total_raw = max(_to_float(row.get("total_amount"), 0.0), 0.0)
+    total = max(total_raw, abonado)
+    pendiente = max(round(total - abonado, 2), 0.0)
+    return total, abonado, pendiente
+
+
 def _parse_date(val: Any) -> date:
     if isinstance(val, date):
         return val
@@ -654,40 +667,72 @@ def _dialog_ajustar_montos() -> None:
         value=current_total,
         key="ap_fin_total",
     )
-    deposit = st.number_input(
-        "Saldo abonado (COP)",
+    pending = round(float(total_amount) - float(current_deposit), 2)
+    st.caption(f"Abonado actual: {_format_cop(current_deposit)}")
+    st.caption(f"Saldo pendiente calculado: {_format_cop(max(pending, 0))}")
+
+    ok_p, code_p, payments = api_client.get_appointment_payments(appt_id)
+    st.markdown("##### Historial de abonos")
+    if ok_p and isinstance(payments, list):
+        if payments:
+            for p in payments:
+                when = str(p.get("created_at") or "")
+                note = str(p.get("note") or "Sin nota")
+                amount = _to_float(p.get("amount"), 0.0)
+                st.write(f"- {when[:19]} · {_format_cop(amount)} · {note}")
+        else:
+            st.info("Aún no hay abonos registrados.")
+    else:
+        st.warning(f"No se pudo cargar historial (HTTP {code_p}).")
+
+    extra_payment = st.number_input(
+        "Agregar abono adicional (COP)",
         min_value=0.0,
         step=10000.0,
-        value=current_deposit,
-        key="ap_fin_deposit",
+        value=0.0,
+        key="ap_fin_extra_payment",
     )
-    pending = round(float(total_amount) - float(deposit), 2)
-    st.caption(f"Saldo pendiente calculado: {_format_cop(max(pending, 0))}")
+    payment_note = st.text_input(
+        "Nota del abono (opcional)",
+        value="",
+        key="ap_fin_extra_note",
+        placeholder="Ej: abono en efectivo",
+    )
 
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("Guardar montos", type="primary", use_container_width=True, key="ap_fin_save_btn"):
-            if deposit > total_amount:
-                st.error("El saldo abonado no puede ser mayor al valor total.")
+        if st.button("Guardar", type="primary", use_container_width=True, key="ap_fin_save_btn"):
+            if current_deposit > total_amount:
+                st.error("El abonado acumulado no puede ser mayor al valor total.")
                 return
             ok, code, data = api_client.patch_appointment_financials(
                 appt_id,
                 float(total_amount),
-                float(deposit),
+                float(current_deposit),
                 float(max(pending, 0)),
             )
-            if ok:
-                st.success("Montos actualizados.")
-                st.session_state["_ap_reload"] = True
-                st.session_state.pop("_ap_fin_item", None)
-                st.rerun()
-            else:
+            if not ok:
                 st.error(f"Error HTTP {code}: {_api_error(data)}")
+                return
+            if extra_payment > 0:
+                ok_pay, code_pay, data_pay = api_client.post_appointment_payment(
+                    appt_id,
+                    float(extra_payment),
+                    (payment_note or "").strip() or None,
+                )
+                if not ok_pay:
+                    st.error(f"No se pudo registrar abono (HTTP {code_pay}): {_api_error(data_pay)}")
+                    return
+            st.success("Montos y abonos actualizados.")
+            st.session_state["_ap_reload"] = True
+            st.session_state.pop("_ap_fin_item", None)
+            st.rerun()
     with c2:
         if st.button("Cancelar", use_container_width=True, key="ap_fin_cancel_btn"):
             st.session_state.pop("_ap_fin_item", None)
             st.session_state.pop("ap_fin_total", None)
-            st.session_state.pop("ap_fin_deposit", None)
+            st.session_state.pop("ap_fin_extra_payment", None)
+            st.session_state.pop("ap_fin_extra_note", None)
             st.rerun()
 
 
@@ -727,6 +772,16 @@ def render_citas_tab() -> None:
         .pill-cancelada { background: #fdeaea; color: #7f1f1f; border-color: #efbcbc; }
         .pill-finalizada { background: #e8f8ec; color: #1f6b31; border-color: #b8e2c2; }
         .pill-default { background: #f2f3f5; color: #374151; border-color: #d1d5db; }
+        .ap-col-title {
+            display: inline-block;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            color: #111827;
+            background: #f3f4f6;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 0.18rem 0.45rem;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -772,12 +827,10 @@ def render_citas_tab() -> None:
     total_abonado = 0.0
     total_pendiente = 0.0
     for row in filtered_items:
-        row_total = _to_float(row.get("total_amount"), 0.0)
-        row_abonado = _to_float(row.get("deposit"), 0.0)
-        row_pendiente = _to_float(row.get("pending_balance"), row_total - row_abonado)
-        total_trabajo += max(row_total, 0.0)
-        total_abonado += max(row_abonado, 0.0)
-        total_pendiente += max(row_pendiente, 0.0)
+        row_total, row_abonado, row_pendiente = _financial_row_values(row)
+        total_trabajo += row_total
+        total_abonado += row_abonado
+        total_pendiente += row_pendiente
 
     s1, s2, s3 = st.columns(3)
     s1.metric("Total trabajo", _format_cop(total_trabajo))
@@ -795,24 +848,22 @@ def render_citas_tab() -> None:
     rows = filtered_items[start : start + limit]
 
     h1, h2, h3, h4, h5, h6, h7, h8, h9, h10 = st.columns([1.7, 1.0, 0.9, 0.9, 0.9, 1.0, 0.9, 0.9, 0.9, 0.9])
-    h1.markdown("**Nombre**")
-    h2.markdown("**Servicio**")
-    h3.markdown("**Fecha**")
-    h4.markdown("**Total**")
-    h5.markdown("**Abonado**")
-    h6.markdown("**Pendiente**")
-    h7.markdown("**Estado**")
-    h8.markdown("**Contrato**")
-    h9.markdown("**Mover**")
-    h10.markdown("**Acciones**")
+    h1.markdown('<span class="ap-col-title">Nombre</span>', unsafe_allow_html=True)
+    h2.markdown('<span class="ap-col-title">Servicio</span>', unsafe_allow_html=True)
+    h3.markdown('<span class="ap-col-title">Fecha</span>', unsafe_allow_html=True)
+    h4.markdown('<span class="ap-col-title">Total</span>', unsafe_allow_html=True)
+    h5.markdown('<span class="ap-col-title">Abonado</span>', unsafe_allow_html=True)
+    h6.markdown('<span class="ap-col-title">Pendiente</span>', unsafe_allow_html=True)
+    h7.markdown('<span class="ap-col-title">Estado</span>', unsafe_allow_html=True)
+    h8.markdown('<span class="ap-col-title">Contrato</span>', unsafe_allow_html=True)
+    h9.markdown('<span class="ap-col-title">Mover</span>', unsafe_allow_html=True)
+    h10.markdown('<span class="ap-col-title">Acciones</span>', unsafe_allow_html=True)
     for r in rows:
         c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 = st.columns([1.7, 1.0, 0.9, 0.9, 0.9, 1.0, 0.9, 0.9, 0.9, 0.9])
         c1.write(r.get("customer_name", r.get("name", "")))
         c2.write(r.get("service_type", r.get("service", "")))
         c3.write(str(r.get("appointment_date", r.get("date", ""))))
-        total_amount = _to_float(r.get("total_amount"), 0.0)
-        deposit_amount = _to_float(r.get("deposit"), 0.0)
-        pending_balance = _to_float(r.get("pending_balance"), max(total_amount - deposit_amount, 0.0))
+        total_amount, deposit_amount, pending_balance = _financial_row_values(r)
         c4.write(_format_cop(total_amount))
         c5.write(_format_cop(deposit_amount))
         c6.write(_format_cop(pending_balance))

@@ -230,6 +230,49 @@ class AppointmentRepository:
             if conn:
                 conn.close()
 
+    def list_payments_by_appointment(self, appointment_id: int) -> list[dict[str, object]]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT id, appointment_id, amount, note, created_at
+                FROM appointment_payments
+                WHERE appointment_id = %s
+                ORDER BY created_at ASC, id ASC
+                """,
+                (appointment_id,),
+            )
+            return cursor.fetchall()
+        finally:
+            if conn:
+                conn.close()
+
+    def create_payment(self, appointment_id: int, amount: float, note: Optional[str] = None) -> None:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                """
+                INSERT INTO appointment_payments (appointment_id, amount, note)
+                VALUES (%s, %s, %s)
+                """,
+                (appointment_id, amount, note),
+            )
+            cursor.execute(
+                """
+                UPDATE appointments
+                SET deposit = COALESCE(deposit, 0) + %s,
+                    pending_balance = GREATEST(COALESCE(total_amount, 0) - (COALESCE(deposit, 0) + %s), 0)
+                WHERE id = %s
+                """,
+                (amount, amount, appointment_id),
+            )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
     def cancel_appointment_with_credit(self, appointment_id: int) -> None:
         conn = self.db.get_connection()
         try:
