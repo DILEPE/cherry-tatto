@@ -94,8 +94,19 @@ class AppointmentRepository:
             
             query = """
                 INSERT INTO contracts 
-                (appointment_id, template_id, is_minor, health_data, client_signature, tutor_signature) 
-                VALUES (%s, %s, %s, %s, %s, %s)
+                (
+                    appointment_id,
+                    template_id,
+                    is_minor,
+                    health_data,
+                    client_signature,
+                    tutor_signature,
+                    artist_signature,
+                    tutor_document_front,
+                    tutor_document_back,
+                    contract_text
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             values = (
                 data.appointment_id,
@@ -103,7 +114,11 @@ class AppointmentRepository:
                 data.is_minor,
                 health_json,
                 data.signature,
-                data.tutor_signature
+                data.tutor_signature,
+                data.artist_signature,
+                data.tutor_document_front,
+                data.tutor_document_back,
+                data.contract_text,
             )
             cursor.execute(query, values)
             contract_id = cursor.lastrowid
@@ -111,6 +126,53 @@ class AppointmentRepository:
             return contract_id
         finally:
             if conn: conn.close()
+
+    def get_contracts_by_customer(self, customer_id: int) -> list[dict[str, object]]:
+        """Lista contratos firmados vinculados a un cliente."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT
+                    c.id,
+                    c.appointment_id,
+                    c.template_id,
+                    c.is_minor,
+                    a.customer_name,
+                    a.service_type,
+                    a.appointment_date
+                FROM contracts c
+                INNER JOIN appointments a ON a.id = c.appointment_id
+                WHERE a.customer_id = %s
+                ORDER BY c.id DESC
+                """,
+                (customer_id,),
+            )
+            return cursor.fetchall()
+        finally:
+            if conn:
+                conn.close()
+
+    def get_contract_by_id(self, contract_id: int) -> Optional[dict[str, object]]:
+        """Detalle completo de un contrato firmado."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT c.*, a.customer_id, a.customer_name, a.appointment_date, a.service_type
+                FROM contracts c
+                LEFT JOIN appointments a ON a.id = c.appointment_id
+                WHERE c.id = %s
+                LIMIT 1
+                """,
+                (contract_id,),
+            )
+            return cursor.fetchone()
+        finally:
+            if conn:
+                conn.close()
 
     def update_status(self, appointment_id: int, status: str):
         """Actualiza el estado de la cita (ej: a 'Completado')."""

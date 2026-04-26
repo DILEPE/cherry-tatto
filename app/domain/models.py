@@ -29,6 +29,10 @@ class ContractSign:
     health_data: dict[str, JsonValue]
     signature: str
     tutor_signature: Optional[str] = None
+    artist_signature: Optional[str] = None
+    tutor_document_front: Optional[str] = None
+    tutor_document_back: Optional[str] = None
+    contract_text: Optional[str] = None
     template_id: Optional[int] = None  # Para vincular con una plantilla específica 
 
 @dataclass
