@@ -17,6 +17,8 @@ class AppointmentCreate:
     date: str
     detail: Optional[str] = None
     deposit: float = 0.0
+    total_amount: float = 0.0
+    pending_balance: float = 0.0
     customer_id: Optional[int] = None
     # Dict serializado compatible con `CustomerCreate` (vía Pydantic en el servicio)
     customer: Optional[dict[str, JsonValue]] = None

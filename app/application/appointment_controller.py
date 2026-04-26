@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-from litestar import Controller, get, post, status_codes
+from litestar import Controller, patch, get, post, status_codes
 from litestar.datastructures import State
 from litestar.exceptions import HTTPException
 
 from app.schemas.appointment import (
     AppointmentCreateRequest,
+    AppointmentFinancialUpdateRequest,
     AppointmentListItem,
+    AppointmentRescheduleRequest,
+    AppointmentStatusUpdateRequest,
     appointment_request_to_domain,
 )
-from app.schemas.common import AppointmentCreatedResponse
+from app.schemas.common import AppointmentCreatedResponse, MessageResponse
 
 
 class AppointmentController(Controller):
@@ -41,3 +44,53 @@ class AppointmentController(Controller):
             raise HTTPException(detail=str(e), status_code=400) from e
         except Exception as e:
             raise HTTPException(detail=f"Error al crear cita: {str(e)}", status_code=400) from e
+
+    @patch("/{appointment_id:int}/status")
+    async def update_status(
+        self,
+        appointment_id: int,
+        data: AppointmentStatusUpdateRequest,
+        state: State,
+    ) -> MessageResponse:
+        try:
+            await state.service.update_appointment_status(appointment_id, data.status)
+            return MessageResponse(status="success", message=f"Estado actualizado a {data.status}")
+        except ValueError as e:
+            raise HTTPException(detail=str(e), status_code=404) from e
+        except Exception as e:
+            raise HTTPException(detail=f"Error al actualizar estado: {str(e)}", status_code=400) from e
+
+    @patch("/{appointment_id:int}/reschedule")
+    async def reprogram(
+        self,
+        appointment_id: int,
+        data: AppointmentRescheduleRequest,
+        state: State,
+    ) -> MessageResponse:
+        try:
+            await state.service.reprogram_appointment(appointment_id, data.date, data.detail)
+            return MessageResponse(status="success", message="Cita reprogramada correctamente")
+        except ValueError as e:
+            raise HTTPException(detail=str(e), status_code=404) from e
+        except Exception as e:
+            raise HTTPException(detail=f"Error al reprogramar cita: {str(e)}", status_code=400) from e
+
+    @patch("/{appointment_id:int}/financials")
+    async def update_financials(
+        self,
+        appointment_id: int,
+        data: AppointmentFinancialUpdateRequest,
+        state: State,
+    ) -> MessageResponse:
+        try:
+            await state.service.update_appointment_financials(
+                appointment_id,
+                data.total_amount,
+                data.deposit,
+                data.pending_balance,
+            )
+            return MessageResponse(status="success", message="Montos actualizados correctamente")
+        except ValueError as e:
+            raise HTTPException(detail=str(e), status_code=400) from e
+        except Exception as e:
+            raise HTTPException(detail=f"Error al actualizar montos: {str(e)}", status_code=400) from e

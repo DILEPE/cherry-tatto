@@ -32,6 +32,13 @@ def _format_cop(value: float | int) -> str:
     return f"COP ${amount:,.0f}".replace(",", ".")
 
 
+def _to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def _parse_date(val: Any) -> date:
     if isinstance(val, date):
         return val
@@ -197,6 +204,7 @@ def _init_appt_form_state_once() -> None:
         "ap_ad": date.today(),
         "ap_det": "",
         "ap_dep": 0.0,
+        "ap_total": 0.0,
         "_ap_doc_verified": False,
         "_ap_doc_verified_doc": "",
     }
@@ -262,6 +270,7 @@ def _reset_appointment_form_state() -> None:
         "ap_ad",
         "ap_det",
         "ap_dep",
+        "ap_total",
         "_ap_doc_verified",
         "_ap_doc_verified_doc",
         "_ap_last_loaded_id",
@@ -364,7 +373,10 @@ def _dialog_agendar_cita() -> None:
         format="DD/MM/YYYY",
     )
     detail = st.text_area("Detalle del trabajo", height=80, key="ap_det")
-    deposit = st.number_input("Depósito (COP) *", min_value=0.0, step=10000.0, key="ap_dep")
+    total_amount = st.number_input("Valor total del trabajo (COP) *", min_value=0.0, step=10000.0, key="ap_total")
+    deposit = st.number_input("Saldo abonado (COP) *", min_value=0.0, step=10000.0, key="ap_dep")
+    pending_balance = round(float(total_amount) - float(deposit), 2)
+    st.caption(f"Saldo pendiente calculado: {_format_cop(max(pending_balance, 0))}")
 
     c1, c2 = st.columns(2)
     with c1:
@@ -413,6 +425,9 @@ def _dialog_agendar_cita() -> None:
             if not valid:
                 _show_validation_errors(errs)
                 return
+            if deposit > total_amount:
+                st.error("El saldo abonado no puede ser mayor que el valor total del trabajo.")
+                return
 
             cust_payload: Dict[str, Any] = {
                 "first_name": (fn or "").strip(),
@@ -453,6 +468,8 @@ def _dialog_agendar_cita() -> None:
                 "date": date_str,
                 "detail": (detail or "").strip() or None,
                 "deposit": float(deposit),
+                "total_amount": float(total_amount),
+                "pending_balance": float(max(pending_balance, 0)),
                 "customer_id": cid,
             }
             ok_a, code_a, data_a = api_client.post_appointment(appt_payload)
@@ -481,6 +498,199 @@ def _fetch_appointments() -> None:
         st.session_state["_ap_err"] = f"HTTP {code}: {_api_error(data)}"
 
 
+def _status_pill_html(status: str) -> str:
+    normalized = (status or "Agendada").strip().lower()
+    cls = {
+        "agendada": "pill-agendada",
+        "reprogramada": "pill-reprogramada",
+        "cancelada": "pill-cancelada",
+        "finalizada": "pill-finalizada",
+    }.get(normalized, "pill-default")
+    return f'<span class="ap-pill {cls}">{status or "Agendada"}</span>'
+
+
+def _apply_appointment_filters(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    text = str(st.session_state.get("_ap_f_name") or "").strip().lower()
+    svc = str(st.session_state.get("_ap_f_service") or "Todos")
+    status = str(st.session_state.get("_ap_f_status") or "Todos")
+    from_date = st.session_state.get("_ap_f_from")
+    to_date = st.session_state.get("_ap_f_to")
+    filtered: list[dict[str, Any]] = []
+    for row in items:
+        name_value = str(row.get("customer_name", row.get("name", "")) or "")
+        service_value = str(row.get("service_type", row.get("service", "")) or "")
+        status_value = str(row.get("status") or "Agendada")
+        appt_date = _parse_date(row.get("appointment_date", row.get("date")))
+        if text and text not in name_value.lower():
+            continue
+        if svc != "Todos" and service_value != svc:
+            continue
+        if status != "Todos" and status_value != status:
+            continue
+        if from_date and appt_date < from_date:
+            continue
+        if to_date and appt_date > to_date:
+            continue
+        filtered.append(row)
+    return filtered
+
+
+@st.dialog("Reprogramar cita", width="medium", dismissible=False)
+def _dialog_reprogramar_cita() -> None:
+    appt = st.session_state.get("_ap_reprogram_item") or {}
+    appt_id = int(appt.get("id", 0) or 0)
+    if appt_id <= 0:
+        st.error("No se encontró la cita a reprogramar.")
+        if st.button("Cerrar", use_container_width=True):
+            st.session_state.pop("_ap_reprogram_item", None)
+            st.rerun()
+        return
+    current_date = _parse_date(appt.get("appointment_date", appt.get("date")))
+    min_date_appt, max_date_appt = _date_range_100y_window()
+    st.caption(f"Cita #{appt_id} · {appt.get('customer_name', appt.get('name', ''))}")
+    new_date = st.date_input(
+        "Nueva fecha de cita",
+        value=current_date,
+        min_value=min_date_appt,
+        max_value=max_date_appt,
+        key="ap_reprogram_date",
+        format="DD/MM/YYYY",
+    )
+    new_detail = st.text_area(
+        "Detalle actualizado (opcional)",
+        value=str(appt.get("detail") or ""),
+        key="ap_reprogram_detail",
+        height=90,
+    )
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button(
+            "Guardar reprogramación",
+            type="primary",
+            use_container_width=True,
+            key="ap_reprogram_save_btn",
+        ):
+            ok, code, data = api_client.patch_appointment_reschedule(
+                appt_id,
+                new_date.strftime("%Y-%m-%d"),
+                (new_detail or "").strip() or None,
+            )
+            if ok:
+                st.success("Cita reprogramada correctamente.")
+                st.session_state["_ap_reload"] = True
+                st.session_state.pop("_ap_reprogram_item", None)
+                st.rerun()
+            else:
+                st.error(f"Error HTTP {code}: {_api_error(data)}")
+    with c2:
+        if st.button("Cancelar", use_container_width=True, key="ap_reprogram_close_btn"):
+            st.session_state.pop("_ap_reprogram_item", None)
+            st.session_state.pop("ap_reprogram_date", None)
+            st.session_state.pop("ap_reprogram_detail", None)
+            st.rerun()
+
+
+@st.dialog("Confirmar anulación", width="small", dismissible=False)
+def _dialog_cancelar_cita() -> None:
+    appt = st.session_state.get("_ap_cancel_item") or {}
+    appt_id = int(appt.get("id", 0) or 0)
+    if appt_id <= 0:
+        st.error("No se encontró la cita a anular.")
+        if st.button("Cerrar", use_container_width=True, key="ap_cancel_close_missing"):
+            st.session_state.pop("_ap_cancel_item", None)
+            st.rerun()
+        return
+    deposit = float(appt.get("deposit") or 0)
+    warning = (
+        f"Vas a anular la cita #{appt_id} de "
+        f"{appt.get('customer_name', appt.get('name', 'cliente'))}. Esta acción cambia el estado a Cancelada."
+    )
+    if deposit > 0:
+        warning += (
+            f" Tiene saldo abonado por {_format_cop(deposit)}; "
+            "si confirmas, ese valor quedará como saldo a favor del cliente."
+        )
+    st.warning(warning)
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Sí, anular", type="primary", use_container_width=True, key="ap_cancel_confirm_btn"):
+            ok, code, data = api_client.patch_appointment_status(appt_id, "Cancelada")
+            if ok:
+                st.session_state["_ap_reload"] = True
+                st.session_state.pop("_ap_cancel_item", None)
+                st.rerun()
+            else:
+                st.error(f"Error HTTP {code}: {_api_error(data)}")
+    with c2:
+        if st.button("No, volver", use_container_width=True, key="ap_cancel_back_btn"):
+            st.session_state.pop("_ap_cancel_item", None)
+            st.rerun()
+
+
+@st.dialog("Ajustar montos", width="medium", dismissible=False)
+def _dialog_ajustar_montos() -> None:
+    appt = st.session_state.get("_ap_fin_item") or {}
+    appt_id = int(appt.get("id", 0) or 0)
+    status = str(appt.get("status") or "Agendada")
+    if appt_id <= 0:
+        st.error("No se encontró la cita.")
+        if st.button("Cerrar", use_container_width=True, key="ap_fin_close_missing"):
+            st.session_state.pop("_ap_fin_item", None)
+            st.rerun()
+        return
+    if status not in {"Agendada", "Reprogramada"}:
+        st.error("Solo puedes editar montos en estados Agendada o Reprogramada.")
+        if st.button("Cerrar", use_container_width=True, key="ap_fin_close_invalid"):
+            st.session_state.pop("_ap_fin_item", None)
+            st.rerun()
+        return
+    st.caption(f"Cita #{appt_id} · Estado: {status}")
+    current_total = float(appt.get("total_amount") or 0)
+    current_deposit = float(appt.get("deposit") or 0)
+    total_amount = st.number_input(
+        "Valor total del trabajo (COP)",
+        min_value=0.0,
+        step=10000.0,
+        value=current_total,
+        key="ap_fin_total",
+    )
+    deposit = st.number_input(
+        "Saldo abonado (COP)",
+        min_value=0.0,
+        step=10000.0,
+        value=current_deposit,
+        key="ap_fin_deposit",
+    )
+    pending = round(float(total_amount) - float(deposit), 2)
+    st.caption(f"Saldo pendiente calculado: {_format_cop(max(pending, 0))}")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Guardar montos", type="primary", use_container_width=True, key="ap_fin_save_btn"):
+            if deposit > total_amount:
+                st.error("El saldo abonado no puede ser mayor al valor total.")
+                return
+            ok, code, data = api_client.patch_appointment_financials(
+                appt_id,
+                float(total_amount),
+                float(deposit),
+                float(max(pending, 0)),
+            )
+            if ok:
+                st.success("Montos actualizados.")
+                st.session_state["_ap_reload"] = True
+                st.session_state.pop("_ap_fin_item", None)
+                st.rerun()
+            else:
+                st.error(f"Error HTTP {code}: {_api_error(data)}")
+    with c2:
+        if st.button("Cancelar", use_container_width=True, key="ap_fin_cancel_btn"):
+            st.session_state.pop("_ap_fin_item", None)
+            st.session_state.pop("ap_fin_total", None)
+            st.session_state.pop("ap_fin_deposit", None)
+            st.rerun()
+
+
 def render_citas_tab() -> None:
     if "_ap_page" not in st.session_state:
         st.session_state["_ap_page"] = 0
@@ -488,8 +698,39 @@ def render_citas_tab() -> None:
         st.session_state["_ap_limit"] = 10
     if "_ap_reload" not in st.session_state:
         st.session_state["_ap_reload"] = True
+    if "_ap_f_name" not in st.session_state:
+        st.session_state["_ap_f_name"] = ""
+    if "_ap_f_service" not in st.session_state:
+        st.session_state["_ap_f_service"] = "Todos"
+    if "_ap_f_status" not in st.session_state:
+        st.session_state["_ap_f_status"] = "Todos"
+    if "_ap_f_from" not in st.session_state:
+        st.session_state["_ap_f_from"] = None
+    if "_ap_f_to" not in st.session_state:
+        st.session_state["_ap_f_to"] = None
 
     st.subheader("Agendamiento de citas")
+    st.markdown(
+        """
+        <style>
+        .ap-pill {
+            display: inline-block;
+            border-radius: 999px;
+            padding: 0.18rem 0.62rem;
+            font-size: 0.78rem;
+            font-weight: 600;
+            line-height: 1.1rem;
+            border: 1px solid transparent;
+        }
+        .pill-agendada { background: #e8f1ff; color: #16406f; border-color: #bdd2f4; }
+        .pill-reprogramada { background: #fff2df; color: #7a4a03; border-color: #f5d3a0; }
+        .pill-cancelada { background: #fdeaea; color: #7f1f1f; border-color: #efbcbc; }
+        .pill-finalizada { background: #e8f8ec; color: #1f6b31; border-color: #b8e2c2; }
+        .pill-default { background: #f2f3f5; color: #374151; border-color: #d1d5db; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     b1, b2 = st.columns([1, 1])
     with b1:
         if st.button("➕ Agendar cita", type="primary", use_container_width=True):
@@ -506,33 +747,115 @@ def render_citas_tab() -> None:
         st.error(st.session_state["_ap_err"])
 
     items = list(st.session_state.get("_ap_list") or [])
-    total = len(items)
+    svc_values = sorted(
+        {
+            str(i.get("service_type", i.get("service", "")) or "").strip()
+            for i in items
+            if str(i.get("service_type", i.get("service", "")) or "").strip()
+        }
+    )
+    status_values = ["Agendada", "Reprogramada", "Finalizada", "Cancelada"]
+    f1, f2, f3, f4, f5 = st.columns([1.3, 1.0, 1.0, 0.9, 0.9])
+    with f1:
+        st.text_input("Filtrar nombre", key="_ap_f_name", placeholder="Nombre cliente")
+    with f2:
+        st.selectbox("Servicio", options=["Todos", *svc_values], key="_ap_f_service")
+    with f3:
+        st.selectbox("Estado", options=["Todos", *status_values], key="_ap_f_status")
+    with f4:
+        st.date_input("Desde", key="_ap_f_from", value=st.session_state.get("_ap_f_from"))
+    with f5:
+        st.date_input("Hasta", key="_ap_f_to", value=st.session_state.get("_ap_f_to"))
+
+    filtered_items = _apply_appointment_filters(items)
+    total_trabajo = 0.0
+    total_abonado = 0.0
+    total_pendiente = 0.0
+    for row in filtered_items:
+        row_total = _to_float(row.get("total_amount"), 0.0)
+        row_abonado = _to_float(row.get("deposit"), 0.0)
+        row_pendiente = _to_float(row.get("pending_balance"), row_total - row_abonado)
+        total_trabajo += max(row_total, 0.0)
+        total_abonado += max(row_abonado, 0.0)
+        total_pendiente += max(row_pendiente, 0.0)
+
+    s1, s2, s3 = st.columns(3)
+    s1.metric("Total trabajo", _format_cop(total_trabajo))
+    s2.metric("Total abonado", _format_cop(total_abonado))
+    s3.metric("Total saldo pendiente", _format_cop(total_pendiente))
+
+    total = len(filtered_items)
     limit = int(st.session_state["_ap_limit"])
     page = int(st.session_state["_ap_page"])
+    total_pages = max(1, (total + limit - 1) // limit)
+    if page >= total_pages:
+        page = max(0, total_pages - 1)
+        st.session_state["_ap_page"] = page
     start = page * limit
-    rows = items[start : start + limit]
+    rows = filtered_items[start : start + limit]
 
-    h1, h2, h3, h4, h5 = st.columns([2.0, 1.3, 1.0, 1.0, 1.0])
+    h1, h2, h3, h4, h5, h6, h7, h8, h9, h10 = st.columns([1.7, 1.0, 0.9, 0.9, 0.9, 1.0, 0.9, 0.9, 0.9, 0.9])
     h1.markdown("**Nombre**")
     h2.markdown("**Servicio**")
     h3.markdown("**Fecha**")
-    h4.markdown("**Depósito**")
-    h5.markdown("**Contrato**")
+    h4.markdown("**Total**")
+    h5.markdown("**Abonado**")
+    h6.markdown("**Pendiente**")
+    h7.markdown("**Estado**")
+    h8.markdown("**Contrato**")
+    h9.markdown("**Mover**")
+    h10.markdown("**Acciones**")
     for r in rows:
-        c1, c2, c3, c4, c5 = st.columns([2.0, 1.3, 1.0, 1.0, 1.0])
+        c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 = st.columns([1.7, 1.0, 0.9, 0.9, 0.9, 1.0, 0.9, 0.9, 0.9, 0.9])
         c1.write(r.get("customer_name", r.get("name", "")))
         c2.write(r.get("service_type", r.get("service", "")))
         c3.write(str(r.get("appointment_date", r.get("date", ""))))
-        c4.write(_format_cop(r.get("deposit", 0)))
-        with c5:
+        total_amount = _to_float(r.get("total_amount"), 0.0)
+        deposit_amount = _to_float(r.get("deposit"), 0.0)
+        pending_balance = _to_float(r.get("pending_balance"), max(total_amount - deposit_amount, 0.0))
+        c4.write(_format_cop(total_amount))
+        c5.write(_format_cop(deposit_amount))
+        c6.write(_format_cop(pending_balance))
+        status = str(r.get("status") or "Agendada")
+        c7.markdown(_status_pill_html(status), unsafe_allow_html=True)
+        with c8:
             appt_id = int(r.get("id", 0) or 0)
             has_customer = r.get("customer_id") is not None
             st.link_button(
                 "Firmar",
                 url=f"?view=contract_sign&appointment_id={appt_id}",
-                disabled=(appt_id <= 0 or not has_customer),
+                disabled=(appt_id <= 0 or not has_customer or status in {"Cancelada", "Finalizada"}),
                 use_container_width=True,
             )
+        with c9:
+            appt_id = int(r.get("id", 0) or 0)
+            if st.button(
+                "Mover",
+                key=f"ap_reprog_{appt_id}",
+                use_container_width=True,
+                disabled=(appt_id <= 0 or status == "Cancelada"),
+            ):
+                st.session_state["_ap_reprogram_item"] = r
+                st.rerun()
+        with c10:
+            appt_id = int(r.get("id", 0) or 0)
+            if st.button(
+                "Montos",
+                key=f"ap_fin_{appt_id}",
+                use_container_width=True,
+                disabled=(appt_id <= 0 or status not in {"Agendada", "Reprogramada"}),
+            ):
+                st.session_state["_ap_fin_item"] = r
+                st.rerun()
+            appt_id = int(r.get("id", 0) or 0)
+            if st.button(
+                "Anular",
+                key=f"ap_cancel_{appt_id}",
+                use_container_width=True,
+                disabled=(appt_id <= 0 or status in {"Cancelada", "Finalizada"}),
+            ):
+                st.session_state["_ap_cancel_item"] = r
+                st.rerun()
 
     p1, p2, p3 = st.columns([1, 1, 2.5])
     with p1:
@@ -547,8 +870,13 @@ def render_citas_tab() -> None:
             st.rerun()
     with p3:
         st.write("")
-        total_pages = max(1, (total + limit - 1) // limit)
-        st.caption(f"Página {page + 1}/{total_pages} · Total: {total} cita(s)")
+        st.caption(f"Página {page + 1}/{total_pages} · Total filtrado: {total} cita(s)")
 
     if st.session_state.get("_ap_dlg") == "create":
         _dialog_agendar_cita()
+    if st.session_state.get("_ap_reprogram_item"):
+        _dialog_reprogramar_cita()
+    if st.session_state.get("_ap_fin_item"):
+        _dialog_ajustar_montos()
+    if st.session_state.get("_ap_cancel_item"):
+        _dialog_cancelar_cita()

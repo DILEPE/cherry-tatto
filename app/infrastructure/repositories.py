@@ -41,20 +41,43 @@ class AppointmentRepository:
             raise ConnectionError("No se pudo establecer conexión con MySQL.")
         try:
             cursor = self._get_cursor(conn)
-            query = """INSERT INTO appointments
-                       (customer_id, customer_name, phone, service_type, detail, appointment_date, deposit)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s)"""
             service_type = resolve_service_type(data.service)
-            values = (
-                customer_id,
-                data.name,
-                data.phone,
-                service_type,
-                data.detail or "",
-                data.date,
-                data.deposit or 0,
-            )
-            cursor.execute(query, values)
+            try:
+                query = """INSERT INTO appointments
+                           (customer_id, customer_name, phone, service_type, detail, appointment_date, deposit, total_amount, pending_balance, customer_credit, status)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+                values = (
+                    customer_id,
+                    data.name,
+                    data.phone,
+                    service_type,
+                    data.detail or "",
+                    data.date,
+                    data.deposit or 0,
+                    data.total_amount or 0,
+                    data.pending_balance or 0,
+                    0,
+                    "Agendada",
+                )
+                cursor.execute(query, values)
+            except Exception as e:
+                # Compatibilidad temporal mientras se ejecuta la migración financiera.
+                if "Unknown column 'total_amount'" not in str(e):
+                    raise
+                query_legacy = """INSERT INTO appointments
+                                  (customer_id, customer_name, phone, service_type, detail, appointment_date, deposit, status)
+                                  VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
+                values_legacy = (
+                    customer_id,
+                    data.name,
+                    data.phone,
+                    service_type,
+                    data.detail or "",
+                    data.date,
+                    data.deposit or 0,
+                    "Agendada",
+                )
+                cursor.execute(query_legacy, values_legacy)
             new_id = cursor.lastrowid
             if own:
                 conn.commit()
@@ -77,7 +100,11 @@ class AppointmentRepository:
                     name=res['customer_name'],
                     phone=res['phone'],
                     service=res['service_type'],
-                    date=str(res['appointment_date'])
+                    date=str(res['appointment_date']),
+                    status=res.get('status'),
+                    deposit=float(res.get('deposit') or 0),
+                    total_amount=float(res.get('total_amount') or 0),
+                    pending_balance=float(res.get('pending_balance') or 0),
                 )
             return None
         finally:
@@ -175,7 +202,7 @@ class AppointmentRepository:
                 conn.close()
 
     def update_status(self, appointment_id: int, status: str):
-        """Actualiza el estado de la cita (ej: a 'Completado')."""
+        """Actualiza el estado de la cita."""
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn)
@@ -183,6 +210,63 @@ class AppointmentRepository:
             conn.commit()
         finally:
             if conn: conn.close()
+
+    def update_financials(self, appointment_id: int, total_amount: float, deposit: float, pending_balance: float) -> None:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                """
+                UPDATE appointments
+                SET total_amount = %s,
+                    deposit = %s,
+                    pending_balance = %s
+                WHERE id = %s
+                """,
+                (total_amount, deposit, pending_balance, appointment_id),
+            )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
+    def cancel_appointment_with_credit(self, appointment_id: int) -> None:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                """
+                UPDATE appointments
+                SET status = 'Cancelada',
+                    customer_credit = COALESCE(deposit, 0),
+                    pending_balance = 0
+                WHERE id = %s
+                """,
+                (appointment_id,),
+            )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
+    def reprogram_appointment(self, appointment_id: int, new_date: str, detail: Optional[str] = None) -> None:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                """
+                UPDATE appointments
+                SET appointment_date = %s,
+                    detail = %s,
+                    status = %s
+                WHERE id = %s
+                """,
+                (new_date, detail or "", "Reprogramada", appointment_id),
+            )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
 
     # --- Encuestas ---
 

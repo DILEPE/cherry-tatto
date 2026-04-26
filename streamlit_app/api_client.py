@@ -43,6 +43,39 @@ def post_appointment(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
     return _request("POST", "/api/appointments", json_body=payload)
 
 
+def patch_appointment_status(appointment_id: int, status: str) -> Tuple[bool, int, Any]:
+    return _request("PATCH", f"/api/appointments/{appointment_id}/status", json_body={"status": status})
+
+
+def patch_appointment_reschedule(
+    appointment_id: int,
+    date_value: str,
+    detail: Optional[str] = None,
+) -> Tuple[bool, int, Any]:
+    return _request(
+        "PATCH",
+        f"/api/appointments/{appointment_id}/reschedule",
+        json_body={"date": date_value, "detail": detail},
+    )
+
+
+def patch_appointment_financials(
+    appointment_id: int,
+    total_amount: float,
+    deposit: float,
+    pending_balance: float,
+) -> Tuple[bool, int, Any]:
+    return _request(
+        "PATCH",
+        f"/api/appointments/{appointment_id}/financials",
+        json_body={
+            "total_amount": float(total_amount),
+            "deposit": float(deposit),
+            "pending_balance": float(pending_balance),
+        },
+    )
+
+
 def post_contract(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
     return _request("POST", "/api/contracts", json_body=payload)
 

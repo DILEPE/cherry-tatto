@@ -9,7 +9,7 @@ alwaysApply: true
 
 1. Actualizar y partir desde **`develop`**: `git fetch`, `git checkout develop`, `git pull` (ajustar si el remoto no es `origin`).
 2. Crear una rama **`feature/<descripcion-corta>`** (kebab-case o snake_case, coherente con el repo) y trabajar **solo** en esa rama.
-3. Agrupar los cambios del bloque en **commit(s)** con mensajes claros en español o inglés, según convención del repo.
+3. Agrupar los cambios del bloque en **commit(s)** con mensajes claros **siempre en español**.
 
 ## Antes de subir
 
@@ -27,3 +27,4 @@ alwaysApply: true
 
 - **No** commitear ni pushear directamente sobre **`develop`** para trabajo de feature (salvo que el usuario pida explícitamente otra cosa).
 - **No** asumir que el push o el PR ya están hechos: siempre confirmar con el usuario antes del push.
+- **No** usar mensajes de commit en inglés: todos los commits deben escribirse en español.

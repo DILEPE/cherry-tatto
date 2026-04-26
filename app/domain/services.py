@@ -77,7 +77,7 @@ class BusinessLogicService:
             raise ValueError(f"Cita con ID {data.appointment_id} no encontrada.")
 
         self.repository.create_contract(data)
-        self.repository.update_status(data.appointment_id, "Completado")
+        self.repository.update_status(data.appointment_id, "Finalizada")
 
         notification_payload: dict[str, object] = {
             "appointment_id": data.appointment_id,
@@ -160,6 +160,54 @@ class BusinessLogicService:
             return [AppointmentListItem.model_validate(r) for r in rows]
 
         return await asyncio.to_thread(_run)
+
+    async def update_appointment_status(self, appointment_id: int, status: str) -> None:
+        appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
+        if appointment is None:
+            raise ValueError("Cita no encontrada")
+        if status == "Cancelada":
+            await asyncio.to_thread(self.repository.cancel_appointment_with_credit, appointment_id)
+            return
+        await asyncio.to_thread(self.repository.update_status, appointment_id, status)
+
+    async def reprogram_appointment(
+        self,
+        appointment_id: int,
+        new_date: str,
+        detail: Optional[str] = None,
+    ) -> None:
+        appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
+        if appointment is None:
+            raise ValueError("Cita no encontrada")
+        await asyncio.to_thread(self.repository.reprogram_appointment, appointment_id, new_date, detail)
+
+    async def update_appointment_financials(
+        self,
+        appointment_id: int,
+        total_amount: float,
+        deposit: float,
+        pending_balance: float,
+    ) -> None:
+        appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
+        if appointment is None:
+            raise ValueError("Cita no encontrada")
+        status = str(getattr(appointment, "status", "") or "")
+        if status not in {"Agendada", "Reprogramada"}:
+            raise ValueError("Solo puedes editar montos en citas Agendadas o Reprogramadas")
+        if total_amount < 0 or deposit < 0 or pending_balance < 0:
+            raise ValueError("Los valores no pueden ser negativos")
+        expected = round(float(total_amount) - float(deposit), 2)
+        if expected < 0:
+            raise ValueError("El abono no puede ser mayor al valor total")
+        if round(float(pending_balance), 2) != expected:
+            raise ValueError("El saldo pendiente debe ser igual a total - abonado")
+        await asyncio.to_thread(
+            self.repository.update_financials,
+            appointment_id,
+            float(total_amount),
+            float(deposit),
+            float(pending_balance),
+        )
 
     async def list_surveys(self) -> list[SurveyRow]:
 
