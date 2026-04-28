@@ -43,8 +43,15 @@ def post_appointment(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
     return _request("POST", "/api/appointments", json_body=payload)
 
 
-def patch_appointment_status(appointment_id: int, status: str) -> Tuple[bool, int, Any]:
-    return _request("PATCH", f"/api/appointments/{appointment_id}/status", json_body={"status": status})
+def patch_appointment_status(
+    appointment_id: int,
+    status: str,
+    on_cancel_abono: Optional[str] = None,
+) -> Tuple[bool, int, Any]:
+    body: Dict[str, Any] = {"status": status}
+    if status == "Cancelada" and on_cancel_abono is not None:
+        body["on_cancel_abono"] = on_cancel_abono
+    return _request("PATCH", f"/api/appointments/{appointment_id}/status", json_body=body)
 
 
 def patch_appointment_reschedule(

@@ -171,12 +171,20 @@ class BusinessLogicService:
 
         return await asyncio.to_thread(_run)
 
-    async def update_appointment_status(self, appointment_id: int, status: str) -> None:
+    async def update_appointment_status(
+        self,
+        appointment_id: int,
+        status: str,
+        on_cancel_abono: Optional[str] = None,
+    ) -> None:
         appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
         if appointment is None:
             raise ValueError("Cita no encontrada")
         if status == "Cancelada":
-            await asyncio.to_thread(self.repository.cancel_appointment_with_credit, appointment_id)
+            mode = on_cancel_abono or "credito_cliente"
+            if mode not in {"credito_cliente", "devolucion"}:
+                raise ValueError("Modo de anulación de abono inválido")
+            await asyncio.to_thread(self.repository.cancel_appointment, appointment_id, mode)
             return
         await asyncio.to_thread(self.repository.update_status, appointment_id, status)
 

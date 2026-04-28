@@ -43,13 +43,25 @@ def _financial_row_values(row: dict[str, Any]) -> tuple[float, float, float]:
     """
     Normaliza montos para UI y resumen:
     - total nunca menor que abonado (fallback datos legacy)
-    - pendiente se calcula siempre desde total - abonado
+    - pendiente: si viene `pending_balance` de la API/MySQL es la fuente de verdad
+      (ej. tras anular con saldo ya puesto en 0 y crédito en otra columna);
+      si no, pendiente = max(total − abonado − saldo a favor, 0) para no ignorar créditos.
     """
     abonado = max(_to_float(row.get("deposit"), 0.0), 0.0)
     total_raw = max(_to_float(row.get("total_amount"), 0.0), 0.0)
     total = max(total_raw, abonado)
-    pendiente = max(round(total - abonado, 2), 0.0)
+    cred = max(_to_float(row.get("customer_credit"), 0.0), 0.0)
+    raw_pb = row.get("pending_balance")
+    if raw_pb is not None and raw_pb != "":
+        pendiente = max(round(_to_float(raw_pb, 0.0), 2), 0.0)
+    else:
+        pendiente = max(round(total - abonado - cred, 2), 0.0)
     return total, abonado, pendiente
+
+
+def _customer_credit_value(row: dict[str, Any]) -> float:
+    """Saldo a favor del cliente asociado a esta cita (p. ej. traslado de abono al anular)."""
+    return max(_to_float(row.get("customer_credit"), 0.0), 0.0)
 
 
 def _parse_date(val: Any) -> date:
@@ -522,6 +534,82 @@ def _status_pill_html(status: str) -> str:
     return f'<span class="ap-pill {cls}">{status or "Agendada"}</span>'
 
 
+def _render_cita_row_actions(r: Dict[str, Any]) -> None:
+    """
+    Agrupa Contrato + Mover junto al resto en un solo menú de acciones por fila
+    (sustituye columnas dedicadas Contrato / Mover).
+    """
+    appt_id = int(r.get("id", 0) or 0)
+    status = str(r.get("status") or "Agendada")
+    has_customer = r.get("customer_id") is not None
+    firmar_disabled = appt_id <= 0 or not has_customer or status in {"Cancelada", "Finalizada"}
+    repro_disabled = appt_id <= 0 or status == "Cancelada"
+    montos_disabled = appt_id <= 0 or status not in {"Agendada", "Reprogramada"}
+    anular_disabled = appt_id <= 0 or status in {"Cancelada", "Finalizada"}
+
+    pop = getattr(st, "popover", None)
+    if pop:
+        with pop("Acciones", use_container_width=True):
+            if appt_id > 0:
+                st.caption(f"Cita #{appt_id}")
+            st.link_button(
+                "Firmar contrato",
+                url=f"?view=contract_sign&appointment_id={appt_id}",
+                disabled=firmar_disabled,
+                use_container_width=True,
+                key=f"pop_firmar_{appt_id}",
+            )
+            if st.button(
+                "Reprogramar cita",
+                disabled=repro_disabled,
+                use_container_width=True,
+                key=f"pop_repr_{appt_id}",
+                help="Antes columna «Mover»: cambiar fecha/detalle manteniendo el estado hábil.",
+            ):
+                st.session_state["_ap_reprogram_item"] = r
+                st.rerun()
+            if st.button(
+                "Montos",
+                disabled=montos_disabled,
+                use_container_width=True,
+                key=f"pop_fin_{appt_id}",
+            ):
+                st.session_state["_ap_fin_item"] = r
+                st.rerun()
+            if st.button(
+                "Anular",
+                disabled=anular_disabled,
+                use_container_width=True,
+                key=f"pop_can_{appt_id}",
+            ):
+                st.session_state["_ap_cancel_item"] = r
+                st.rerun()
+        return
+
+    ln1, ln2 = st.columns(2)
+    with ln1:
+        st.link_button(
+            "Firmar",
+            url=f"?view=contract_sign&appointment_id={appt_id}",
+            disabled=firmar_disabled,
+            use_container_width=True,
+            key=f"fb_compact_{appt_id}",
+        )
+    with ln2:
+        if st.button("Mover", disabled=repro_disabled, use_container_width=True, key=f"fb_repr_{appt_id}"):
+            st.session_state["_ap_reprogram_item"] = r
+            st.rerun()
+    bn1, bn2 = st.columns(2)
+    with bn1:
+        if st.button("Montos", disabled=montos_disabled, use_container_width=True, key=f"fb_fin_{appt_id}"):
+            st.session_state["_ap_fin_item"] = r
+            st.rerun()
+    with bn2:
+        if st.button("Anular", disabled=anular_disabled, use_container_width=True, key=f"fb_can_{appt_id}"):
+            st.session_state["_ap_cancel_item"] = r
+            st.rerun()
+
+
 def _apply_appointment_filters(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     text = str(st.session_state.get("_ap_f_name") or "").strip().lower()
     svc = str(st.session_state.get("_ap_f_service") or "Todos")
@@ -548,6 +636,12 @@ def _apply_appointment_filters(items: list[dict[str, Any]]) -> list[dict[str, An
     return filtered
 
 
+def _cleanup_reprogram_dialog_state() -> None:
+    keys = ("_ap_reprogram_seed_appt_id", "ap_reprogram_date", "ap_reprogram_detail")
+    for k in keys:
+        st.session_state.pop(k, None)
+
+
 @st.dialog("Reprogramar cita", width="medium", dismissible=False)
 def _dialog_reprogramar_cita() -> None:
     appt = st.session_state.get("_ap_reprogram_item") or {}
@@ -556,24 +650,32 @@ def _dialog_reprogramar_cita() -> None:
         st.error("No se encontró la cita a reprogramar.")
         if st.button("Cerrar", use_container_width=True):
             st.session_state.pop("_ap_reprogram_item", None)
+            _cleanup_reprogram_dialog_state()
             st.rerun()
         return
+    seed_key = "_ap_reprogram_seed_appt_id"
     current_date = _parse_date(appt.get("appointment_date", appt.get("date")))
+    detail_default = str(appt.get("detail") or "")
     min_date_appt, max_date_appt = _date_range_100y_window()
+    # Una sola fuente de verdad: session_state por key — evita value+key (provoca glitch del popover Calendar)
+    if st.session_state.get(seed_key) != appt_id:
+        st.session_state[seed_key] = appt_id
+        st.session_state["ap_reprogram_date"] = current_date
+        st.session_state["ap_reprogram_detail"] = detail_default
+
     st.caption(f"Cita #{appt_id} · {appt.get('customer_name', appt.get('name', ''))}")
+    # Detalle primero para no autofocos en el calendar al abrir el diálogo
+    new_detail = st.text_area(
+        "Detalle actualizado (opcional)",
+        height=90,
+        key="ap_reprogram_detail",
+    )
     new_date = st.date_input(
         "Nueva fecha de cita",
-        value=current_date,
         min_value=min_date_appt,
         max_value=max_date_appt,
         key="ap_reprogram_date",
         format="DD/MM/YYYY",
-    )
-    new_detail = st.text_area(
-        "Detalle actualizado (opcional)",
-        value=str(appt.get("detail") or ""),
-        key="ap_reprogram_detail",
-        height=90,
     )
     c1, c2 = st.columns(2)
     with c1:
@@ -592,18 +694,23 @@ def _dialog_reprogramar_cita() -> None:
                 st.success("Cita reprogramada correctamente.")
                 st.session_state["_ap_reload"] = True
                 st.session_state.pop("_ap_reprogram_item", None)
+                _cleanup_reprogram_dialog_state()
                 st.rerun()
             else:
                 st.error(f"Error HTTP {code}: {_api_error(data)}")
     with c2:
         if st.button("Cancelar", use_container_width=True, key="ap_reprogram_close_btn"):
             st.session_state.pop("_ap_reprogram_item", None)
-            st.session_state.pop("ap_reprogram_date", None)
-            st.session_state.pop("ap_reprogram_detail", None)
+            _cleanup_reprogram_dialog_state()
             st.rerun()
 
 
-@st.dialog("Confirmar anulación", width="small", dismissible=False)
+def _label_cancel_abono(v: str) -> str:
+    if v == "credito_cliente":
+        return "Saldo a favor del cliente — el abono pasa a crédito interno y deja de contar como cobrado sobre la cita"
+    return "Devolución — el abono deja la cita como no cobrado (sin saldo a favor aquí)"
+
+@st.dialog("Confirmar anulación", width="medium", dismissible=False)
 def _dialog_cancelar_cita() -> None:
     appt = st.session_state.get("_ap_cancel_item") or {}
     appt_id = int(appt.get("id", 0) or 0)
@@ -619,15 +726,30 @@ def _dialog_cancelar_cita() -> None:
         f"{appt.get('customer_name', appt.get('name', 'cliente'))}. Esta acción cambia el estado a Cancelada."
     )
     if deposit > 0:
-        warning += (
-            f" Tiene saldo abonado por {_format_cop(deposit)}; "
-            "si confirmas, ese valor quedará como saldo a favor del cliente."
-        )
+        warning += f" Hay {_format_cop(deposit)} abonados en esta fila."
+    else:
+        warning += " No hay abonos registrados en esta cita."
     st.warning(warning)
+
+    cancel_abono: str
+    if deposit > 0:
+        st.markdown("Si hubo abono, cómo debe reflejarse para **resumen y totales**:", unsafe_allow_html=True)
+        cancel_abono = st.radio(
+            "Tratamiento del abono",
+            ("credito_cliente", "devolucion"),
+            format_func=_label_cancel_abono,
+            horizontal=False,
+            key=f"dlg_cancel_abono_radio_{appt_id}",
+            label_visibility="visible",
+        )
+    else:
+        cancel_abono = "devolucion"
+        st.caption("Sin abono; la anulación solo cierra la cita en el sistema.")
+
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Sí, anular", type="primary", use_container_width=True, key="ap_cancel_confirm_btn"):
-            ok, code, data = api_client.patch_appointment_status(appt_id, "Cancelada")
+            ok, code, data = api_client.patch_appointment_status(appt_id, "Cancelada", cancel_abono)
             if ok:
                 st.session_state["_ap_reload"] = True
                 st.session_state.pop("_ap_cancel_item", None)
@@ -781,6 +903,8 @@ def render_citas_tab() -> None:
             border: 1px solid #e5e7eb;
             border-radius: 8px;
             padding: 0.18rem 0.45rem;
+            white-space: nowrap;
+            line-height: 1.35;
         }
         </style>
         """,
@@ -818,24 +942,34 @@ def render_citas_tab() -> None:
     with f3:
         st.selectbox("Estado", options=["Todos", *status_values], key="_ap_f_status")
     with f4:
-        st.date_input("Desde", key="_ap_f_from", value=st.session_state.get("_ap_f_from"))
+        # Solo `key`; no mezclar value=session_state[misma_clave]: evita comportamiento raro del calendario
+        st.date_input("Desde", key="_ap_f_from")
     with f5:
-        st.date_input("Hasta", key="_ap_f_to", value=st.session_state.get("_ap_f_to"))
+        st.date_input("Hasta", key="_ap_f_to")
 
     filtered_items = _apply_appointment_filters(items)
     total_trabajo = 0.0
     total_abonado = 0.0
     total_pendiente = 0.0
+    total_credito_favor = 0.0
     for row in filtered_items:
         row_total, row_abonado, row_pendiente = _financial_row_values(row)
         total_trabajo += row_total
         total_abonado += row_abonado
         total_pendiente += row_pendiente
+        total_credito_favor += _customer_credit_value(row)
 
-    s1, s2, s3 = st.columns(3)
-    s1.metric("Total trabajo", _format_cop(total_trabajo))
-    s2.metric("Total abonado", _format_cop(total_abonado))
-    s3.metric("Total saldo pendiente", _format_cop(total_pendiente))
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total trabajo", _format_cop(total_trabajo))
+    m2.metric("Total abonado", _format_cop(total_abonado))
+    m3.metric("Total saldo pendiente", _format_cop(total_pendiente))
+    m4.metric("Saldo a favor (filtro)", _format_cop(total_credito_favor))
+
+    st.caption(
+        "**Saldo pendiente** (filas y totales): si la API trae **pendiente** calculado guardado "
+        "(p. ej. tras anular), ese valor cuenta; si no, se usa **total − abonado − a favor**. "
+        "Así el resumen sí resta el saldo a favor del cliente cuando toca calcular desde cero."
+    )
 
     total = len(filtered_items)
     limit = int(st.session_state["_ap_limit"])
@@ -847,66 +981,36 @@ def render_citas_tab() -> None:
     start = page * limit
     rows = filtered_items[start : start + limit]
 
-    h1, h2, h3, h4, h5, h6, h7, h8, h9, h10 = st.columns([1.7, 1.0, 0.9, 0.9, 0.9, 1.0, 0.9, 0.9, 0.9, 0.9])
+    st.caption(
+        "**Contrato** (firma) y **Reprogramar cita** (antes columna «Mover») quedaron unificados en **Acciones**."
+    )
+    # Índices: Nombre … Abonado(4) Pendiente(5): un poco más ancha para «Pendiente» en una línea
+    colw = [1.48, 0.92, 0.82, 0.78, 0.78, 0.92, 0.85, 0.76, 1.52]
+    h1, h2, h3, h4, h5, h6, h7, h8, h9 = st.columns(colw)
     h1.markdown('<span class="ap-col-title">Nombre</span>', unsafe_allow_html=True)
     h2.markdown('<span class="ap-col-title">Servicio</span>', unsafe_allow_html=True)
     h3.markdown('<span class="ap-col-title">Fecha</span>', unsafe_allow_html=True)
     h4.markdown('<span class="ap-col-title">Total</span>', unsafe_allow_html=True)
     h5.markdown('<span class="ap-col-title">Abonado</span>', unsafe_allow_html=True)
     h6.markdown('<span class="ap-col-title">Pendiente</span>', unsafe_allow_html=True)
-    h7.markdown('<span class="ap-col-title">Estado</span>', unsafe_allow_html=True)
-    h8.markdown('<span class="ap-col-title">Contrato</span>', unsafe_allow_html=True)
-    h9.markdown('<span class="ap-col-title">Mover</span>', unsafe_allow_html=True)
-    h10.markdown('<span class="ap-col-title">Acciones</span>', unsafe_allow_html=True)
+    h7.markdown('<span class="ap-col-title">A favor</span>', unsafe_allow_html=True)
+    h8.markdown('<span class="ap-col-title">Estado</span>', unsafe_allow_html=True)
+    h9.markdown('<span class="ap-col-title">Acciones</span>', unsafe_allow_html=True)
     for r in rows:
-        c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 = st.columns([1.7, 1.0, 0.9, 0.9, 0.9, 1.0, 0.9, 0.9, 0.9, 0.9])
+        c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns(colw)
         c1.write(r.get("customer_name", r.get("name", "")))
         c2.write(r.get("service_type", r.get("service", "")))
         c3.write(str(r.get("appointment_date", r.get("date", ""))))
         total_amount, deposit_amount, pending_balance = _financial_row_values(r)
+        credito = _customer_credit_value(r)
         c4.write(_format_cop(total_amount))
         c5.write(_format_cop(deposit_amount))
         c6.write(_format_cop(pending_balance))
+        c7.write("—" if credito <= 0 else _format_cop(credito))
         status = str(r.get("status") or "Agendada")
-        c7.markdown(_status_pill_html(status), unsafe_allow_html=True)
-        with c8:
-            appt_id = int(r.get("id", 0) or 0)
-            has_customer = r.get("customer_id") is not None
-            st.link_button(
-                "Firmar",
-                url=f"?view=contract_sign&appointment_id={appt_id}",
-                disabled=(appt_id <= 0 or not has_customer or status in {"Cancelada", "Finalizada"}),
-                use_container_width=True,
-            )
+        c8.markdown(_status_pill_html(status), unsafe_allow_html=True)
         with c9:
-            appt_id = int(r.get("id", 0) or 0)
-            if st.button(
-                "Mover",
-                key=f"ap_reprog_{appt_id}",
-                use_container_width=True,
-                disabled=(appt_id <= 0 or status == "Cancelada"),
-            ):
-                st.session_state["_ap_reprogram_item"] = r
-                st.rerun()
-        with c10:
-            appt_id = int(r.get("id", 0) or 0)
-            if st.button(
-                "Montos",
-                key=f"ap_fin_{appt_id}",
-                use_container_width=True,
-                disabled=(appt_id <= 0 or status not in {"Agendada", "Reprogramada"}),
-            ):
-                st.session_state["_ap_fin_item"] = r
-                st.rerun()
-            appt_id = int(r.get("id", 0) or 0)
-            if st.button(
-                "Anular",
-                key=f"ap_cancel_{appt_id}",
-                use_container_width=True,
-                disabled=(appt_id <= 0 or status in {"Cancelada", "Finalizada"}),
-            ):
-                st.session_state["_ap_cancel_item"] = r
-                st.rerun()
+            _render_cita_row_actions(r)
 
     p1, p2, p3 = st.columns([1, 1, 2.5])
     with p1:

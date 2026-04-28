@@ -55,7 +55,11 @@ class AppointmentController(Controller):
         state: State,
     ) -> MessageResponse:
         try:
-            await state.service.update_appointment_status(appointment_id, data.status)
+            await state.service.update_appointment_status(
+                appointment_id,
+                data.status,
+                data.on_cancel_abono if data.status == "Cancelada" else None,
+            )
             return MessageResponse(status="success", message=f"Estado actualizado a {data.status}")
         except ValueError as e:
             raise HTTPException(detail=str(e), status_code=404) from e
