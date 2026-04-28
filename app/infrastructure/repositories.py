@@ -273,20 +273,42 @@ class AppointmentRepository:
             if conn:
                 conn.close()
 
-    def cancel_appointment_with_credit(self, appointment_id: int) -> None:
+    def cancel_appointment(self, appointment_id: int, on_cancel_abono: str) -> None:
+        """
+        on_cancel_abono:
+        - credito_cliente: traslada el deposit a customer_credit y pone deposit en 0
+          para no duplicar en resúmenes (abono deja de figurar como cobrado sobre la cita).
+        - devolucion: abono tratado como devuelto; sin crédito y sin deposit en esta cita.
+        """
+        if on_cancel_abono not in {"credito_cliente", "devolucion"}:
+            raise ValueError("on_cancel_abono inválido")
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn)
-            cursor.execute(
-                """
-                UPDATE appointments
-                SET status = 'Cancelada',
-                    customer_credit = COALESCE(deposit, 0),
-                    pending_balance = 0
-                WHERE id = %s
-                """,
-                (appointment_id,),
-            )
+            if on_cancel_abono == "credito_cliente":
+                cursor.execute(
+                    """
+                    UPDATE appointments
+                    SET status = 'Cancelada',
+                        pending_balance = 0,
+                        customer_credit = COALESCE(deposit, 0),
+                        deposit = 0
+                    WHERE id = %s
+                    """,
+                    (appointment_id,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE appointments
+                    SET status = 'Cancelada',
+                        pending_balance = 0,
+                        customer_credit = 0,
+                        deposit = 0
+                    WHERE id = %s
+                    """,
+                    (appointment_id,),
+                )
             conn.commit()
         finally:
             if conn:

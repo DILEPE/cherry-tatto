@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.domain.models import AppointmentCreate
 from app.schemas.customer import CustomerCreate
@@ -75,9 +75,15 @@ class AppointmentListItem(BaseModel):
 
 
 class AppointmentStatusUpdateRequest(BaseModel):
+    """Si `status` es Cancelada, `on_cancel_abono` decide qué hacer con el abono de la fila."""
+
     model_config = ConfigDict(str_strip_whitespace=True)
 
     status: str = Field(..., min_length=1, max_length=30)
+    on_cancel_abono: Optional[Literal["credito_cliente", "devolucion"]] = Field(
+        default=None,
+        description="Cancelada: registrar abono como crédito interno para el cliente, o darlo por devuelto (sin crédito).",
+    )
 
     @field_validator("status")
     @classmethod
@@ -86,6 +92,13 @@ class AppointmentStatusUpdateRequest(BaseModel):
         if v not in valid:
             raise ValueError("status inválido")
         return v
+
+    @model_validator(mode="after")
+    def default_cancel_abono(self):
+        """Compatibilidad: si no llega modo y se cancela, se usa crédito al cliente como antes."""
+        if self.status == "Cancelada" and self.on_cancel_abono is None:
+            object.__setattr__(self, "on_cancel_abono", "credito_cliente")
+        return self
 
 
 class AppointmentRescheduleRequest(BaseModel):
