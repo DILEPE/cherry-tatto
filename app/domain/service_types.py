@@ -1,3 +1,4 @@
+
 """
 Valores válidos para la columna ENUM `service_type` en MySQL.
 
@@ -51,7 +52,20 @@ def resolve_service_type(user_text: str) -> str:
         if found:
             return found
 
-    if any(k in t for k in ("otro", "other", "consulta", "sesión", "sesion")):
+    if any(
+        k in t
+        for k in (
+            "otro",
+            "other",
+            "consulta",
+            "sesión",
+            "sesion",
+            "limpieza",
+            "mantenimiento",
+            "curación",
+            "curacion",
+        )
+    ):
         found = pick(lambda L: "otr" in L.lower() or "other" in L.lower() or "consult" in L.lower())
         if found:
             return found

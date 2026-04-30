@@ -44,8 +44,8 @@ class AppointmentRepository:
             service_type = resolve_service_type(data.service)
             try:
                 query = """INSERT INTO appointments
-                           (customer_id, customer_name, phone, service_type, detail, appointment_date, deposit, total_amount, pending_balance, customer_credit, status)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+                           (customer_id, customer_name, phone, service_type, detail, appointment_date, deposit, total_amount, pending_balance, customer_credit, is_priority, status)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
                 values = (
                     customer_id,
                     data.name,
@@ -57,6 +57,7 @@ class AppointmentRepository:
                     data.total_amount or 0,
                     data.pending_balance or 0,
                     0,
+                    1 if getattr(data, "is_priority", False) else 0,
                     "Agendada",
                 )
                 cursor.execute(query, values)

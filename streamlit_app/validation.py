@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from pydantic import EmailStr, TypeAdapter
+
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DATETIME_FULL = re.compile(
+    r"^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$"
+)
 _PHONE_RE = re.compile(r"^[\d\s+\-().]{7,20}$")
 _VERSION_RE = re.compile(r"^\d+\.\d+(\.\d+)?$")
 
@@ -25,6 +30,7 @@ def _err(errors: List[FieldError], field: str, message: str) -> None:
 def validate_appointment(
     name: str,
     phone: str,
+    email: str,
     service: str,
     date_str: str,
     detail: str,
@@ -33,6 +39,7 @@ def validate_appointment(
     errors: List[FieldError] = []
     name = (name or "").strip()
     phone = (phone or "").strip()
+    email = (email or "").strip()
     service = (service or "").strip()
     date_str = (date_str or "").strip()
 
@@ -40,17 +47,27 @@ def validate_appointment(
         _err(errors, "name", "El nombre debe tener al menos 2 caracteres.")
     if not _PHONE_RE.match(phone):
         _err(errors, "phone", "Introduce un teléfono válido (7–20 dígitos o símbolos + - espacio).")
+    if not email:
+        _err(errors, "email", "El correo electrónico es obligatorio.")
+    else:
+        try:
+            TypeAdapter(EmailStr).validate_python(email)
+        except Exception:
+            _err(errors, "email", "Introduce un correo electrónico válido.")
     if not service:
         _err(errors, "service", "Indica el tipo de servicio.")
     elif len(service) < 2:
         _err(errors, "service", "Describe el servicio (mínimo 2 caracteres).")
-    if not _DATE_RE.match(date_str):
-        _err(errors, "date", "La fecha debe tener formato AAAA-MM-DD.")
+    date_str_clean = date_str.strip()
+    if not _DATETIME_FULL.match(date_str_clean.replace("T", " ")):
+        _err(errors, "date", "La fecha/hora debe ser AAAA-MM-DD o AAAA-MM-DD HH:MM.")
     else:
         try:
-            datetime.strptime(date_str, "%Y-%m-%d")
-        except ValueError:
-            _err(errors, "date", "La fecha no es válida en el calendario.")
+            from app.schemas.appointment import normalize_appointment_datetime_string
+
+            normalize_appointment_datetime_string(date_str_clean)
+        except ValueError as e:
+            _err(errors, "date", str(e))
     if deposit < 0:
         _err(errors, "deposit", "El depósito no puede ser negativo.")
 
