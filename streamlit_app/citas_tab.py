@@ -1038,7 +1038,7 @@ def _render_main_calendar(
                             "Ver citas del día",
                             key=f"cal_day_list_{y}_{m}_{d}",
                             use_container_width=True,
-                            help="Listado del día: todas las citas y reprogramar / montos / anular",
+                            help="Ver citas del día: firmar contrato, reprogramar, montos o anular",
                         ):
                             st.session_state["_cal_overflow_day"] = (y, m, d)
                             st.rerun()
@@ -1077,17 +1077,27 @@ def _dialog_calendar_day_appointments(
         return
     st.markdown(f"**{day_date.strftime('%d/%m/%Y')}** · **{len(day_rows)}** cita(s)")
     st.caption(
-        "Mismas etiquetas de cliente que en el calendario. "
+        "Mismas etiquetas de cliente que en el calendario. **Firmar contrato** abre la vista de firma; "
         "Reprogramar o Montos cierran este panel y abren el formulario correspondiente."
     )
     for idx, r in enumerate(day_rows):
         st.markdown(_calendar_overflow_row_html(r, hist_counts), unsafe_allow_html=True)
         appt_id = int(r.get("id", 0) or 0)
         status = str(r.get("status") or "Agendada")
+        has_customer = r.get("customer_id") is not None
+        firmar_disabled = appt_id <= 0 or not has_customer or status in {"Cancelada", "Finalizada"}
         repro_disabled = appt_id <= 0 or status == "Cancelada"
         montos_disabled = appt_id <= 0 or status not in {"Agendada", "Reprogramada"}
         anular_disabled = appt_id <= 0 or status in {"Cancelada", "Finalizada"}
-        b1, b2, b3 = st.columns(3)
+        b0, b1, b2, b3 = st.columns(4)
+        with b0:
+            st.link_button(
+                "Firmar contrato",
+                url=f"?view=contract_sign&appointment_id={appt_id}",
+                disabled=firmar_disabled,
+                use_container_width=True,
+                key=f"cal_dlg_firmar_{appt_id}_{y}_{m}_{d}_{idx}",
+            )
         with b1:
             if st.button(
                 "Reprogramar",
@@ -1148,10 +1158,10 @@ def _status_pill_html(status: str) -> str:
     return f'<span class="ap-pill {cls}">{status or "Agendada"}</span>'
 
 
-def _render_cita_row_actions(r: Dict[str, Any]) -> None:
+def _render_cita_row_actions(r: Dict[str, Any], *, show_firma: bool = True) -> None:
     """
-    Agrupa Contrato + Mover junto al resto en un solo menú de acciones por fila
-    (sustituye columnas dedicadas Contrato / Mover).
+    Menú de acciones por fila. `show_firma=False` omite el enlace de firma (p. ej. en pestaña Reporte;
+    la firma va en el diálogo «Citas del día» del calendario).
     """
     appt_id = int(r.get("id", 0) or 0)
     status = str(r.get("status") or "Agendada")
@@ -1166,13 +1176,14 @@ def _render_cita_row_actions(r: Dict[str, Any]) -> None:
         with pop("Acciones", use_container_width=True):
             if appt_id > 0:
                 st.caption(f"Cita #{appt_id}")
-            st.link_button(
-                "Firmar contrato",
-                url=f"?view=contract_sign&appointment_id={appt_id}",
-                disabled=firmar_disabled,
-                use_container_width=True,
-                key=f"pop_firmar_{appt_id}",
-            )
+            if show_firma:
+                st.link_button(
+                    "Firmar contrato",
+                    url=f"?view=contract_sign&appointment_id={appt_id}",
+                    disabled=firmar_disabled,
+                    use_container_width=True,
+                    key=f"pop_firmar_{appt_id}",
+                )
             if st.button(
                 "Reprogramar cita",
                 disabled=repro_disabled,
@@ -1200,16 +1211,21 @@ def _render_cita_row_actions(r: Dict[str, Any]) -> None:
                 st.rerun()
         return
 
-    ln1, ln2 = st.columns(2)
-    with ln1:
-        st.link_button(
-            "Firmar",
-            url=f"?view=contract_sign&appointment_id={appt_id}",
-            disabled=firmar_disabled,
-            use_container_width=True,
-            key=f"fb_compact_{appt_id}",
-        )
-    with ln2:
+    if show_firma:
+        ln1, ln2 = st.columns(2)
+        with ln1:
+            st.link_button(
+                "Firmar",
+                url=f"?view=contract_sign&appointment_id={appt_id}",
+                disabled=firmar_disabled,
+                use_container_width=True,
+                key=f"fb_compact_{appt_id}",
+            )
+        with ln2:
+            if st.button("Mover", disabled=repro_disabled, use_container_width=True, key=f"fb_repr_{appt_id}"):
+                st.session_state["_ap_reprogram_item"] = r
+                st.rerun()
+    else:
         if st.button("Mover", disabled=repro_disabled, use_container_width=True, key=f"fb_repr_{appt_id}"):
             st.session_state["_ap_reprogram_item"] = r
             st.rerun()
@@ -1224,12 +1240,19 @@ def _render_cita_row_actions(r: Dict[str, Any]) -> None:
             st.rerun()
 
 
-def _apply_appointment_filters(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    text = str(st.session_state.get("_ap_f_name") or "").strip().lower()
-    svc = str(st.session_state.get("_ap_f_service") or "Todos")
-    status = str(st.session_state.get("_ap_f_status") or "Todos")
-    from_date = st.session_state.get("_ap_f_from")
-    to_date = st.session_state.get("_ap_f_to")
+def _apply_appointment_filters(
+    items: list[dict[str, Any]],
+    *,
+    use_date_range: bool = True,
+    name_key: str = "_ap_f_name",
+    service_key: str = "_ap_f_service",
+    status_key: str = "_ap_f_status",
+) -> list[dict[str, Any]]:
+    text = str(st.session_state.get(name_key) or "").strip().lower()
+    svc = str(st.session_state.get(service_key) or "Todos")
+    status = str(st.session_state.get(status_key) or "Todos")
+    from_date = st.session_state.get("_ap_f_from") if use_date_range else None
+    to_date = st.session_state.get("_ap_f_to") if use_date_range else None
     filtered: list[dict[str, Any]] = []
     for row in items:
         name_value = str(row.get("customer_name", row.get("name", "")) or "")
@@ -1481,24 +1504,8 @@ def _dialog_ajustar_montos() -> None:
             st.rerun()
 
 
-def render_citas_tab() -> None:
-    if "_ap_page" not in st.session_state:
-        st.session_state["_ap_page"] = 0
-    if "_ap_limit" not in st.session_state:
-        st.session_state["_ap_limit"] = 10
-    if "_ap_reload" not in st.session_state:
-        st.session_state["_ap_reload"] = True
-    if "_ap_f_name" not in st.session_state:
-        st.session_state["_ap_f_name"] = ""
-    if "_ap_f_service" not in st.session_state:
-        st.session_state["_ap_f_service"] = "Todos"
-    if "_ap_f_status" not in st.session_state:
-        st.session_state["_ap_f_status"] = "Todos"
-    if "_ap_f_from" not in st.session_state:
-        st.session_state["_ap_f_from"] = None
-    if "_ap_f_to" not in st.session_state:
-        st.session_state["_ap_f_to"] = None
-
+def _inject_citas_shared_styles() -> None:
+    """Estilos para calendario, pills de estado/cliente y cabeceras de tabla."""
     st.markdown(
         """
         <style>
@@ -1556,9 +1563,44 @@ def render_citas_tab() -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
+def _init_appt_tab_session_state() -> None:
+    if "_ap_page" not in st.session_state:
+        st.session_state["_ap_page"] = 0
+    if "_ap_limit" not in st.session_state:
+        st.session_state["_ap_limit"] = 10
+    if "_ap_reload" not in st.session_state:
+        st.session_state["_ap_reload"] = True
+    if "_ap_f_name" not in st.session_state:
+        st.session_state["_ap_f_name"] = ""
+    if "_ap_f_service" not in st.session_state:
+        st.session_state["_ap_f_service"] = "Todos"
+    if "_ap_f_status" not in st.session_state:
+        st.session_state["_ap_f_status"] = "Todos"
+    if "_ap_f_from" not in st.session_state:
+        st.session_state["_ap_f_from"] = None
+    if "_ap_f_to" not in st.session_state:
+        st.session_state["_ap_f_to"] = None
+    if "_ap_cal_f_name" not in st.session_state:
+        st.session_state["_ap_cal_f_name"] = ""
+    if "_ap_cal_f_service" not in st.session_state:
+        st.session_state["_ap_cal_f_service"] = "Todos"
+    if "_ap_cal_f_status" not in st.session_state:
+        st.session_state["_ap_cal_f_status"] = "Todos"
+
+
+def _sync_appointments_from_api() -> None:
     if st.session_state.get("_ap_reload"):
         _fetch_appointments()
         st.session_state["_ap_reload"] = False
+
+
+def render_reporte_citas_tab() -> None:
+    """Listado paginado, totales y export Excel (informe financiero) con los mismos filtros."""
+    _init_appt_tab_session_state()
+    _inject_citas_shared_styles()
+    _sync_appointments_from_api()
 
     if st.session_state.get("_ap_err"):
         st.error(st.session_state["_ap_err"])
@@ -1572,6 +1614,11 @@ def render_citas_tab() -> None:
         }
     )
     status_values = ["Agendada", "Reprogramada", "Finalizada", "Cancelada"]
+    st.markdown("##### Reporte financiero — citas")
+    st.caption(
+        "Filtra el listado y los totales; descarga el Excel con el mismo criterio. "
+        "El calendario de agendamiento está en **Gestión citas**."
+    )
     st.markdown("##### Filtros")
     f1, f2, f3, f4, f5 = st.columns([1.3, 1.0, 1.0, 0.9, 0.9])
     with f1:
@@ -1587,8 +1634,6 @@ def render_citas_tab() -> None:
 
     hist_counts = _appointment_counts_by_client(items)
     filtered_items = _apply_appointment_filters(items)
-    by_day = _appointments_by_day_sorted(filtered_items)
-    _render_main_calendar(by_day, hist_counts)
 
     total_trabajo = 0.0
     total_abonado = 0.0
@@ -1627,9 +1672,10 @@ def render_citas_tab() -> None:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
             disabled=len(filtered_items) == 0 or len(_xlsx_agenda) == 0,
-            key="btn_citas_dl_xlsx",
+            key="btn_reporte_fin_xlsx",
         )
 
+    st.markdown("##### Listado de citas")
     total = len(filtered_items)
     limit = int(st.session_state["_ap_limit"])
     page = int(st.session_state["_ap_page"])
@@ -1640,7 +1686,6 @@ def render_citas_tab() -> None:
     start = page * limit
     rows = filtered_items[start : start + limit]
 
-    # Índices: Nombre … Abonado(4) Pendiente(5): un poco más ancha para «Pendiente» en una línea
     colw = [1.48, 0.92, 0.82, 0.78, 0.78, 0.92, 0.85, 0.76, 1.52]
     h1, h2, h3, h4, h5, h6, h7, h8, h9 = st.columns(colw)
     h1.markdown('<span class="ap-col-title">Nombre</span>', unsafe_allow_html=True)
@@ -1666,30 +1711,77 @@ def render_citas_tab() -> None:
         status = str(r.get("status") or "Agendada")
         c8.markdown(_status_pill_html(status), unsafe_allow_html=True)
         with c9:
-            _render_cita_row_actions(r)
+            _render_cita_row_actions(r, show_firma=False)
 
     p1, p2, p3 = st.columns([1, 1, 2.5])
     with p1:
         st.write("")
-        if st.button("◀", disabled=page <= 0, use_container_width=True):
+        if st.button("◀", disabled=page <= 0, use_container_width=True, key="rep_ap_page_prev"):
             st.session_state["_ap_page"] = max(0, page - 1)
             st.rerun()
     with p2:
         st.write("")
-        if st.button("▶", disabled=(page + 1) * limit >= total if total else True, use_container_width=True):
+        if st.button("▶", disabled=(page + 1) * limit >= total if total else True, use_container_width=True, key="rep_ap_page_next"):
             st.session_state["_ap_page"] = page + 1
             st.rerun()
     with p3:
         st.write("")
         st.caption(f"Página {page + 1}/{total_pages} · Total filtrado: {total} cita(s)")
 
-    if st.session_state.get("_cal_overflow_day"):
-        _dialog_calendar_day_appointments(by_day, hist_counts)
-    if st.session_state.get("_ap_dlg") == "create":
-        _dialog_agendar_cita()
     if st.session_state.get("_ap_reprogram_item"):
         _dialog_reprogramar_cita()
     if st.session_state.get("_ap_fin_item"):
         _dialog_ajustar_montos()
     if st.session_state.get("_ap_cancel_item"):
         _dialog_cancelar_cita()
+
+
+def render_citas_tab() -> None:
+    """Calendario, agendar y diálogo de citas del día; datos financieros y tabla en **Reporte**."""
+    _init_appt_tab_session_state()
+    _inject_citas_shared_styles()
+    _sync_appointments_from_api()
+
+    if st.session_state.get("_ap_err"):
+        st.error(st.session_state["_ap_err"])
+
+    items = list(st.session_state.get("_ap_list") or [])
+    svc_values = sorted(
+        {
+            str(i.get("service_type", i.get("service", "")) or "").strip()
+            for i in items
+            if str(i.get("service_type", i.get("service", "")) or "").strip()
+        }
+    )
+    status_values = ["Agendada", "Reprogramada", "Finalizada", "Cancelada"]
+
+    st.markdown("##### Gestión citas — calendario")
+    st.caption(
+        "Agenda y consulta rápida por día. Mismos criterios que en **Reporte** (nombre, servicio, estado), "
+        "sin rango de fechas; la tabla, totales y Excel siguen en **Reporte**."
+    )
+
+    st.markdown("##### Filtros del calendario")
+    cf1, cf2, cf3 = st.columns([1.3, 1.0, 1.0])
+    with cf1:
+        st.text_input("Filtrar nombre", key="_ap_cal_f_name", placeholder="Nombre cliente")
+    with cf2:
+        st.selectbox("Servicio", options=["Todos", *svc_values], key="_ap_cal_f_service")
+    with cf3:
+        st.selectbox("Estado", options=["Todos", *status_values], key="_ap_cal_f_status")
+
+    cal_filtered = _apply_appointment_filters(
+        items,
+        use_date_range=False,
+        name_key="_ap_cal_f_name",
+        service_key="_ap_cal_f_service",
+        status_key="_ap_cal_f_status",
+    )
+    hist_counts = _appointment_counts_by_client(items)
+    by_day = _appointments_by_day_sorted(cal_filtered)
+    _render_main_calendar(by_day, hist_counts)
+
+    if st.session_state.get("_cal_overflow_day"):
+        _dialog_calendar_day_appointments(by_day, hist_counts)
+    if st.session_state.get("_ap_dlg") == "create":
+        _dialog_agendar_cita()
