@@ -26,7 +26,7 @@ load_dotenv(_ROOT / ".env")
 import streamlit as st
 
 from streamlit_app import api_client
-from streamlit_app.citas_tab import render_citas_tab
+from streamlit_app.citas_tab import render_citas_tab, render_reporte_citas_tab
 from streamlit_app.contract_read_view import render_contract_read_view
 from streamlit_app.contract_signing import render_contract_signing_view
 from streamlit_app.contracts_admin import render_contract_admin_tab
@@ -201,7 +201,7 @@ def main() -> None:
             "Gestión de clientes",
             "Gestión contratos",
             "Gestión encuesta",
-            "Gestión reporte",
+            "Reporte",
         ]
     )
 
@@ -218,7 +218,7 @@ def main() -> None:
         st.info("Gestión encuesta — en construcción.")
 
     with tab_reporte:
-        st.info("Gestión reporte — en construcción.")
+        render_reporte_citas_tab()
 
 
 if __name__ == "__main__":
