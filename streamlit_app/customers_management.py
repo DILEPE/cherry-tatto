@@ -94,6 +94,62 @@ def _fetch_list(search: str, limit: int, page: int) -> None:
         st.session_state["_cust_last_error"] = (code, _detail(data))
 
 
+def _render_customer_row_actions(cid: int, nombre: str) -> None:
+    """Menú único por fila (mismo patrón que Gestión citas): popover o botones compactos."""
+
+    def _dispatch_view() -> None:
+        st.session_state["_cust_dlg"] = "view"
+        st.session_state["_cust_dlg_id"] = cid
+
+    def _dispatch_edit() -> None:
+        st.session_state["_cust_dlg"] = "edit"
+        st.session_state["_cust_dlg_id"] = cid
+        st.session_state.pop("_dlg_edit_payload", None)
+        st.session_state.pop("_dlg_edit_id", None)
+
+    def _dispatch_delete() -> None:
+        st.session_state["_cust_dlg"] = "delete"
+        st.session_state["_cust_dlg_id"] = cid
+        st.session_state["_cust_dlg_del_name"] = nombre
+
+    def _dispatch_contracts() -> None:
+        st.session_state["_cust_dlg"] = "contracts"
+        st.session_state["_cust_dlg_id"] = cid
+        st.session_state["_cust_dlg_contract_name"] = nombre
+
+    pop = getattr(st, "popover", None)
+    if pop:
+        with pop("Acciones", use_container_width=True):
+            if cid > 0:
+                st.caption(f"Cliente #{cid}")
+            if nombre:
+                st.caption(nombre[:80] + ("…" if len(nombre) > 80 else ""))
+            if st.button("Ver", key=f"cust_v_{cid}", use_container_width=True):
+                _dispatch_view()
+            if st.button("Editar", key=f"cust_e_{cid}", use_container_width=True):
+                _dispatch_edit()
+            if st.button("Eliminar", key=f"cust_d_{cid}", use_container_width=True):
+                _dispatch_delete()
+            if st.button("Contratos", key=f"cust_ct_{cid}", use_container_width=True):
+                _dispatch_contracts()
+        return
+
+    ln1, ln2 = st.columns(2)
+    with ln1:
+        if st.button("Ver", key=f"cust_fb_v_{cid}", use_container_width=True):
+            _dispatch_view()
+    with ln2:
+        if st.button("Editar", key=f"cust_fb_e_{cid}", use_container_width=True):
+            _dispatch_edit()
+    bn1, bn2 = st.columns(2)
+    with bn1:
+        if st.button("Eliminar", key=f"cust_fb_d_{cid}", use_container_width=True):
+            _dispatch_delete()
+    with bn2:
+        if st.button("Contratos", key=f"cust_fb_ct_{cid}", use_container_width=True):
+            _dispatch_contracts()
+
+
 def _close_dialogs() -> None:
     for k in (
         "_cust_dlg",
@@ -519,7 +575,7 @@ def _dialog_contracts_cliente(cliente_id: int, nombre: str) -> None:
 
 def render_customers_management_tab() -> None:
     st.subheader("Gestión de clientes")
-    st.caption("Alta, consulta, edición y baja lógica. Usa los botones de cada fila.")
+    st.caption("Alta, consulta, edición y baja lógica. Por fila usa **Acciones** (mismo esquema que en citas).")
 
     if "_cust_page" not in st.session_state:
         st.session_state["_cust_page"] = 0
@@ -578,30 +634,39 @@ def render_customers_management_tab() -> None:
 
     st.markdown(f"**{total}** cliente(s) en total · mostrando página **{page + 1}** de **{max(1, (total + limit - 1) // limit)}**")
 
-    # Cabecera de tabla manual
-    h1, h2, h3, h4, h5, h6, h7, h8 = st.columns([1.6, 1.2, 1.4, 1.0, 0.55, 0.55, 0.55, 0.75])
-    with h1:
-        st.markdown("**Nombre**")
-    with h2:
-        st.markdown("**Documento**")
-    with h3:
-        st.markdown("**Correo**")
-    with h4:
-        st.markdown("**Teléfono**")
-    with h5:
-        st.markdown("**Ver**")
-    with h6:
-        st.markdown("**Editar**")
-    with h7:
-        st.markdown("**Eliminar**")
-    with h8:
-        st.markdown("**Contratos**")
+    st.markdown(
+        """
+        <style>
+          .cust-col-title {
+            display: inline-block;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            color: #111827;
+            background: #f3f4f6;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 0.18rem 0.45rem;
+            white-space: nowrap;
+            line-height: 1.35;
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    cust_colw = [1.62, 1.22, 1.52, 1.12, 1.52]
+    h1, h2, h3, h4, h5 = st.columns(cust_colw)
+    h1.markdown('<span class="cust-col-title">Nombre</span>', unsafe_allow_html=True)
+    h2.markdown('<span class="cust-col-title">Documento</span>', unsafe_allow_html=True)
+    h3.markdown('<span class="cust-col-title">Correo</span>', unsafe_allow_html=True)
+    h4.markdown('<span class="cust-col-title">Teléfono</span>', unsafe_allow_html=True)
+    h5.markdown('<span class="cust-col-title">Acciones</span>', unsafe_allow_html=True)
 
     for it in items:
         cid = int(it["id"])
         nombre = f"{it.get('first_name', '')} {it.get('last_name', '')}".strip()
         doc = f"{it.get('document_type', '')} {it.get('document_number', '')}".strip()
-        c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1.6, 1.2, 1.4, 1.0, 0.55, 0.55, 0.55, 0.75])
+        c1, c2, c3, c4, c5 = st.columns(cust_colw)
         with c1:
             st.write(nombre)
         with c2:
@@ -611,25 +676,7 @@ def render_customers_management_tab() -> None:
         with c4:
             st.write(it.get("phone_number", ""))
         with c5:
-            if st.button("Ver", key=f"cust_v_{cid}", use_container_width=True):
-                st.session_state["_cust_dlg"] = "view"
-                st.session_state["_cust_dlg_id"] = cid
-        with c6:
-            if st.button("Editar", key=f"cust_e_{cid}", use_container_width=True):
-                st.session_state["_cust_dlg"] = "edit"
-                st.session_state["_cust_dlg_id"] = cid
-                st.session_state.pop("_dlg_edit_payload", None)
-                st.session_state.pop("_dlg_edit_id", None)
-        with c7:
-            if st.button("Eliminar", key=f"cust_d_{cid}", use_container_width=True):
-                st.session_state["_cust_dlg"] = "delete"
-                st.session_state["_cust_dlg_id"] = cid
-                st.session_state["_cust_dlg_del_name"] = nombre
-        with c8:
-            if st.button("Contratos", key=f"cust_ct_{cid}", use_container_width=True):
-                st.session_state["_cust_dlg"] = "contracts"
-                st.session_state["_cust_dlg_id"] = cid
-                st.session_state["_cust_dlg_contract_name"] = nombre
+            _render_customer_row_actions(cid, nombre)
 
     st.divider()
 

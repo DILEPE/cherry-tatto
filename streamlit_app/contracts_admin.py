@@ -21,6 +21,64 @@ def _close_dialogs() -> None:
         st.session_state.pop(k, None)
 
 
+def _render_template_row_actions(item: Dict[str, Any]) -> None:
+    """Popover «Acciones» por fila (mismo esquema que citas). Sin popover: fila compacta de botones."""
+    tid = int(item.get("id", 0) or 0)
+    nm = str(item.get("name", "") or "")
+    vs = str(item.get("version", "") or "")
+    nm_short = nm[:72] + ("…" if len(nm) > 72 else "")
+
+    def _dispatch_use() -> None:
+        if tid > 0:
+            st.session_state["_ctadm_selected_template_id"] = tid
+
+    def _dispatch_edit() -> None:
+        st.session_state["_ctadm_dlg"] = "edit"
+        st.session_state["_ctadm_dlg_id"] = tid
+
+    pop = getattr(st, "popover", None)
+    if pop:
+        with pop("Acciones", use_container_width=True):
+            if tid > 0:
+                st.caption(f"Plantilla #{tid}")
+                st.caption(f"{nm_short or '—'} · v{vs or '?'}")
+            if st.button("Usar", key=f"ctadm_pop_use_{tid}", use_container_width=True):
+                _dispatch_use()
+            if st.button("Editar", key=f"ctadm_pop_edit_{tid}", use_container_width=True):
+                _dispatch_edit()
+            if st.button("Eliminar", key=f"ctadm_pop_del_{tid}", use_container_width=True):
+                ok_d, code_d, data_d = api_client.delete_template(tid)
+                if ok_d:
+                    st.session_state["_ctadm_reload"] = True
+                    if st.session_state.get("_ctadm_selected_template_id") == tid:
+                        st.session_state["_ctadm_selected_template_id"] = None
+                    st.success("Versión eliminada.")
+                    st.rerun()
+                else:
+                    st.error(f"HTTP {code_d}: {_detail(data_d)}")
+        return
+
+    ln1, ln2 = st.columns(2)
+    with ln1:
+        if st.button("Usar", key=f"ctadm_fb_use_{tid}", use_container_width=True):
+            _dispatch_use()
+    with ln2:
+        if st.button("Editar", key=f"ctadm_fb_edit_{tid}", use_container_width=True):
+            _dispatch_edit()
+    bn1, bn2 = st.columns(2)
+    with bn1:
+        if st.button("Eliminar", key=f"ctadm_fb_del_{tid}", use_container_width=True):
+            ok_d, code_d, data_d = api_client.delete_template(tid)
+            if ok_d:
+                st.session_state["_ctadm_reload"] = True
+                if st.session_state.get("_ctadm_selected_template_id") == tid:
+                    st.session_state["_ctadm_selected_template_id"] = None
+                st.success("Versión eliminada.")
+                st.rerun()
+            else:
+                st.error(f"HTTP {code_d}: {_detail(data_d)}")
+
+
 def _load_templates(*, only_active: bool) -> None:
     ok, code, data = api_client.get_templates(only_active=only_active)
     if ok and isinstance(data, list):
@@ -147,8 +205,8 @@ def _dialog_edit_template(template_id: int) -> None:
 
 
 def render_contract_admin_tab() -> None:
-    st.subheader("Administrador de contratos")
-    st.caption("Gestiona versiones de plantillas y genera texto final con datos personales del cliente.")
+    st.subheader("Gestión de contratos")
+    st.caption("Versiones de plantillas y texto final con datos del cliente. En el listado, **Acciones** por fila (mismo esquema que en citas).")
 
     if "_ctadm_reload" not in st.session_state:
         st.session_state["_ctadm_reload"] = True
@@ -185,36 +243,40 @@ def render_contract_admin_tab() -> None:
     templates = list(st.session_state.get("_ctadm_templates") or [])
     st.markdown(f"**Versiones registradas:** {len(templates)}")
 
-    h1, h2, h3, h4, h5, h6 = st.columns([2.2, 1.0, 0.9, 0.9, 0.9, 0.9])
-    h1.markdown("**Nombre**")
-    h2.markdown("**Versión**")
-    h3.markdown("**Activa**")
-    h4.markdown("**Usar**")
-    h5.markdown("**Editar**")
-    h6.markdown("**Eliminar**")
+    st.markdown(
+        """
+        <style>
+          .ctadm-col-title {
+            display: inline-block;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            color: #111827;
+            background: #f3f4f6;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 0.18rem 0.45rem;
+            white-space: nowrap;
+            line-height: 1.35;
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    tpl_colw = [2.42, 1.12, 0.94, 1.52]
+    h1, h2, h3, h4 = st.columns(tpl_colw)
+    h1.markdown('<span class="ctadm-col-title">Nombre</span>', unsafe_allow_html=True)
+    h2.markdown('<span class="ctadm-col-title">Versión</span>', unsafe_allow_html=True)
+    h3.markdown('<span class="ctadm-col-title">Activa</span>', unsafe_allow_html=True)
+    h4.markdown('<span class="ctadm-col-title">Acciones</span>', unsafe_allow_html=True)
 
     for item in templates:
-        tid = int(item.get("id"))
-        c1, c2, c3, c4, c5, c6 = st.columns([2.2, 1.0, 0.9, 0.9, 0.9, 0.9])
+        c1, c2, c3, c4 = st.columns(tpl_colw)
         c1.write(item.get("name", ""))
         c2.write(item.get("version", ""))
         c3.write("Sí" if item.get("is_active") else "No")
         with c4:
-            if st.button("Usar", key=f"ctadm_use_{tid}", use_container_width=True):
-                st.session_state["_ctadm_selected_template_id"] = tid
-        with c5:
-            if st.button("Editar", key=f"ctadm_edit_{tid}", use_container_width=True):
-                st.session_state["_ctadm_dlg"] = "edit"
-                st.session_state["_ctadm_dlg_id"] = tid
-        with c6:
-            if st.button("Eliminar", key=f"ctadm_del_{tid}", use_container_width=True):
-                ok_d, code_d, data_d = api_client.delete_template(tid)
-                if ok_d:
-                    st.session_state["_ctadm_reload"] = True
-                    st.success("Versión eliminada.")
-                    st.rerun()
-                else:
-                    st.error(f"HTTP {code_d}: {_detail(data_d)}")
+            _render_template_row_actions(item)
 
     st.divider()
     st.markdown("### Generar texto de contrato")

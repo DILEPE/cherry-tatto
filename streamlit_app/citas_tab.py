@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
+from io import BytesIO
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
@@ -62,6 +63,161 @@ def _financial_row_values(row: dict[str, Any]) -> tuple[float, float, float]:
 def _customer_credit_value(row: dict[str, Any]) -> float:
     """Saldo a favor del cliente asociado a esta cita (p. ej. traslado de abono al anular)."""
     return max(_to_float(row.get("customer_credit"), 0.0), 0.0)
+
+
+def _xlsx_border_thin() -> Any:
+    from openpyxl.styles import Border, Side
+
+    s = Side(style="thin", color="FF9CA3AF")
+    return Border(left=s, right=s, top=s, bottom=s)
+
+
+def _excel_set_cell(ws: Any, row: int, col: int, value: Any, *, font=None, alignment=None, border=None, fill=None) -> None:
+    """Asignación de celda compatible con coordenadas 1-based tipo Excel."""
+    cell = ws.cell(row=row, column=col, value=value)
+    if font is not None:
+        cell.font = font
+    if alignment is not None:
+        cell.alignment = alignment
+    if border is not None:
+        cell.border = border
+    if fill is not None:
+        cell.fill = fill
+
+
+def _excel_apply_border_block(ws: Any, row_min: int, row_max: int, col_min: int, col_max: int, border: Any) -> None:
+    for r in range(row_min, row_max + 1):
+        for c in range(col_min, col_max + 1):
+            ws.cell(row=r, column=c).border = border
+
+
+def _citas_filtered_to_excel_bytes(rows: list[dict[str, Any]], *, generated_at: Optional[datetime] = None) -> bytes:
+    """Genera .xlsx financiero estilizado: título, encabezados en negrita y tablas demarcadas."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    gen_dt = generated_at or datetime.now()
+    fecha_etiqueta = gen_dt.strftime("%d/%m/%Y %H:%M")
+
+    datos: list[list[Any]] = []
+    for r in rows:
+        tot, abo, pend = _financial_row_values(r)
+        cred = _customer_credit_value(r)
+        nombre = str(r.get("customer_name") or r.get("name") or "").strip()
+        datos.append(
+            [
+                nombre,
+                round(tot, 2),
+                round(abo, 2),
+                round(pend, 2),
+                round(cred, 2),
+            ]
+        )
+
+    headers = ["Cliente", "Valor total (COP)", "Abonado (COP)", "Pendiente (COP)", "Saldo a favor (COP)"]
+    ncol = len(headers)
+
+    wb = Workbook()
+    bd = _xlsx_border_thin()
+    font_title = Font(bold=True, size=14, color="FF111827")
+    font_sub = Font(size=10, color="FF4B5563")
+    font_header = Font(bold=True, size=11, color="FF111827")
+    font_body = Font(size=10, color="FF374151")
+    fill_header = PatternFill(fill_type="solid", fgColor="FFE5E7EB")
+    align_center = Alignment(horizontal="center", vertical="center", wrap_text=False)
+    align_left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    align_right_num = Alignment(horizontal="right", vertical="center")
+
+    # --- Hoja detalle ---
+    ws1 = wb.active
+    ws1.title = "Datos financieros"
+    ws1.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
+    ws1.cell(1, 1, "Informe financiero — Citas Cherry Ink · Rock City")
+    ws1.cell(1, 1).font = font_title
+    ws1.cell(1, 1).alignment = align_center
+
+    ws1.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncol)
+    ws1.cell(2, 1, f"Generado: {fecha_etiqueta}")
+    ws1.cell(2, 1).font = font_sub
+    ws1.cell(2, 1).alignment = align_center
+
+    header_row = 4
+    for col in range(1, ncol + 1):
+        _excel_set_cell(
+            ws1,
+            header_row,
+            col,
+            headers[col - 1],
+            font=font_header,
+            fill=fill_header,
+            alignment=align_left if col == 1 else align_right_num,
+            border=bd,
+        )
+
+    row_start_body = header_row + 1
+    if datos:
+        for i, row_vals in enumerate(datos):
+            r = row_start_body + i
+            for col in range(1, ncol + 1):
+                v = row_vals[col - 1]
+                align = align_left if col == 1 else align_right_num
+                _excel_set_cell(ws1, r, col, v, font=font_body, alignment=align, border=bd)
+            rmax = r
+        _excel_apply_border_block(ws1, header_row, rmax, 1, ncol, bd)
+    else:
+        ws1.merge_cells(start_row=row_start_body, start_column=1, end_row=row_start_body, end_column=ncol)
+        c_msg = ws1.cell(row=row_start_body, column=1, value="Sin filas para los filtros actuales.")
+        c_msg.font = font_body
+        c_msg.alignment = align_left
+        _excel_apply_border_block(ws1, header_row, row_start_body, 1, ncol, bd)
+
+    for col in range(1, ncol + 1):
+        letter = get_column_letter(col)
+        ws1.column_dimensions[letter].width = 36 if col == 1 else 18
+
+    # --- Resumen ---
+    ws2 = wb.create_sheet("Resumen financiero", 1)
+    rtot = rabo = rpend = rfav = 0.0
+    for rr in rows:
+        t, a, p = _financial_row_values(rr)
+        rtot += t
+        rabo += a
+        rpend += p
+        rfav += _customer_credit_value(rr)
+
+    ws2.merge_cells(start_row=1, start_column=1, end_row=1, end_column=2)
+    ws2.cell(1, 1, "Resumen financiero — mismos filtros que el panel")
+    ws2.cell(1, 1).font = font_title
+    ws2.cell(1, 1).alignment = align_center
+    ws2.merge_cells(start_row=2, start_column=1, end_row=2, end_column=2)
+    ws2.cell(2, 1, f"Generado: {fecha_etiqueta}")
+    ws2.cell(2, 1).font = font_sub
+    ws2.cell(2, 1).alignment = align_center
+
+    resumen_labels = ["Total valor trabajo (COP)", "Total abonado (COP)", "Total pendiente (COP)", "Total saldo a favor (COP)", "Cantidad de citas"]
+    resumen_vals: list[Any] = [
+        round(rtot, 2),
+        round(rabo, 2),
+        round(rpend, 2),
+        round(rfav, 2),
+        len(rows) if rows else 0,
+    ]
+    hdr_r = 4
+    _excel_set_cell(ws2, hdr_r, 1, "Concepto", font=font_header, fill=fill_header, alignment=align_left, border=bd)
+    _excel_set_cell(ws2, hdr_r, 2, "Valor", font=font_header, fill=fill_header, alignment=align_right_num, border=bd)
+    for i, lab in enumerate(resumen_labels):
+        r = hdr_r + 1 + i
+        _excel_set_cell(ws2, r, 1, lab, font=font_body, alignment=align_left, border=bd)
+        _excel_set_cell(ws2, r, 2, resumen_vals[i], font=font_body, alignment=align_right_num, border=bd)
+    _excel_apply_border_block(ws2, hdr_r, hdr_r + len(resumen_labels), 1, 2, bd)
+    ws2.column_dimensions["A"].width = 44
+    ws2.column_dimensions["B"].width = 22
+
+    bio = BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return bio.getvalue()
 
 
 def _parse_date(val: Any) -> date:
@@ -315,7 +471,7 @@ def _dialog_agendar_cita() -> None:
     min_date_100, max_date_today = _date_range_100y_past()
     min_date_appt, max_date_appt = _date_range_100y_window()
 
-    st.markdown("##### Verificación de cliente por cédula")
+    st.markdown("##### Verificación de cliente por documento")
     d1, d2 = st.columns([2, 1])
     with d1:
         st.selectbox("Tipo documento *", ["CC", "TI", "CE", "PAS"], key="ap_doc_t")
@@ -327,7 +483,7 @@ def _dialog_agendar_cita() -> None:
             st.session_state["_ap_doc_verified_doc"] = ""
     with d2:
         st.write("")
-        if st.button("Verificar cédula", type="primary", key="ap_doc_lookup"):
+        if st.button("Verificar documento", type="primary", key="ap_doc_lookup"):
             doc = (st.session_state.get("ap_doc_n") or "").strip()
             if not doc or len(doc) < 3:
                 st.error("Escribe un número de documento válido (mín. 3 caracteres).")
@@ -354,54 +510,99 @@ def _dialog_agendar_cita() -> None:
             st.rerun()
         return
 
-    fn = st.text_input("Nombre *", key="ap_fn")
-    ln = st.text_input("Apellido *", key="ap_ln")
-    birth_d = st.date_input(
-        "Fecha nacimiento *",
-        key="ap_bd",
-        min_value=min_date_100,
-        max_value=max_date_today,
+    st.markdown(
+        """
+        <style>
+          .dlg-appt-req-banner {
+            border-left: 4px solid #FF007F;
+            padding: 0.5rem 0.85rem;
+            margin: 0 0 0.75rem 0;
+            background: rgba(255, 0, 127, 0.12);
+            border-radius: 8px;
+            font-size: 0.95rem;
+            line-height: 1.45;
+            color: #f3f4f6;
+          }
+          .dlg-appt-col-h {
+            font-size: 0.78rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: #A79AFF;
+            margin: 0 0 0.5rem 0;
+          }
+        </style>
+        <div class="dlg-appt-req-banner">
+          Campos obligatorios
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-    email = st.text_input("Email *", key="ap_em")
-    st.checkbox("Registrar fecha expedición documento cliente", key="ap_has_ddi")
-    st.date_input(
-        "Fecha expedición documento cliente",
-        key="ap_ddi",
-        min_value=min_date_100,
-        max_value=max_date_today,
-    )
-    st.checkbox("Es menor de edad", key="ap_minor")
+
+    col_left, col_right = st.columns(2)
+
+    with col_left:
+        st.markdown('<p class="dlg-appt-col-h">Datos del cliente</p>', unsafe_allow_html=True)
+        fn = st.text_input("Nombre *", key="ap_fn")
+        ln = st.text_input("Apellido *", key="ap_ln")
+        birth_d = st.date_input(
+            "Fecha nacimiento *",
+            key="ap_bd",
+            min_value=min_date_100,
+            max_value=max_date_today,
+        )
+        email = st.text_input("Correo electrónico *", key="ap_em")
+        st.checkbox("Registrar fecha expedición documento cliente", key="ap_has_ddi")
+        _ddi_label = (
+            "Fecha expedición documento cliente *"
+            if st.session_state.get("ap_has_ddi")
+            else "Fecha expedición documento cliente (opcional)"
+        )
+        st.date_input(
+            _ddi_label,
+            key="ap_ddi",
+            min_value=min_date_100,
+            max_value=max_date_today,
+        )
+        st.checkbox("Es menor de edad", key="ap_minor", help="Debe coincidir con la fecha de nacimiento.")
+
+    with col_right:
+        st.markdown('<p class="dlg-appt-col-h">Cita y montos</p>', unsafe_allow_html=True)
+        phone = st.text_input("Teléfono cita *", key="ap_phone")
+        svc_options = list(configured_service_types())
+        cur = st.session_state.get("ap_svc", svc_options[0] if svc_options else "tattoo")
+        ix = svc_options.index(cur) if cur in svc_options else 0
+        service = st.selectbox("Tipo de servicio *", options=svc_options, index=ix, key="ap_svc")
+        appointment_date = st.date_input(
+            "Fecha cita *",
+            key="ap_ad",
+            min_value=min_date_appt,
+            max_value=max_date_appt,
+            format="DD/MM/YYYY",
+        )
+        detail = st.text_area("Detalle del trabajo (opcional)", height=80, key="ap_det")
+        total_amount = st.number_input("Valor total del trabajo (COP) *", min_value=0.0, step=10000.0, key="ap_total")
+        deposit = st.number_input("Saldo abonado (COP) *", min_value=0.0, step=10000.0, key="ap_dep")
+        pending_balance = round(float(total_amount) - float(deposit), 2)
+        st.caption(f"Saldo pendiente calculado: {_format_cop(max(pending_balance, 0))}")
 
     if st.session_state.get("ap_minor"):
-        with st.expander("Tutor / representante (obligatorio para menores)", expanded=True):
+        with st.expander("Tutor / representante (campos marcados con * obligatorios para menores)", expanded=True):
             st.text_input("Nombre del tutor *", key="ap_gn")
             st.selectbox("Tipo de documento del tutor *", ["CC", "TI", "CE", "PAS"], key="ap_gdt")
             st.text_input("Número de documento del tutor *", key="ap_gdn")
             st.checkbox("Registrar fecha expedición documento tutor", key="ap_has_gdi")
+            _gdi_lab = (
+                "Fecha expedición documento tutor *"
+                if st.session_state.get("ap_has_gdi")
+                else "Fecha expedición documento tutor (opcional)"
+            )
             st.date_input(
-                "Fecha expedición documento tutor",
+                _gdi_lab,
                 key="ap_gdi",
                 min_value=min_date_100,
                 max_value=max_date_today,
             )
-
-    phone = st.text_input("Teléfono cita *", key="ap_phone")
-    svc_options = list(configured_service_types())
-    cur = st.session_state.get("ap_svc", svc_options[0] if svc_options else "tattoo")
-    ix = svc_options.index(cur) if cur in svc_options else 0
-    service = st.selectbox("Tipo de servicio *", options=svc_options, index=ix, key="ap_svc")
-    appointment_date = st.date_input(
-        "Fecha cita *",
-        key="ap_ad",
-        min_value=min_date_appt,
-        max_value=max_date_appt,
-        format="DD/MM/YYYY",
-    )
-    detail = st.text_area("Detalle del trabajo", height=80, key="ap_det")
-    total_amount = st.number_input("Valor total del trabajo (COP) *", min_value=0.0, step=10000.0, key="ap_total")
-    deposit = st.number_input("Saldo abonado (COP) *", min_value=0.0, step=10000.0, key="ap_dep")
-    pending_balance = round(float(total_amount) - float(deposit), 2)
-    st.caption(f"Saldo pendiente calculado: {_format_cop(max(pending_balance, 0))}")
 
     c1, c2 = st.columns(2)
     with c1:
@@ -411,7 +612,7 @@ def _dialog_agendar_cita() -> None:
                 "_ap_doc_verified_doc"
             ) == doc
             if not verified:
-                st.error("Debes verificar la cédula antes de agendar la cita.")
+                st.error("Debes verificar el documento antes de agendar la cita.")
                 return
 
             expected_minor = _is_minor_by_birth_date(birth_d)
@@ -965,11 +1166,28 @@ def render_citas_tab() -> None:
     m3.metric("Total saldo pendiente", _format_cop(total_pendiente))
     m4.metric("Saldo a favor (filtro)", _format_cop(total_credito_favor))
 
-    st.caption(
-        "**Saldo pendiente** (filas y totales): si la API trae **pendiente** calculado guardado "
-        "(p. ej. tras anular), ese valor cuenta; si no, se usa **total − abonado − a favor**. "
-        "Así el resumen sí resta el saldo a favor del cliente cuando toca calcular desde cero."
-    )
+    _informe_dt = datetime.now()
+    try:
+        _xlsx_agenda = _citas_filtered_to_excel_bytes(filtered_items, generated_at=_informe_dt)
+    except Exception as e:
+        _xlsx_agenda = b""
+        if filtered_items:
+            st.warning(f"No se pudo generar el Excel. Instala `openpyxl` en el venv: {e}")
+    _dl_left, _dl_right = st.columns([4, 1])
+    with _dl_right:
+        st.download_button(
+            label="Descargar Excel",
+            help="Exporta financiero del filtro actual (nombre cliente y montos; hoja resumen).",
+            data=_xlsx_agenda,
+            file_name=(
+                "Informe-finanzas-citas-"
+                f"{_informe_dt.strftime('%Y-%m-%d-%H%M')}.xlsx"
+            ),
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            disabled=len(filtered_items) == 0 or len(_xlsx_agenda) == 0,
+            key="btn_citas_dl_xlsx",
+        )
 
     total = len(filtered_items)
     limit = int(st.session_state["_ap_limit"])
@@ -981,9 +1199,6 @@ def render_citas_tab() -> None:
     start = page * limit
     rows = filtered_items[start : start + limit]
 
-    st.caption(
-        "**Contrato** (firma) y **Reprogramar cita** (antes columna «Mover») quedaron unificados en **Acciones**."
-    )
     # Índices: Nombre … Abonado(4) Pendiente(5): un poco más ancha para «Pendiente» en una línea
     colw = [1.48, 0.92, 0.82, 0.78, 0.78, 0.92, 0.85, 0.76, 1.52]
     h1, h2, h3, h4, h5, h6, h7, h8, h9 = st.columns(colw)
