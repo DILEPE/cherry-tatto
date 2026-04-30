@@ -22,6 +22,7 @@ from app.application.contract_controller import ContractController
 from app.application.survey_controller import SurveyController
 from app.application.template_controller import TemplateController
 from app.application.customer_controller import CustomerController
+from app.application.health_controller import HealthController
 
 
 # 2. Extraer las variables del entorno usando os.getenv()
@@ -31,6 +32,8 @@ DB_USER = os.getenv("DB_USER")
 DB_PASS = os.getenv("DB_PASSWORD")
 DB_NAME = os.getenv("DB_NAME", "inkmanager_db")
 N8N_URL = os.getenv("N8N_WEBHOOK_URL")
+# Opcional — GET /health/n8n: sondeo al endpoint de status (toma prioridad si está definido).
+# Ej.: N8N_STATUS_URL=http://localhost:5678/webhook-test/cherry-tatto/status
 APP_PORT = int(os.getenv("PORT", 5000))
 IS_DEBUG = os.getenv("DEBUG", "True").lower() == "true"
 
@@ -56,6 +59,7 @@ initial_state = State({"service": business_service})
 
 app = Litestar(
     route_handlers=[
+        HealthController,
         AppointmentController,
         ContractController,
         TemplateController,

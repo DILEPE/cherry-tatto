@@ -11,8 +11,6 @@ Logo: coloca `branding.png` en `streamlit_app/assets/` o en `assets/` del proyec
 """
 from __future__ import annotations
 
-import json
-import os
 import sys
 from pathlib import Path
 
@@ -20,6 +18,10 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+
+from dotenv import load_dotenv
+
+load_dotenv(_ROOT / ".env")
 
 import streamlit as st
 
@@ -29,13 +31,6 @@ from streamlit_app.contract_read_view import render_contract_read_view
 from streamlit_app.contract_signing import render_contract_signing_view
 from streamlit_app.contracts_admin import render_contract_admin_tab
 from streamlit_app.customers_management import render_customers_management_tab
-from streamlit_app.validation import (
-    validate_contract,
-    validate_report_dates,
-    validate_survey,
-    validate_template,
-    validate_template_id,
-)
 
 LOGO_CANDIDATES = [
     Path(__file__).resolve().parent / "assets" / "branding.png",
@@ -125,25 +120,10 @@ def _logo_path() -> Path | None:
     return None
 
 
-def _show_validation_errors(errors) -> None:
-    for e in errors:
-        st.markdown(
-            f'<div class="m-error"><strong>{e.field}</strong>: {e.message}</div>',
-            unsafe_allow_html=True,
-        )
-
-
 def _api_error(payload) -> str:
     if isinstance(payload, dict):
         return str(payload.get("detail", payload))
     return str(payload)
-
-
-def _sync_api_base_url() -> None:
-    """Sincroniza la URL con el proceso; no reasigna la clave del text_input (Streamlit no lo permite)."""
-    raw = st.session_state.get("api_base_url") or api_client.DEFAULT_BASE
-    url = raw.strip().rstrip("/")
-    os.environ["API_BASE_URL"] = url
 
 
 def main() -> None:
@@ -153,9 +133,6 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="expanded",
     )
-    if "api_base_url" not in st.session_state:
-        st.session_state["api_base_url"] = os.getenv("API_BASE_URL", api_client.DEFAULT_BASE)
-
     _inject_material_neon_css()
 
     # URL dedicada para firma de contratos:
@@ -192,15 +169,6 @@ def main() -> None:
             st.markdown('<p class="neon-title">CHERRY INK</p>', unsafe_allow_html=True)
             st.markdown('<p class="sub-lavender">Rock City Piercing</p>', unsafe_allow_html=True)
         st.markdown("---")
-        st.caption("URL base de la API Litestar")
-        st.text_input(
-            "API_BASE_URL",
-            key="api_base_url",
-            label_visibility="collapsed",
-            placeholder="http://127.0.0.1:5000",
-        )
-        _sync_api_base_url()
-
         if st.button("Probar conexión", use_container_width=True):
             ok, code, data = api_client.get_appointments()
             if ok:
@@ -216,17 +184,24 @@ def main() -> None:
                         "y comprueba que el puerto coincida con la URL del panel (variable `PORT` en `.env`)."
                     )
 
-    st.markdown('<p class="neon-title">Panel de operaciones</p>', unsafe_allow_html=True)
-    st.caption("Controles tipo Material · tema oscuro Cherry Ink / Rock City")
+        if st.button("Verificar n8n", use_container_width=True):
+            nivel, msg_n8n = api_client.check_n8n_webhook_connection()
+            if nivel == "success":
+                st.success(msg_n8n)
+            elif nivel == "warn":
+                st.warning(msg_n8n)
+            else:
+                st.error(msg_n8n)
 
-    tab_citas, tab_customers, tab_contratos, tab_admin_contratos, tab_encuestas, tab_reporte = st.tabs(
+    st.markdown('<p class="neon-title">Panel de operaciones</p>', unsafe_allow_html=True)
+
+    tab_citas, tab_customers, tab_admin_contratos, tab_encuestas, tab_reporte = st.tabs(
         [
-            "Citas · Cherry Ink",
+            "Gestión citas",
             "Gestión de clientes",
-            "Contratos",
-            "Administrador contratos",
-            "Encuestas · Rock City",
-            "Reporte (validación)",
+            "Gestión contratos",
+            "Gestión encuesta",
+            "Gestión reporte",
         ]
     )
 
@@ -236,88 +211,14 @@ def main() -> None:
     with tab_customers:
         render_customers_management_tab()
 
-    with tab_contratos:
-        with st.expander("Firma de contrato", expanded=True):
-            appt_id = st.number_input("ID cita *", min_value=0, value=0, step=1)
-            is_minor = st.checkbox("Es menor de edad", value=False)
-            template_id_con = st.number_input("ID plantilla (opcional, 0 = omitir)", min_value=0, value=0, step=1)
-            signature = st.text_input("Firma cliente / referencia *", placeholder="Texto o hash de firma")
-            tutor_signature = st.text_input("Firma tutor (si menor)", placeholder="Opcional")
-            health_json = st.text_area(
-                "Datos de salud (JSON objeto) *",
-                height=160,
-                placeholder='{"alergias":"ninguna","medicacion":"..."}',
-            )
-            if st.button("Enviar contrato", key="btn_contract"):
-                tid = None if template_id_con == 0 else int(template_id_con)
-                valid, errs, health = validate_contract(
-                    int(appt_id), signature, health_json, tutor_signature, tid
-                )
-                if not valid or health is None:
-                    _show_validation_errors(errs)
-                else:
-                    payload = {
-                        "appointment_id": int(appt_id),
-                        "is_minor": bool(is_minor),
-                        "health_data": health,
-                        "signature": signature.strip(),
-                        "tutor_signature": tutor_signature.strip() or None,
-                        "template_id": tid,
-                    }
-                    ok, code, data = api_client.post_contract(payload)
-                    if ok:
-                        body = json.dumps(data, ensure_ascii=False) if isinstance(data, dict) else str(data)
-                        st.markdown(f'<div class="m-success">{body}</div>', unsafe_allow_html=True)
-                    else:
-                        st.markdown(f'<div class="m-error">HTTP {code}: {_api_error(data)}</div>', unsafe_allow_html=True)
-
     with tab_admin_contratos:
         render_contract_admin_tab()
 
     with tab_encuestas:
-        st.markdown('<p class="sub-lavender">Satisfacción y seguimiento — Rock City</p>', unsafe_allow_html=True)
-        with st.expander("Nueva encuesta", expanded=True):
-            s_appt = st.number_input("ID cita *", min_value=0, value=0, step=1, key="s_appt")
-            s_rating = st.slider("Calificación (1–5)", 1, 5, 5)
-            s_comments = st.text_area("Comentarios", max_chars=2000)
-            s_rec = st.checkbox("Recomendaría el estudio", value=True)
-            if st.button("Registrar encuesta", key="btn_survey"):
-                valid, errs = validate_survey(int(s_appt), int(s_rating), s_comments)
-                if not valid:
-                    _show_validation_errors(errs)
-                else:
-                    payload = {
-                        "appointment_id": int(s_appt),
-                        "rating": int(s_rating),
-                        "comments": s_comments.strip() or None,
-                        "would_recommend": bool(s_rec),
-                    }
-                    ok, code, data = api_client.post_survey(payload)
-                    if ok:
-                        body = json.dumps(data, ensure_ascii=False) if isinstance(data, dict) else str(data)
-                        st.markdown(f'<div class="m-success">{body}</div>', unsafe_allow_html=True)
-                    else:
-                        st.markdown(f'<div class="m-error">HTTP {code}: {_api_error(data)}</div>', unsafe_allow_html=True)
-
-        with st.expander("Listado encuestas", expanded=False):
-            if st.button("Refrescar encuestas", key="btn_survey_list"):
-                ok, code, data = api_client.get_surveys()
-                if ok and isinstance(data, list):
-                    st.dataframe(data, use_container_width=True, hide_index=True)
-                else:
-                    st.markdown(f'<div class="m-error">HTTP {code}: {_api_error(data)}</div>', unsafe_allow_html=True)
+        st.info("Gestión encuesta — en construcción.")
 
     with tab_reporte:
-        with st.expander("Rango de fechas", expanded=True):
-            st.caption("Validación en cliente; conecta aquí un endpoint de informes cuando exista en la API.")
-            d1 = st.text_input("Inicio AAAA-MM-DD", key="r_start")
-            d2 = st.text_input("Fin AAAA-MM-DD", key="r_end")
-            if st.button("Validar rango", key="btn_report"):
-                valid, errs = validate_report_dates(d1, d2)
-                if not valid:
-                    _show_validation_errors(errs)
-                else:
-                    st.success("Rango de fechas válido.")
+        st.info("Gestión reporte — en construcción.")
 
 
 if __name__ == "__main__":

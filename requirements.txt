@@ -7,3 +7,4 @@ streamlit
 streamlit-drawable-canvas
 pydantic>=2
 email-validator
+openpyxl

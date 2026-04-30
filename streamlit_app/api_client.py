@@ -167,3 +167,29 @@ def put_customer(customer_id: int, payload: Dict[str, Any]) -> Tuple[bool, int, 
 
 def delete_customer(customer_id: int) -> Tuple[bool, int, Any]:
     return _request("DELETE", f"/api/customers/{customer_id}")
+
+
+def get_health_n8n() -> Tuple[bool, int, Any]:
+    """GET /health/n8n en la API Litestar (sondeo real de la misma configuración que el backend)."""
+    return _request("GET", "/health/n8n", timeout=25)
+
+
+def check_n8n_webhook_connection() -> Tuple[str, str]:
+    """
+    Usa GET /health/n8n de la API (`API_BASE_URL` / .env).
+
+    Retorna (nivel, mensaje) para Streamlit: success / warn / error.
+    """
+    _, code, raw = get_health_n8n()
+    if isinstance(raw, dict):
+        lvl = raw.get("level")
+        msg = raw.get("message")
+        if isinstance(lvl, str) and lvl in ("success", "warn", "error") and isinstance(msg, str):
+            return lvl, msg
+    if code == 0:
+        det = raw.get("detail", raw) if isinstance(raw, dict) else raw
+        return (
+            "error",
+            f"No hay conexión con la API en {base_url()} ({det}). Arranca Litestar (`uvicorn app.main:app`).",
+        )
+    return "error", f"Respuesta inesperada de /health/n8n (HTTP {code}): {raw!s}"
