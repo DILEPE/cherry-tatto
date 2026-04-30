@@ -10,6 +10,7 @@ Esta carpeta contiene scripts SQL para crear la estructura base y aplicar cambio
 4. `004_appointment_status_workflow.sql`
 5. `005_appointment_financial_fields.sql`
 6. `006_appointment_payments_traceability.sql`
+7. `007_relax_minor_guardian_check.sql` (solo si existe el CHECK `chk_customers_minor_guardian`; ver nota en el script)
 
 > Nota: `001_customers_and_appointments_fk.sql` queda como referencia histórica porque la estructura base ya está consolidada en `000_initial_schema_cherry_tatto.sql`.
 
@@ -22,6 +23,7 @@ Si tu base ya existe y solo quieres actualizar:
 3. `004_appointment_status_workflow.sql`
 4. `005_appointment_financial_fields.sql`
 5. `006_appointment_payments_traceability.sql`
+6. `007_relax_minor_guardian_check.sql` (opcional, según el script)
 
 ## Rollback de datos (no estructura)
 

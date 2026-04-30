@@ -74,26 +74,17 @@ class CustomerCreate(BaseModel):
             if self.document_issue_date is not None and self.document_issue_date > today:
                 raise ValueError("document_issue_date cannot be in the future for TI.")
         else:
-            if self.document_issue_date is not None:
+            if self.document_issue_date is not None and not expected_minor:
                 adulthood_date = self._subtract_years(self.birth_date, -18)
                 if self.document_issue_date < adulthood_date:
                     raise ValueError(
                         "For non-TI documents, document_issue_date must be at least 18 years after birth_date."
                     )
 
-        if self.is_minor:
-            if (
-                not self.guardian_name
-                or not self.guardian_document_type
-                or not self.guardian_document_number
-                or self.guardian_document_issue_date is None
-            ):
-                raise ValueError(
-                    "When is_minor is true, guardian_name, guardian_document_type, "
-                    "guardian_document_number and guardian_document_issue_date are required."
-                )
-            if self.guardian_document_type == "TI":
-                raise ValueError("guardian_document_type cannot be TI.")
+        # Menores: el tutor puede completarse después del agendamiento (p. ej. en administración de clientes).
+        if self.is_minor and self.guardian_document_type == "TI":
+            raise ValueError("guardian_document_type cannot be TI.")
+        if self.is_minor and self.guardian_document_issue_date is not None:
             if self.guardian_document_issue_date < min_allowed_date or self.guardian_document_issue_date > today:
                 raise ValueError(
                     "guardian_document_issue_date must be within the last 100 years and not in the future."
@@ -169,26 +160,16 @@ class CustomerUpdate(BaseModel):
             if self.document_issue_date is not None and self.document_issue_date > today:
                 raise ValueError("document_issue_date cannot be in the future for TI.")
         else:
-            if self.document_issue_date is not None:
+            if self.document_issue_date is not None and not expected_minor:
                 adulthood_date = self._subtract_years(self.birth_date, -18)
                 if self.document_issue_date < adulthood_date:
                     raise ValueError(
                         "For non-TI documents, document_issue_date must be at least 18 years after birth_date."
                     )
 
-        if self.is_minor:
-            if (
-                not self.guardian_name
-                or not self.guardian_document_type
-                or not self.guardian_document_number
-                or self.guardian_document_issue_date is None
-            ):
-                raise ValueError(
-                    "When is_minor is true, guardian_name, guardian_document_type, "
-                    "guardian_document_number and guardian_document_issue_date are required."
-                )
-            if self.guardian_document_type == "TI":
-                raise ValueError("guardian_document_type cannot be TI.")
+        if self.is_minor and self.guardian_document_type == "TI":
+            raise ValueError("guardian_document_type cannot be TI.")
+        if self.is_minor and self.guardian_document_issue_date is not None:
             if self.guardian_document_issue_date < min_allowed_date or self.guardian_document_issue_date > today:
                 raise ValueError(
                     "guardian_document_issue_date must be within the last 100 years and not in the future."

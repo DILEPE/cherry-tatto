@@ -10,7 +10,27 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.domain.models import AppointmentCreate
 from app.schemas.customer import CustomerCreate
 
-_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def normalize_appointment_datetime_string(v: str) -> str:
+    """
+    Normaliza a 'YYYY-MM-DD HH:MM:00' para MySQL DATETIME.
+    Acepta YYYY-MM-DD (legacy → 09:00), YYYY-MM-DD HH:MM, YYYY-MM-DD HH:MM:SS o ISO con T.
+    """
+    raw = (v or "").strip().replace("T", " ")
+    if not raw:
+        raise ValueError("La fecha/hora de la cita no puede estar vacía.")
+    if _DATE_ONLY.match(raw) and len(raw) == 10:
+        datetime.strptime(raw, "%Y-%m-%d")
+        return f"{raw} 09:00:00"
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            dt = datetime.strptime(raw, fmt)
+            return dt.strftime("%Y-%m-%d %H:%M:00")
+        except ValueError:
+            continue
+    raise ValueError("Usa AAAA-MM-DD o AAAA-MM-DD HH:MM (hora local de la cita).")
 
 
 class AppointmentCreateRequest(BaseModel):
@@ -19,24 +39,22 @@ class AppointmentCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     phone: str = Field(..., min_length=5, max_length=40)
     service: str = Field(..., min_length=1, max_length=120)
-    date: str = Field(..., description="YYYY-MM-DD")
+    date: str = Field(
+        ...,
+        description="YYYY-MM-DD o YYYY-MM-DD HH:MM (se guarda como DATETIME).",
+    )
     detail: Optional[str] = Field(None, max_length=5000)
     deposit: float = Field(ge=0, default=0)
     total_amount: float = Field(ge=0, default=0)
     pending_balance: float = Field(ge=0, default=0)
+    is_priority: bool = Field(default=False, description="Cita prioritaria (etiqueta roja en agenda).")
     customer_id: Optional[int] = Field(default=None, ge=1)
     customer: Optional[CustomerCreate] = None
 
     @field_validator("date")
     @classmethod
     def date_ok(cls, v: str) -> str:
-        if not _DATE.match(v):
-            raise ValueError("date must be YYYY-MM-DD")
-        try:
-            datetime.strptime(v, "%Y-%m-%d")
-        except ValueError as e:
-            raise ValueError("invalid calendar date") from e
-        return v
+        return normalize_appointment_datetime_string(v)
 
 
 def appointment_request_to_domain(req: AppointmentCreateRequest) -> AppointmentCreate:
@@ -50,6 +68,7 @@ def appointment_request_to_domain(req: AppointmentCreateRequest) -> AppointmentC
         deposit=req.deposit,
         total_amount=req.total_amount,
         pending_balance=req.pending_balance,
+        is_priority=bool(req.is_priority),
         customer_id=req.customer_id,
         customer=req.customer.model_dump(mode="json") if req.customer is not None else None,
     )
@@ -64,12 +83,13 @@ class AppointmentListItem(BaseModel):
     phone: Optional[str] = None
     service_type: Optional[str] = None
     detail: Optional[str] = None
-    appointment_date: Optional[date | str] = None
+    appointment_date: Optional[date | datetime | str] = None
     deposit: Optional[float] = None
     total_amount: Optional[float] = None
     pending_balance: Optional[float] = None
     customer_credit: Optional[float] = None
     status: Optional[str] = None
+    is_priority: Optional[bool] = None
     customer_id: Optional[int] = None
     created_at: Optional[datetime | str] = None
 
@@ -104,19 +124,13 @@ class AppointmentStatusUpdateRequest(BaseModel):
 class AppointmentRescheduleRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    date: str = Field(..., description="YYYY-MM-DD")
+    date: str = Field(..., description="YYYY-MM-DD o YYYY-MM-DD HH:MM")
     detail: Optional[str] = Field(None, max_length=5000)
 
     @field_validator("date")
     @classmethod
     def date_ok(cls, v: str) -> str:
-        if not _DATE.match(v):
-            raise ValueError("date must be YYYY-MM-DD")
-        try:
-            datetime.strptime(v, "%Y-%m-%d")
-        except ValueError as e:
-            raise ValueError("invalid calendar date") from e
-        return v
+        return normalize_appointment_datetime_string(v)
 
 
 class AppointmentFinancialUpdateRequest(BaseModel):

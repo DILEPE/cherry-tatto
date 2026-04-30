@@ -1,16 +1,20 @@
-"""Streamlit: Citas tab with customer sync before appointment creation."""
+"""Streamlit: Citas con calendario, franjas horarias y formulario mínimo."""
 from __future__ import annotations
 
-import json
-from datetime import date, datetime
+import calendar
+import html as html_mod
+from datetime import date, datetime, time
 from io import BytesIO
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
-from app.domain.service_types import configured_service_types
+from pydantic import ValidationError
+
+from app.domain.service_types import resolve_service_type
+from app.schemas.customer import CustomerCreate
 from streamlit_app import api_client
-from streamlit_app.customer_sync import fetch_customer_by_document, parse_social_media_json, sync_customer
+from streamlit_app.customer_sync import fetch_customer_by_document
 from streamlit_app.validation import validate_appointment
 
 
@@ -221,17 +225,343 @@ def _citas_filtered_to_excel_bytes(rows: list[dict[str, Any]], *, generated_at: 
 
 
 def _parse_date(val: Any) -> date:
+    if isinstance(val, datetime):
+        return val.date()
     if isinstance(val, date):
         return val
     if isinstance(val, str) and val:
-        return datetime.strptime(val[:10], "%Y-%m-%d").date()
+        s = val.strip().replace("T", " ")
+        return datetime.strptime(s[:10], "%Y-%m-%d").date()
     return date(1990, 1, 1)
 
 
-def _is_minor_by_birth_date(birth_date: date) -> bool:
-    today = date.today()
-    years = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
-    return years < 18
+def _format_appt_when(val: Any) -> str:
+    if val is None:
+        return ""
+    if isinstance(val, datetime):
+        return val.strftime("%d/%m/%Y %H:%M")
+    if isinstance(val, date):
+        return val.strftime("%d/%m/%Y")
+    s = str(val).strip().replace("T", " ")
+    if not s:
+        return ""
+    for c in (s, s[:19], s[:10]):
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            try:
+                dt = datetime.strptime(c, fmt)
+                if fmt == "%Y-%m-%d":
+                    return dt.strftime("%d/%m/%Y")
+                return dt.strftime("%d/%m/%Y %H:%M")
+            except ValueError:
+                pass
+    return s[:16]
+
+
+def _time_slot_options() -> List[str]:
+    """Franjas cada 30 min entre 08:00 y 20:00 inclusive."""
+    slots: List[str] = []
+    minutes = 8 * 60
+    last = 20 * 60
+    while minutes <= last:
+        h, mm = divmod(minutes, 60)
+        slots.append(f"{h:02d}:{mm:02d}")
+        minutes += 30
+    return slots
+
+
+_BOOKING_WORK_KIND_ORDER = ("piercing", "tatuaje", "limpieza_tatuaje", "cambio_piercing")
+_BOOKING_WORK_KIND_META: Dict[str, Dict[str, Any]] = {
+    "piercing": {
+        "label": "Piercing (colocación)",
+        "duration_slots": 2,
+        "service_token": "piercing",
+        "detail_tag": "[Piercing]",
+    },
+    "tatuaje": {
+        "label": "Tatuaje (sesión)",
+        "duration_slots": 4,
+        "service_token": "tattoo",
+        "detail_tag": "[Tatuaje]",
+    },
+    "limpieza_tatuaje": {
+        "label": "Limpieza de tatuaje",
+        "duration_slots": 1,
+        "service_token": "tattoo",
+        "detail_tag": "[Limpieza tatuaje]",
+    },
+    "cambio_piercing": {
+        "label": "Cambio de piercing",
+        "duration_slots": 1,
+        "service_token": "piercing",
+        "detail_tag": "[Cambio piercing]",
+    },
+}
+
+
+def _booking_client_age_years(bd: date) -> int:
+    t = date.today()
+    return t.year - bd.year - ((t.month, t.day) < (bd.month, bd.day))
+
+
+def _booking_is_minor_birth(bd: date) -> bool:
+    return _booking_client_age_years(bd) < 18
+
+
+def _duration_slots_for_existing_appointment(row: dict[str, Any]) -> int:
+    """Franjas de 30 min ocupadas por citas ya guardadas (heurística por servicio y detalle)."""
+    svc = str(row.get("service_type") or row.get("service") or "").strip().lower()
+    det = str(row.get("detail") or "").strip().lower()
+    combined = f"{svc} {det}"
+    if "limpieza" in det:
+        return 1
+    if "cambio" in det and "pierc" in combined:
+        return 1
+    if "tatu" in combined or "tattoo" in svc:
+        return 4
+    if "pierc" in combined or svc == "piercing":
+        return 2
+    if "other" in svc or "otro" in svc:
+        return 1
+    return 2
+
+
+def _appointments_same_day_raw(items: list[dict[str, Any]], day: date) -> list[dict[str, Any]]:
+    """Citas de ese día usando la lista completa de API (sin filtrar por nombre), para no solapar huecos."""
+    out: list[dict[str, Any]] = []
+    for row in items:
+        try:
+            d = _parse_date(row.get("appointment_date", row.get("date")))
+        except (TypeError, ValueError):
+            continue
+        if d != day:
+            continue
+        out.append(row)
+    return out
+
+
+def _busy_slot_indices_for_day(day_rows: list[dict[str, Any]], slot_list: list[str]) -> set[int]:
+    busy: set[int] = set()
+    n = len(slot_list)
+    for row in day_rows:
+        if str(row.get("status") or "").strip().lower() == "cancelada":
+            continue
+        hm = _appt_time_hm(row.get("appointment_date", row.get("date")))
+        if hm == "—":
+            continue
+        try:
+            start_idx = slot_list.index(hm)
+        except ValueError:
+            continue
+        dur = _duration_slots_for_existing_appointment(row)
+        for j in range(start_idx, min(start_idx + dur, n)):
+            busy.add(j)
+    return busy
+
+
+def _available_start_slots(slot_list: list[str], need_slots: int, busy: set[int]) -> list[str]:
+    n = len(slot_list)
+    out: list[str] = []
+    for i in range(n):
+        if i + need_slots > n:
+            break
+        if any(j in busy for j in range(i, i + need_slots)):
+            continue
+        out.append(slot_list[i])
+    return out
+
+
+def _service_and_detail_for_work_kind(kind: str, user_detail: str) -> tuple[str, Optional[str]]:
+    meta = _BOOKING_WORK_KIND_META.get(kind) or _BOOKING_WORK_KIND_META["piercing"]
+    svc = resolve_service_type(meta["service_token"])
+    tag = meta["detail_tag"]
+    extra = (user_detail or "").strip()
+    if extra:
+        return svc, f"{tag} {extra}".strip()
+    return svc, tag
+
+
+def _combine_appointment_datetime(d: date, slot_hm: str) -> str:
+    slot_hm = (slot_hm or "09:00").strip()
+    parts = slot_hm.split(":")
+    h = int(parts[0])
+    m = int(parts[1]) if len(parts) > 1 else 0
+    return f"{d.strftime('%Y-%m-%d')} {h:02d}:{m:02d}:00"
+
+
+def _parse_existing_slot(val: Any) -> tuple[date, str]:
+    d = _parse_date(val)
+    s = str(val or "").strip().replace("T", " ")
+    opts = _time_slot_options()
+    if len(s) >= 16:
+        chunk = s[11:16]
+        if chunk in opts:
+            return d, chunk
+    return d, "09:00" if "09:00" in opts else opts[0]
+
+
+def _appt_time_hm(val: Any) -> str:
+    """Hora HH:MM para listados compactos; '—' si solo hay fecha."""
+    if val is None:
+        return "—"
+    if isinstance(val, datetime):
+        return val.strftime("%H:%M")
+    if isinstance(val, date) and not isinstance(val, datetime):
+        return "—"
+    s = str(val).strip().replace("T", " ")
+    if not s:
+        return "—"
+    for chunk, fmt in ((s[:19], "%Y-%m-%d %H:%M:%S"), (s[:16], "%Y-%m-%d %H:%M")):
+        try:
+            return datetime.strptime(chunk, fmt).strftime("%H:%M")
+        except ValueError:
+            pass
+    return "—"
+
+
+def _appointments_by_day_sorted(items: list[dict[str, Any]]) -> dict[tuple[int, int, int], list[dict[str, Any]]]:
+    """Citas agrupadas por día local, ordenadas por hora de inicio."""
+    buckets: dict[tuple[int, int, int], list[dict[str, Any]]] = {}
+
+    def sort_key(r: dict[str, Any]) -> tuple[int, int]:
+        raw = r.get("appointment_date", r.get("date"))
+        if isinstance(raw, datetime):
+            return (raw.hour, raw.minute)
+        s = str(raw or "").strip().replace("T", " ")
+        for chunk, fmt in ((s[:19], "%Y-%m-%d %H:%M:%S"), (s[:16], "%Y-%m-%d %H:%M")):
+            try:
+                dt = datetime.strptime(chunk, fmt)
+                return (dt.hour, dt.minute)
+            except ValueError:
+                pass
+        return (99, 99)
+
+    for row in items:
+        try:
+            d = _parse_date(row.get("appointment_date", row.get("date")))
+        except (TypeError, ValueError):
+            continue
+        key = (d.year, d.month, d.day)
+        buckets.setdefault(key, []).append(row)
+    for appts in buckets.values():
+        appts.sort(key=sort_key)
+    return buckets
+
+
+def _normalize_phone_digits(phone: Any) -> str:
+    return "".join(c for c in str(phone or "") if c.isdigit())
+
+
+def _client_history_key(row: dict[str, Any]) -> str:
+    """Clave estable para contar citas históricas por cliente (id, teléfono o nombre)."""
+    cid = row.get("customer_id")
+    if cid is not None and str(cid).strip() != "":
+        try:
+            return f"id:{int(cid)}"
+        except (TypeError, ValueError):
+            pass
+    ph = _normalize_phone_digits(row.get("phone"))
+    if ph:
+        return f"ph:{ph}"
+    nm = str(row.get("customer_name") or row.get("name") or "").strip().lower()
+    if nm:
+        return f"nm:{nm}"
+    return f"row:{row.get('id', 0)}"
+
+
+def _appointment_counts_by_client(items: list[dict[str, Any]]) -> dict[str, int]:
+    """Total de citas por cliente en todo el histórico cargado (lista API)."""
+    counts: dict[str, int] = {}
+    for row in items:
+        k = _client_history_key(row)
+        counts[k] = counts.get(k, 0) + 1
+    return counts
+
+
+def _row_is_priority(row: dict[str, Any]) -> bool:
+    v = row.get("is_priority")
+    if v is True or v == 1:
+        return True
+    if isinstance(v, str) and v.strip().lower() in ("1", "true", "yes"):
+        return True
+    return False
+
+
+def _client_pill_class(row: dict[str, Any], counts_by_client: dict[str, int]) -> str:
+    """
+    Prioridad de etiqueta: Reprogramada > Prioritaria > Cliente recurrente (>1 cita) > Cliente nuevo.
+    Así, prioritaria y reprogramada prevalecen sobre el criterio de antigüedad del cliente.
+    """
+    stv = str(row.get("status") or "").strip().lower()
+    if stv == "reprogramada":
+        return "cli-pill-reprogramada"
+    if _row_is_priority(row):
+        return "cli-pill-priority"
+    key = _client_history_key(row)
+    if counts_by_client.get(key, 0) > 1:
+        return "cli-pill-returning"
+    return "cli-pill-new"
+
+
+def _customer_name_pill_html(row: dict[str, Any], counts_by_client: dict[str, int]) -> str:
+    name = str(row.get("customer_name") or row.get("name") or "").strip() or "—"
+    cls = _client_pill_class(row, counts_by_client)
+    return f'<span class="cli-pill {cls}">{html_mod.escape(name)}</span>'
+
+
+def _calendar_overflow_row_html(row: dict[str, Any], counts_by_client: dict[str, int]) -> str:
+    """Línea para el diálogo de citas extra: hora + nombre completo con pill de cliente."""
+    hm = _appt_time_hm(row.get("appointment_date", row.get("date")))
+    st_cl = str(row.get("status") or "").strip().lower()
+    dim = "opacity:0.55;" if st_cl == "cancelada" else ""
+    pill = _customer_name_pill_html(row, counts_by_client)
+    return (
+        f"<div style='font-size:0.86rem;line-height:1.5;{dim}margin:0.4rem 0;padding-bottom:0.35rem;"
+        f"border-bottom:1px solid rgba(148,163,184,0.35);display:flex;flex-wrap:wrap;align-items:center;gap:0.35rem'>"
+        f"<span style='font-weight:600'>{html_mod.escape(hm)}</span><span>·</span>{pill}</div>"
+    )
+
+
+def _calendar_appt_line_html(
+    row: dict[str, Any],
+    counts_by_client: dict[str, int],
+    *,
+    short_len: int = 12,
+) -> str:
+    """HTML de una línea en celda del calendario (hora + nombre en pill)."""
+    hm = _appt_time_hm(row.get("appointment_date", row.get("date")))
+    nm = str(row.get("customer_name") or row.get("name") or "").strip() or "—"
+    short = nm if len(nm) <= short_len else nm[: short_len - 1] + "…"
+    cls = _client_pill_class(row, counts_by_client)
+    st_cl = str(row.get("status") or "").strip().lower()
+    dim = "opacity:0.5;" if st_cl == "cancelada" else ""
+    pill = f'<span class="cli-pill {cls}">{html_mod.escape(short)}</span>'
+    inner = f"{html_mod.escape(hm)} · {pill}"
+    title = html_mod.escape(f"{hm} · {nm}")
+    return (
+        f"<div title='{title}' style='font-size:0.72rem;line-height:1.35;{dim}white-space:nowrap;"
+        f"overflow:hidden;text-overflow:ellipsis'>{inner}</div>"
+    )
+
+
+_MONTHS_ES = (
+    "",
+    "Enero",
+    "Febrero",
+    "Marzo",
+    "Abril",
+    "Mayo",
+    "Junio",
+    "Julio",
+    "Agosto",
+    "Septiembre",
+    "Octubre",
+    "Noviembre",
+    "Diciembre",
+)
+
+
+def _weekday_headers_es() -> List[str]:
+    return ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
 
 
 def _shift_years(base: date, years: int) -> date:
@@ -242,270 +572,90 @@ def _shift_years(base: date, years: int) -> date:
         return base.replace(year=target_year, day=28)
 
 
-def _date_range_100y_past() -> tuple[date, date]:
-    today = date.today()
-    return _shift_years(today, -100), today
-
-
 def _date_range_100y_window() -> tuple[date, date]:
     today = date.today()
     return _shift_years(today, -100), _shift_years(today, 100)
 
 
-def _validate_document_rules(
-    *,
-    birth_date: date,
-    document_type: str,
-    has_document_issue_date: bool,
-    document_issue_date: date,
-) -> Optional[str]:
-    today = date.today()
-    if not has_document_issue_date:
-        return None
-    if document_issue_date > today:
-        return "La fecha de expedición del documento no puede ser futura."
-    if document_type == "TI":
-        if not _is_minor_by_birth_date(birth_date):
-            return "Si el documento es TI, la fecha de nacimiento debe indicar menor de 18 años."
-        return None
-    adulthood_date = _shift_years(birth_date, 18)
-    if document_issue_date < adulthood_date:
-        return "Para documentos distintos de TI, la expedición debe ser al menos 18 años después del nacimiento."
-    return None
-
-
-def _social_to_text(row: Optional[Dict[str, Any]]) -> str:
-    if not row or not row.get("social_media"):
-        return ""
-    sm = row["social_media"]
-    if isinstance(sm, str):
-        return sm
-    try:
-        return json.dumps(sm, ensure_ascii=False)
-    except (TypeError, ValueError):
-        return ""
-
-
-def _apply_customer_row_to_session(row: Dict[str, Any]) -> None:
-    """
-    Copia un cliente de la API al st.session_state de los widgets.
-    Debe llamarse al **inicio** de la app, **antes** de instanciar widgets con esas claves
-    (p. ej. tras un st.rerun() que encola el resultado de «Buscar por documento»).
-    """
-    st.session_state["ap_doc_t"] = row.get("document_type") or "CC"
-    st.session_state["ap_doc_n"] = (row.get("document_number") or "").strip()
-    ddi = row.get("document_issue_date")
-    st.session_state["ap_has_ddi"] = bool(ddi)
-    st.session_state["ap_ddi"] = _parse_date(ddi) if ddi else date(2015, 1, 1)
-    st.session_state["ap_fn"] = (row.get("first_name") or "").strip()
-    st.session_state["ap_ln"] = (row.get("last_name") or "").strip()
-    st.session_state["ap_bd"] = _parse_date(row.get("birth_date"))
-    st.session_state["ap_em"] = (row.get("email") or "").strip()
-    st.session_state["ap_addr"] = (row.get("address") or "").strip() or ""
-    st.session_state["ap_nat"] = (row.get("nationality") or "").strip() or ""
-    st.session_state["ap_prof"] = (row.get("profession") or "").strip() or ""
-    st.session_state["ap_se"] = (row.get("secondary_email") or "").strip() or ""
-    st.session_state["ap_sm"] = _social_to_text(row)
-    st.session_state["ap_ecn"] = (row.get("emergency_contact_name") or "").strip() or ""
-    st.session_state["ap_ecp"] = (row.get("emergency_contact_phone") or "").strip() or ""
-    st.session_state["ap_minor"] = bool(row.get("is_minor"))
-    st.session_state["ap_gn"] = (row.get("guardian_name") or "").strip() or ""
-    gtype = (row.get("guardian_document_type") or "CC")
-    st.session_state["ap_gdt"] = gtype if gtype in ("CC", "TI", "CE", "PAS") else "CC"
-    st.session_state["ap_gdn"] = (row.get("guardian_document_number") or "").strip() or ""
-    gdiv = row.get("guardian_document_issue_date")
-    st.session_state["ap_has_gdi"] = bool(gdiv)
-    st.session_state["ap_gdi"] = _parse_date(gdiv) if gdiv else date(2000, 1, 1)
-    st.session_state["ap_phone"] = (row.get("phone_number") or "").strip()
-    st.session_state["_ap_last_loaded_id"] = row.get("id")
-    st.session_state["_ap_prefill_meta"] = (
-        f"{st.session_state['ap_fn']} {st.session_state['ap_ln']}".strip()
-    )
-    st.session_state["_ap_doc_verified"] = True
-    st.session_state["_ap_doc_verified_doc"] = st.session_state["ap_doc_n"]
-
-
-def _reset_customer_fields_keep_doc(doc_keep: str) -> None:
-    """Vaciar datos de cliente al no existir documento, manteniendo el número buscado."""
-    st.session_state["ap_fn"] = ""
-    st.session_state["ap_ln"] = ""
-    st.session_state["ap_bd"] = date(1990, 1, 1)
-    st.session_state["ap_em"] = ""
-    st.session_state["ap_addr"] = ""
-    st.session_state["ap_nat"] = ""
-    st.session_state["ap_prof"] = ""
-    st.session_state["ap_se"] = ""
-    st.session_state["ap_sm"] = ""
-    st.session_state["ap_ecn"] = ""
-    st.session_state["ap_ecp"] = ""
-    st.session_state["ap_minor"] = False
-    st.session_state["ap_gn"] = ""
-    st.session_state["ap_gdt"] = "CC"
-    st.session_state["ap_gdn"] = ""
-    st.session_state["ap_has_gdi"] = False
-    st.session_state["ap_gdi"] = date(2000, 1, 1)
-    st.session_state["ap_phone"] = ""
-    st.session_state["ap_doc_t"] = "CC"
-    st.session_state["ap_doc_n"] = doc_keep
-    st.session_state["ap_has_ddi"] = False
-    st.session_state["ap_ddi"] = date(2015, 1, 1)
-    st.session_state["_ap_prefill_meta"] = None
-    st.session_state["_ap_last_loaded_id"] = None
-    st.session_state["_ap_doc_verified"] = False
-    st.session_state["_ap_doc_verified_doc"] = ""
-
-
 def _init_appt_form_state_once() -> None:
-    """Valores iniciales solo la primera vez (hasta `st.rerun` típico)."""
     if st.session_state.get("_ap_form_ready"):
         return
+    slot_opts = _time_slot_options()
+    default_slot = "09:00" if "09:00" in slot_opts else slot_opts[0]
     defaults: Dict[str, Any] = {
-        "ap_doc_t": "CC",
-        "ap_doc_n": "",
-        "ap_has_ddi": False,
-        "ap_ddi": date(2015, 1, 1),
         "ap_fn": "",
         "ap_ln": "",
-        "ap_bd": date(1990, 1, 1),
-        "ap_em": "",
-        "ap_addr": "",
-        "ap_nat": "",
-        "ap_prof": "",
-        "ap_se": "",
-        "ap_sm": "",
-        "ap_ecn": "",
-        "ap_ecp": "",
-        "ap_minor": False,
-        "ap_gn": "",
-        "ap_gdt": "CC",
-        "ap_gdn": "",
-        "ap_has_gdi": False,
-        "ap_gdi": date(2000, 1, 1),
         "ap_phone": "",
+        "ap_email": "",
         "ap_ad": date.today(),
+        "ap_slot": default_slot,
         "ap_det": "",
         "ap_dep": 0.0,
         "ap_total": 0.0,
-        "_ap_doc_verified": False,
-        "_ap_doc_verified_doc": "",
+        "ap_priority": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
-    svc = list(configured_service_types())
-    st.session_state["ap_svc"] = svc[0] if svc else "tattoo"
+    if "ap_work_kind" not in st.session_state:
+        st.session_state["ap_work_kind"] = "piercing"
+    if "ap_birth_date" not in st.session_state:
+        st.session_state["ap_birth_date"] = date(2000, 1, 1)
+    if "ap_doc_type" not in st.session_state:
+        st.session_state["ap_doc_type"] = "CC"
     st.session_state["_ap_form_ready"] = True
-    st.session_state["_ap_prefill_meta"] = None
-    st.session_state["_ap_last_loaded_id"] = None
 
 
-def _process_pending_lookup() -> None:
-    """
-    Aplica búsqueda de cliente en la siguiente ejecución, **antes** de crear widgets,
-    para poder escribir en st.session_state sin violar reglas de Streamlit.
-    """
-    pending = st.session_state.pop("_ap_pending_lookup", None)
-    if not isinstance(pending, dict):
-        return
-    action = pending.get("action")
-    if action == "apply" and pending.get("row"):
-        _apply_customer_row_to_session(pending["row"])
-        st.session_state["_ap_flash"] = (
-            "success",
-            "Datos del cliente existente cargados en el formulario.",
-        )
-    elif action == "not_found" and pending.get("doc") is not None:
-        _reset_customer_fields_keep_doc(str(pending["doc"]).strip())
-        st.session_state["_ap_doc_verified"] = True
-        st.session_state["_ap_doc_verified_doc"] = str(pending["doc"]).strip()
-        st.session_state["_ap_flash"] = (
-            "warning",
-            "No hay cliente con ese documento. Completa los datos; se creará al guardar la cita.",
-        )
+def _pop_booking_document_session() -> None:
+    for k in (
+        "_ap_booking_customer_id",
+        "_ap_need_new_customer",
+        "_ap_doc_verified",
+        "_ap_verify_msg",
+        "_ap_verify_level",
+        "_ap_verified_doc_number",
+        "ap_doc_number",
+    ):
+        st.session_state.pop(k, None)
 
 
 def _reset_appointment_form_state() -> None:
-    keys = (
-        "ap_doc_t",
-        "ap_doc_n",
-        "ap_has_ddi",
-        "ap_ddi",
+    for key in (
         "ap_fn",
         "ap_ln",
-        "ap_bd",
-        "ap_em",
-        "ap_addr",
-        "ap_nat",
-        "ap_prof",
-        "ap_se",
-        "ap_sm",
-        "ap_ecn",
-        "ap_ecp",
-        "ap_minor",
-        "ap_gn",
-        "ap_gdt",
-        "ap_gdn",
-        "ap_has_gdi",
-        "ap_gdi",
         "ap_phone",
+        "ap_email",
         "ap_ad",
+        "ap_slot",
         "ap_det",
         "ap_dep",
         "ap_total",
-        "_ap_doc_verified",
-        "_ap_doc_verified_doc",
-        "_ap_last_loaded_id",
-        "_ap_prefill_meta",
-    )
-    for key in keys:
+        "ap_priority",
+        "ap_work_kind",
+        "ap_birth_date",
+        "ap_doc_type",
+    ):
         st.session_state.pop(key, None)
-    st.session_state.pop("_ap_pending_lookup", None)
-    st.session_state.pop("_ap_flash", None)
     st.session_state["_ap_form_ready"] = False
+    _pop_booking_document_session()
 
 
 @st.dialog("Agendar cita", width="large", dismissible=False)
 def _dialog_agendar_cita() -> None:
     _init_appt_form_state_once()
-    _process_pending_lookup()
-    min_date_100, max_date_today = _date_range_100y_past()
-    min_date_appt, max_date_appt = _date_range_100y_window()
 
-    st.markdown("##### Verificación de cliente por documento")
-    d1, d2 = st.columns([2, 1])
-    with d1:
-        st.selectbox("Tipo documento *", ["CC", "TI", "CE", "PAS"], key="ap_doc_t")
-        st.text_input("Número documento *", key="ap_doc_n", placeholder="Sin espacios")
-        current_doc = (st.session_state.get("ap_doc_n") or "").strip()
-        verified_doc = (st.session_state.get("_ap_doc_verified_doc") or "").strip()
-        if current_doc and verified_doc and current_doc != verified_doc:
-            st.session_state["_ap_doc_verified"] = False
-            st.session_state["_ap_doc_verified_doc"] = ""
-    with d2:
-        st.write("")
-        if st.button("Verificar documento", type="primary", key="ap_doc_lookup"):
-            doc = (st.session_state.get("ap_doc_n") or "").strip()
-            if not doc or len(doc) < 3:
-                st.error("Escribe un número de documento válido (mín. 3 caracteres).")
-            else:
-                ok, msg, row = fetch_customer_by_document(doc)
-                if ok and msg == "ok" and row:
-                    st.session_state["_ap_pending_lookup"] = {"action": "apply", "row": row}
-                    st.rerun()
-                elif ok and msg == "not_found":
-                    st.session_state["_ap_pending_lookup"] = {"action": "not_found", "doc": doc}
-                    st.rerun()
-                else:
-                    st.error(msg)
-
-    verified = bool(st.session_state.get("_ap_doc_verified")) and (
-        (st.session_state.get("_ap_doc_verified_doc") or "").strip()
-        == (st.session_state.get("ap_doc_n") or "").strip()
-    )
-    if not verified:
-        st.info("Primero confirma/verifica el número de documento para habilitar el formulario de cita.")
-        if st.button("Cerrar", use_container_width=True, key="btn_appt_close_unverified"):
-            _reset_appointment_form_state()
+    picked_raw = st.session_state.get("ap_ad")
+    if picked_raw is None:
+        st.error("Selecciona un día en el calendario para agendar.")
+        if st.button("Cerrar", use_container_width=True, key="btn_appt_close_no_day"):
+            st.session_state.pop("_ap_dlg", None)
+            st.rerun()
+        return
+    picked = picked_raw if isinstance(picked_raw, date) else _parse_date(picked_raw)
+    today_d = date.today()
+    if picked < today_d:
+        st.error("No se pueden agendar citas en fechas pasadas. Elige un día de hoy en adelante en el calendario.")
+        if st.button("Cerrar", use_container_width=True, key="btn_appt_close_past_date"):
             st.session_state.pop("_ap_dlg", None)
             st.rerun()
         return
@@ -516,7 +666,7 @@ def _dialog_agendar_cita() -> None:
           .dlg-appt-req-banner {
             border-left: 4px solid #FF007F;
             padding: 0.5rem 0.85rem;
-            margin: 0 0 0.75rem 0;
+            margin: 0.75rem 0 0.75rem 0;
             background: rgba(255, 0, 127, 0.12);
             border-radius: 8px;
             font-size: 0.95rem;
@@ -532,172 +682,265 @@ def _dialog_agendar_cita() -> None:
             margin: 0 0 0.5rem 0;
           }
         </style>
-        <div class="dlg-appt-req-banner">
-          Campos obligatorios
-        </div>
+        <div class="dlg-appt-req-banner">Campos obligatorios</div>
         """,
         unsafe_allow_html=True,
     )
 
-    col_left, col_right = st.columns(2)
+    st.markdown('<p class="dlg-appt-col-h">Tipo de trabajo</p>', unsafe_allow_html=True)
+    st.radio(
+        "¿Qué se va a realizar? *",
+        options=list(_BOOKING_WORK_KIND_ORDER),
+        key="ap_work_kind",
+        format_func=lambda k: (
+            f"{_BOOKING_WORK_KIND_META[k]['label']} "
+            f"({_BOOKING_WORK_KIND_META[k]['duration_slots'] * 30} min)"
+        ),
+        help="La duración define cuántas franjas de 30 min se bloquean; la hora solo ofrece inicios libres ese día.",
+    )
 
-    with col_left:
-        st.markdown('<p class="dlg-appt-col-h">Datos del cliente</p>', unsafe_allow_html=True)
-        fn = st.text_input("Nombre *", key="ap_fn")
-        ln = st.text_input("Apellido *", key="ap_ln")
-        birth_d = st.date_input(
-            "Fecha nacimiento *",
-            key="ap_bd",
-            min_value=min_date_100,
-            max_value=max_date_today,
+    st.markdown('<p class="dlg-appt-col-h">Verificación de documento</p>', unsafe_allow_html=True)
+    st.text_input(
+        "Número de documento *",
+        key="ap_doc_number",
+        placeholder="Sin puntos ni espacios, si es posible",
+    )
+    if st.button("Verificar documento", type="secondary", use_container_width=True, key="ap_btn_verify_doc"):
+        doc_in = (st.session_state.get("ap_doc_number") or "").strip()
+        if len(doc_in) < 5:
+            st.session_state["_ap_verify_level"] = "error"
+            st.session_state["_ap_verify_msg"] = "Ingresa un documento válido (mínimo 5 caracteres)."
+            st.session_state["_ap_doc_verified"] = False
+        else:
+            ok_f, msg_f, row_f = fetch_customer_by_document(doc_in)
+            if not ok_f:
+                st.session_state["_ap_verify_level"] = "error"
+                st.session_state["_ap_verify_msg"] = msg_f
+                st.session_state["_ap_doc_verified"] = False
+            elif msg_f == "not_found":
+                st.session_state["_ap_booking_customer_id"] = None
+                st.session_state["_ap_need_new_customer"] = True
+                st.session_state["_ap_doc_verified"] = True
+                st.session_state["_ap_verified_doc_number"] = doc_in
+                st.session_state["_ap_verify_level"] = "warning"
+                st.session_state["_ap_verify_msg"] = (
+                    "Cliente no registrado. Indica fecha de nacimiento y tipo de documento; completa nombre, apellido, "
+                    "celular y correo. El tutor u otros datos legales pueden completarse después (estado Agendada)."
+                )
+            else:
+                st.session_state["_ap_booking_customer_id"] = int(row_f["id"])
+                st.session_state["_ap_need_new_customer"] = False
+                st.session_state["_ap_doc_verified"] = True
+                st.session_state["_ap_verified_doc_number"] = doc_in
+                st.session_state["ap_fn"] = str(row_f.get("first_name") or "")
+                st.session_state["ap_ln"] = str(row_f.get("last_name") or "")
+                st.session_state["ap_phone"] = str(row_f.get("phone_number") or "")
+                st.session_state["ap_email"] = str(row_f.get("email") or "")
+                st.session_state["_ap_verify_level"] = "success"
+                st.session_state["_ap_verify_msg"] = f"Cliente encontrado (id {row_f['id']}). Datos cargados."
+        st.rerun()
+
+    v_lvl = st.session_state.get("_ap_verify_level")
+    v_msg = st.session_state.get("_ap_verify_msg")
+    if v_msg and v_lvl:
+        if v_lvl == "error":
+            st.error(v_msg)
+        elif v_lvl == "success":
+            st.success(v_msg)
+        else:
+            st.warning(v_msg)
+
+    if st.session_state.get("_ap_need_new_customer"):
+        st.caption(
+            "Para **menores de edad** no se exige tutor al crear la cita; complétalo después en la ficha del cliente o antes del contrato."
         )
-        email = st.text_input("Correo electrónico *", key="ap_em")
-        st.checkbox("Registrar fecha expedición documento cliente", key="ap_has_ddi")
-        _ddi_label = (
-            "Fecha expedición documento cliente *"
-            if st.session_state.get("ap_has_ddi")
-            else "Fecha expedición documento cliente (opcional)"
-        )
+        b_min, b_max = _date_range_100y_window()
         st.date_input(
-            _ddi_label,
-            key="ap_ddi",
-            min_value=min_date_100,
-            max_value=max_date_today,
-        )
-        st.checkbox("Es menor de edad", key="ap_minor", help="Debe coincidir con la fecha de nacimiento.")
-
-    with col_right:
-        st.markdown('<p class="dlg-appt-col-h">Cita y montos</p>', unsafe_allow_html=True)
-        phone = st.text_input("Teléfono cita *", key="ap_phone")
-        svc_options = list(configured_service_types())
-        cur = st.session_state.get("ap_svc", svc_options[0] if svc_options else "tattoo")
-        ix = svc_options.index(cur) if cur in svc_options else 0
-        service = st.selectbox("Tipo de servicio *", options=svc_options, index=ix, key="ap_svc")
-        appointment_date = st.date_input(
-            "Fecha cita *",
-            key="ap_ad",
-            min_value=min_date_appt,
-            max_value=max_date_appt,
+            "Fecha de nacimiento del cliente *",
+            min_value=b_min,
+            max_value=today_d,
+            key="ap_birth_date",
             format="DD/MM/YYYY",
         )
-        detail = st.text_area("Detalle del trabajo (opcional)", height=80, key="ap_det")
+        st.selectbox(
+            "Tipo de documento *",
+            options=["CC", "TI", "CE", "PAS"],
+            format_func=lambda x: {
+                "CC": "CC — Cédula",
+                "TI": "TI — Tarjeta de identidad",
+                "CE": "CE — Extranjería",
+                "PAS": "PAS — Pasaporte",
+            }[x],
+            key="ap_doc_type",
+        )
+        _bd0 = st.session_state.get("ap_birth_date")
+        if isinstance(_bd0, date) and _booking_is_minor_birth(_bd0):
+            st.info(
+                "Cliente **menor de edad**: se marcará automáticamente en el registro. **TI** solo aplica a menores."
+            )
+
+    st.markdown(
+        f"**Fecha de la cita:** {picked.strftime('%d/%m/%Y')} _(elegida en el calendario)_"
+    )
+
+    slot_opts = _time_slot_options()
+    wk = str(st.session_state.get("ap_work_kind") or "piercing")
+    if wk not in _BOOKING_WORK_KIND_META:
+        wk = "piercing"
+    need_slots = int(_BOOKING_WORK_KIND_META[wk]["duration_slots"])
+    raw_appt_list = list(st.session_state.get("_ap_list") or [])
+    day_rows_cal = _appointments_same_day_raw(raw_appt_list, picked)
+    busy_idx = _busy_slot_indices_for_day(day_rows_cal, slot_opts)
+    avail_slots = _available_start_slots(slot_opts, need_slots, busy_idx)
+    cur_slot = st.session_state.get("ap_slot")
+    if avail_slots and cur_slot not in avail_slots:
+        st.session_state["ap_slot"] = avail_slots[0]
+
+    if not avail_slots:
+        st.warning(
+            "No quedan franjas libres ese día para esta duración. Prueba otro día o revisa las citas ya cargadas."
+        )
+        slot = None
+    else:
+        slot = st.selectbox(
+            "Franja de inicio *",
+            options=avail_slots,
+            key="ap_slot",
+            help=f"Se reservan {need_slots} franja(s) de 30 min desde esta hora.",
+        )
+        st.caption(f"Inicio **{slot}** hora local (duración **{need_slots * 30}** min).")
+
+    col_left, col_right = st.columns(2)
+    with col_left:
+        st.markdown('<p class="dlg-appt-col-h">Cliente</p>', unsafe_allow_html=True)
+        fn = st.text_input("Nombre *", key="ap_fn")
+        ln = st.text_input("Apellido *", key="ap_ln")
+        phone = st.text_input("Celular *", key="ap_phone")
+        st.text_input("Correo electrónico *", key="ap_email")
+    with col_right:
+        st.markdown('<p class="dlg-appt-col-h">Cita y montos</p>', unsafe_allow_html=True)
+        detail = st.text_area(
+            "Notas u observaciones (opcional)",
+            height=80,
+            key="ap_det",
+            help="Se guardan junto a la etiqueta del tipo de trabajo (piercing, limpieza, cambio).",
+        )
+        st.checkbox(
+            "Cita prioritaria",
+            key="ap_priority",
+            help="Se muestra con etiqueta roja en calendario y listado (prevalece sobre cliente nuevo/recurrente salvo reprogramación).",
+        )
         total_amount = st.number_input("Valor total del trabajo (COP) *", min_value=0.0, step=10000.0, key="ap_total")
         deposit = st.number_input("Saldo abonado (COP) *", min_value=0.0, step=10000.0, key="ap_dep")
         pending_balance = round(float(total_amount) - float(deposit), 2)
         st.caption(f"Saldo pendiente calculado: {_format_cop(max(pending_balance, 0))}")
 
-    if st.session_state.get("ap_minor"):
-        with st.expander("Tutor / representante (campos marcados con * obligatorios para menores)", expanded=True):
-            st.text_input("Nombre del tutor *", key="ap_gn")
-            st.selectbox("Tipo de documento del tutor *", ["CC", "TI", "CE", "PAS"], key="ap_gdt")
-            st.text_input("Número de documento del tutor *", key="ap_gdn")
-            st.checkbox("Registrar fecha expedición documento tutor", key="ap_has_gdi")
-            _gdi_lab = (
-                "Fecha expedición documento tutor *"
-                if st.session_state.get("ap_has_gdi")
-                else "Fecha expedición documento tutor (opcional)"
-            )
-            st.date_input(
-                _gdi_lab,
-                key="ap_gdi",
-                min_value=min_date_100,
-                max_value=max_date_today,
-            )
-
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Crear cita", type="primary", use_container_width=True, key="btn_appt_create"):
-            doc = (st.session_state.get("ap_doc_n") or "").strip()
-            verified = bool(st.session_state.get("_ap_doc_verified")) and st.session_state.get(
-                "_ap_doc_verified_doc"
-            ) == doc
-            if not verified:
-                st.error("Debes verificar el documento antes de agendar la cita.")
+            if not st.session_state.get("_ap_doc_verified"):
+                st.error("Debes verificar el documento antes de crear la cita.")
                 return
-
-            expected_minor = _is_minor_by_birth_date(birth_d)
-            if bool(st.session_state.get("ap_minor")) != expected_minor:
-                st.error("El check de menor de edad no coincide con la fecha de nacimiento.")
+            doc_in = (st.session_state.get("ap_doc_number") or "").strip()
+            if len(doc_in) < 5:
+                st.error("El número de documento no es válido.")
                 return
-            doc_error = _validate_document_rules(
-                birth_date=birth_d,
-                document_type=str(st.session_state.get("ap_doc_t") or "CC"),
-                has_document_issue_date=bool(st.session_state.get("ap_has_ddi")),
-                document_issue_date=st.session_state.get("ap_ddi"),
-            )
-            if doc_error:
-                st.error(doc_error)
+            snap = (st.session_state.get("_ap_verified_doc_number") or "").strip()
+            if snap and snap != doc_in:
+                st.error("El documento cambió respecto al verificado. Pulsa de nuevo «Verificar documento».")
                 return
-
-            if st.session_state.get("ap_minor"):
-                if not (st.session_state.get("ap_gn") or "").strip() or not (
-                    st.session_state.get("ap_gdn") or ""
-                ).strip() or not st.session_state.get("ap_has_gdi"):
-                    st.error("Para menores, los datos del tutor son obligatorios.")
-                    return
-                if st.session_state.get("ap_gdt") == "TI":
-                    st.error("El tipo de documento del tutor no puede ser TI.")
-                    return
-                gdi = st.session_state.get("ap_gdi")
-                today = date.today()
-                tutor_years_since_issue = today.year - gdi.year - ((today.month, today.day) < (gdi.month, gdi.day))
-                if tutor_years_since_issue < 18:
-                    st.error("La fecha de expedición del documento del tutor debe tener al menos 18 años respecto a hoy.")
-                    return
-
+            cust_id = st.session_state.get("_ap_booking_customer_id")
+            need_new = bool(st.session_state.get("_ap_need_new_customer"))
+            wk_submit = str(st.session_state.get("ap_work_kind") or "piercing")
+            if wk_submit not in _BOOKING_WORK_KIND_META:
+                wk_submit = "piercing"
+            need_slots_submit = int(_BOOKING_WORK_KIND_META[wk_submit]["duration_slots"])
+            slot_opts_chk = _time_slot_options()
+            raw_chk = list(st.session_state.get("_ap_list") or [])
+            day_chk = _appointments_same_day_raw(raw_chk, picked)
+            busy_chk = _busy_slot_indices_for_day(day_chk, slot_opts_chk)
+            avail_chk = _available_start_slots(slot_opts_chk, need_slots_submit, busy_chk)
+            if not avail_chk:
+                st.error("No hay franja disponible ese día para la duración de este trabajo.")
+                return
+            slot_str = (st.session_state.get("ap_slot") or "").strip()
+            if slot_str not in avail_chk:
+                st.error("La franja elegida ya no está libre. Vuelve a seleccionar la hora.")
+                return
+            detail_raw = str(st.session_state.get("ap_det") or "")
+            service, detail_for_api = _service_and_detail_for_work_kind(wk_submit, detail_raw)
             full_name = f"{(fn or '').strip()} {(ln or '').strip()}".strip()
-            date_str = appointment_date.strftime("%Y-%m-%d")
-            valid, errs = validate_appointment(full_name, (phone or "").strip(), service, date_str, detail, deposit)
+            dt_str = _combine_appointment_datetime(picked, slot_str)
+            email_s = (st.session_state.get("ap_email") or "").strip()
+            valid, errs = validate_appointment(
+                full_name,
+                (phone or "").strip(),
+                email_s,
+                service,
+                dt_str,
+                detail_raw,
+                deposit,
+            )
             if not valid:
                 _show_validation_errors(errs)
                 return
             if deposit > total_amount:
                 st.error("El saldo abonado no puede ser mayor que el valor total del trabajo.")
                 return
-
-            cust_payload: Dict[str, Any] = {
-                "first_name": (fn or "").strip(),
-                "last_name": (ln or "").strip(),
-                "birth_date": birth_d.isoformat(),
-                "document_type": st.session_state.get("ap_doc_t"),
-                "document_number": doc,
-                "document_issue_date": st.session_state.get("ap_ddi").isoformat()
-                if st.session_state.get("ap_has_ddi")
-                else None,
-                "email": (email or "").strip(),
-                "phone_number": (phone or "").strip(),
-                "address": (st.session_state.get("ap_addr") or "").strip() or None,
-                "nationality": (st.session_state.get("ap_nat") or "").strip() or None,
-                "profession": (st.session_state.get("ap_prof") or "").strip() or None,
-                "secondary_email": (st.session_state.get("ap_se") or "").strip() or None,
-                "social_media": parse_social_media_json(st.session_state.get("ap_sm", "")),
-                "emergency_contact_name": (st.session_state.get("ap_ecn") or "").strip() or None,
-                "emergency_contact_phone": (st.session_state.get("ap_ecp") or "").strip() or None,
-                "is_minor": bool(st.session_state.get("ap_minor")),
-                "guardian_name": (st.session_state.get("ap_gn") or "").strip() or None,
-                "guardian_document_type": st.session_state.get("ap_gdt")
-                if st.session_state.get("ap_minor")
-                else None,
-                "guardian_document_number": (st.session_state.get("ap_gdn") or "").strip() or None,
-                "guardian_document_issue_date": st.session_state.get("ap_gdi").isoformat()
-                if st.session_state.get("ap_minor") and st.session_state.get("ap_has_gdi")
-                else None,
-            }
-            ok_c, msg_c, cid = sync_customer(cust_payload, doc)
-            if not ok_c or cid is None:
-                st.error(msg_c)
+            if picked < today_d:
+                st.error("La fecha de la cita no puede ser anterior a hoy.")
                 return
-            appt_payload = {
+
+            appt_payload: Dict[str, Any] = {
                 "name": full_name,
                 "phone": (phone or "").strip(),
                 "service": (service or "").strip(),
-                "date": date_str,
-                "detail": (detail or "").strip() or None,
+                "date": dt_str,
+                "detail": detail_for_api,
                 "deposit": float(deposit),
                 "total_amount": float(total_amount),
                 "pending_balance": float(max(pending_balance, 0)),
-                "customer_id": cid,
+                "is_priority": bool(st.session_state.get("ap_priority")),
             }
+            if cust_id is not None:
+                appt_payload["customer_id"] = int(cust_id)
+            elif need_new:
+                bd_new = st.session_state.get("ap_birth_date")
+                if not isinstance(bd_new, date):
+                    st.error("Indica la fecha de nacimiento del cliente.")
+                    return
+                doc_ty = str(st.session_state.get("ap_doc_type") or "CC")
+                if doc_ty not in ("CC", "TI", "CE", "PAS"):
+                    doc_ty = "CC"
+                if doc_ty == "TI" and not _booking_is_minor_birth(bd_new):
+                    st.error("La tarjeta de identidad (TI) solo aplica a menores de edad.")
+                    return
+                minor_flag = _booking_is_minor_birth(bd_new)
+                try:
+                    c_new = CustomerCreate(
+                        first_name=(fn or "").strip(),
+                        last_name=(ln or "").strip(),
+                        birth_date=bd_new,
+                        document_type=doc_ty,  # type: ignore[arg-type]
+                        document_number=doc_in,
+                        document_issue_date=None,
+                        email=email_s,
+                        phone_number=(phone or "").strip(),
+                        address=None,
+                        is_minor=minor_flag,
+                        guardian_name=None,
+                        guardian_document_type=None,
+                        guardian_document_number=None,
+                        guardian_document_issue_date=None,
+                    )
+                except ValidationError as ve:
+                    st.error(str(ve))
+                    return
+                appt_payload["customer"] = c_new.model_dump(mode="json")
+            else:
+                st.error("Verifica el documento antes de crear la cita.")
+                return
+
             ok_a, code_a, data_a = api_client.post_appointment(appt_payload)
             if ok_a:
                 st.session_state["_ap_reload"] = True
@@ -712,6 +955,176 @@ def _dialog_agendar_cita() -> None:
             _reset_appointment_form_state()
             st.session_state.pop("_ap_dlg", None)
             st.rerun()
+
+
+def _render_main_calendar(
+    buckets: dict[tuple[int, int, int], list[dict[str, Any]]],
+    counts_by_client: dict[str, int],
+    *,
+    max_lines: int = 4,
+) -> None:
+    """Vista principal: mes con citas por día; al pulsar el día se abre el diálogo de agendamiento."""
+    ym_key = "_ap_cal_ym"
+    today = date.today()
+    if ym_key not in st.session_state:
+        st.session_state[ym_key] = (today.year, today.month)
+    y, m = st.session_state[ym_key]
+
+    st.markdown("##### Calendario de citas")
+    st.caption(
+        "Pulsa el **número del día** (hoy o futuro) para agendar; solo eliges la **hora** y debes **verificar documento**. "
+        "Si hay **hasta cuatro** citas ese día, usa **Ver citas del día** para listarlas todas y editarlas. "
+        "Si hay **más de cuatro**, solo **+N citas más** abre ese listado (el botón «Ver citas…» no aparece). "
+        "Etiquetas: naranja = reprogramada, roja = prioritaria, azul = recurrente, fucsia = nuevo."
+    )
+
+    n1, n2, n3 = st.columns([1, 3, 1])
+    with n1:
+        if st.button("◀ Mes", key="cal_main_prev_m"):
+            st.session_state.pop("_cal_overflow_day", None)
+            if m <= 1:
+                st.session_state[ym_key] = (y - 1, 12)
+            else:
+                st.session_state[ym_key] = (y, m - 1)
+            st.rerun()
+    with n2:
+        st.markdown(
+            f"<div style='text-align:center;font-weight:600;font-size:1.05rem'>{_MONTHS_ES[m]} {y}</div>",
+            unsafe_allow_html=True,
+        )
+    with n3:
+        if st.button("Mes ▶", key="cal_main_next_m"):
+            st.session_state.pop("_cal_overflow_day", None)
+            if m >= 12:
+                st.session_state[ym_key] = (y + 1, 1)
+            else:
+                st.session_state[ym_key] = (y, m + 1)
+            st.rerun()
+
+    hdr_cells = st.columns(7)
+    for i, lab in enumerate(_weekday_headers_es()):
+        hdr_cells[i].markdown(
+            f"<div style='text-align:center;font-size:0.72rem;opacity:0.85;font-weight:600'>{lab}</div>",
+            unsafe_allow_html=True,
+        )
+    for week in calendar.monthcalendar(y, m):
+        row_cells = st.columns(7)
+        for i, d in enumerate(week):
+            with row_cells[i]:
+                if d == 0:
+                    st.markdown("<div class='cal-cell-spacer'></div>", unsafe_allow_html=True)
+                else:
+                    day_rows = buckets.get((y, m, d), [])
+                    parts: list[str] = []
+                    for r in day_rows[:max_lines]:
+                        parts.append(_calendar_appt_line_html(r, counts_by_client, short_len=12))
+                    more = len(day_rows) - max_lines
+                    body = "".join(parts) if parts else "<div style='font-size:0.72rem;opacity:0.55'>—</div>"
+                    st.markdown(
+                        f"<div class='cal-cell'>{body}</div>",
+                        unsafe_allow_html=True,
+                    )
+                    if more > 0:
+                        if st.button(
+                            f"+{more} citas más",
+                            key=f"cal_ov_open_{y}_{m}_{d}",
+                            use_container_width=True,
+                            help="Ver todas las citas del día con etiquetas y acciones",
+                        ):
+                            st.session_state["_cal_overflow_day"] = (y, m, d)
+                            st.rerun()
+                    elif len(day_rows) > 0:
+                        if st.button(
+                            "Ver citas del día",
+                            key=f"cal_day_list_{y}_{m}_{d}",
+                            use_container_width=True,
+                            help="Listado del día: todas las citas y reprogramar / montos / anular",
+                        ):
+                            st.session_state["_cal_overflow_day"] = (y, m, d)
+                            st.rerun()
+                    picked_cell = date(y, m, d)
+                    is_past = picked_cell < date.today()
+                    if st.button(
+                        str(d),
+                        key=f"cal_main_day_{y}_{m}_{d}",
+                        use_container_width=True,
+                        disabled=is_past,
+                        help="No se pueden agendar citas en fechas pasadas" if is_past else None,
+                    ):
+                        st.session_state.pop("_cal_overflow_day", None)
+                        _pop_booking_document_session()
+                        st.session_state["ap_ad"] = date(y, m, d)
+                        st.session_state["_ap_dlg"] = "create"
+                        st.rerun()
+
+
+@st.dialog("Citas del día", width="large", dismissible=False)
+def _dialog_calendar_day_appointments(
+    buckets: dict[tuple[int, int, int], list[dict[str, Any]]],
+    hist_counts: dict[str, int],
+) -> None:
+    tup = st.session_state.get("_cal_overflow_day")
+    if not tup:
+        return
+    y, m, d = int(tup[0]), int(tup[1]), int(tup[2])
+    day_rows = list(buckets.get((y, m, d), []))
+    day_date = date(y, m, d)
+    if not day_rows:
+        st.info("No hay citas para este día con los filtros actuales.")
+        if st.button("Cerrar", key="cal_dlg_close_empty", use_container_width=True):
+            st.session_state.pop("_cal_overflow_day", None)
+            st.rerun()
+        return
+    st.markdown(f"**{day_date.strftime('%d/%m/%Y')}** · **{len(day_rows)}** cita(s)")
+    st.caption(
+        "Mismas etiquetas de cliente que en el calendario. "
+        "Reprogramar o Montos cierran este panel y abren el formulario correspondiente."
+    )
+    for idx, r in enumerate(day_rows):
+        st.markdown(_calendar_overflow_row_html(r, hist_counts), unsafe_allow_html=True)
+        appt_id = int(r.get("id", 0) or 0)
+        status = str(r.get("status") or "Agendada")
+        repro_disabled = appt_id <= 0 or status == "Cancelada"
+        montos_disabled = appt_id <= 0 or status not in {"Agendada", "Reprogramada"}
+        anular_disabled = appt_id <= 0 or status in {"Cancelada", "Finalizada"}
+        b1, b2, b3 = st.columns(3)
+        with b1:
+            if st.button(
+                "Reprogramar",
+                key=f"cal_dlg_repr_{appt_id}_{y}_{m}_{d}_{idx}",
+                disabled=repro_disabled,
+                use_container_width=True,
+                help="Cambiar fecha, hora o detalle",
+            ):
+                st.session_state.pop("_cal_overflow_day", None)
+                st.session_state["_ap_reprogram_item"] = r
+                st.rerun()
+        with b2:
+            if st.button(
+                "Montos",
+                key=f"cal_dlg_fin_{appt_id}_{y}_{m}_{d}_{idx}",
+                disabled=montos_disabled,
+                use_container_width=True,
+                help="Valor total, pendiente y abonos",
+            ):
+                st.session_state.pop("_cal_overflow_day", None)
+                st.session_state["_ap_fin_item"] = r
+                st.rerun()
+        with b3:
+            if st.button(
+                "Anular",
+                key=f"cal_dlg_can_{appt_id}_{y}_{m}_{d}_{idx}",
+                disabled=anular_disabled,
+                use_container_width=True,
+            ):
+                st.session_state.pop("_cal_overflow_day", None)
+                st.session_state["_ap_cancel_item"] = r
+                st.rerun()
+        if idx < len(day_rows) - 1:
+            st.divider()
+    if st.button("Cerrar", key="cal_dlg_close", use_container_width=True):
+        st.session_state.pop("_cal_overflow_day", None)
+        st.rerun()
 
 
 def _fetch_appointments() -> None:
@@ -838,7 +1251,7 @@ def _apply_appointment_filters(items: list[dict[str, Any]]) -> list[dict[str, An
 
 
 def _cleanup_reprogram_dialog_state() -> None:
-    keys = ("_ap_reprogram_seed_appt_id", "ap_reprogram_date", "ap_reprogram_detail")
+    keys = ("_ap_reprogram_seed_appt_id", "ap_reprogram_date", "ap_reprogram_slot", "ap_reprogram_detail")
     for k in keys:
         st.session_state.pop(k, None)
 
@@ -855,13 +1268,15 @@ def _dialog_reprogramar_cita() -> None:
             st.rerun()
         return
     seed_key = "_ap_reprogram_seed_appt_id"
-    current_date = _parse_date(appt.get("appointment_date", appt.get("date")))
     detail_default = str(appt.get("detail") or "")
-    min_date_appt, max_date_appt = _date_range_100y_window()
+    _, max_date_appt = _date_range_100y_window()
     # Una sola fuente de verdad: session_state por key — evita value+key (provoca glitch del popover Calendar)
     if st.session_state.get(seed_key) != appt_id:
         st.session_state[seed_key] = appt_id
-        st.session_state["ap_reprogram_date"] = current_date
+        d0, sl0 = _parse_existing_slot(appt.get("appointment_date", appt.get("date")))
+        today_d = date.today()
+        st.session_state["ap_reprogram_date"] = d0 if d0 >= today_d else today_d
+        st.session_state["ap_reprogram_slot"] = sl0
         st.session_state["ap_reprogram_detail"] = detail_default
 
     st.caption(f"Cita #{appt_id} · {appt.get('customer_name', appt.get('name', ''))}")
@@ -871,13 +1286,20 @@ def _dialog_reprogramar_cita() -> None:
         height=90,
         key="ap_reprogram_detail",
     )
+    today_d = date.today()
     new_date = st.date_input(
         "Nueva fecha de cita",
-        min_value=min_date_appt,
+        min_value=today_d,
         max_value=max_date_appt,
         key="ap_reprogram_date",
         format="DD/MM/YYYY",
     )
+    slot_opts = _time_slot_options()
+    cur_sl = st.session_state.get("ap_reprogram_slot")
+    if cur_sl not in slot_opts:
+        st.session_state["ap_reprogram_slot"] = slot_opts[0]
+    new_slot = st.selectbox("Nueva franja horaria *", options=slot_opts, key="ap_reprogram_slot")
+    dt_reschedule = _combine_appointment_datetime(new_date, str(new_slot))
     c1, c2 = st.columns(2)
     with c1:
         if st.button(
@@ -888,7 +1310,7 @@ def _dialog_reprogramar_cita() -> None:
         ):
             ok, code, data = api_client.patch_appointment_reschedule(
                 appt_id,
-                new_date.strftime("%Y-%m-%d"),
+                dt_reschedule,
                 (new_detail or "").strip() or None,
             )
             if ok:
@@ -1077,7 +1499,6 @@ def render_citas_tab() -> None:
     if "_ap_f_to" not in st.session_state:
         st.session_state["_ap_f_to"] = None
 
-    st.subheader("Agendamiento de citas")
     st.markdown(
         """
         <style>
@@ -1107,18 +1528,34 @@ def render_citas_tab() -> None:
             white-space: nowrap;
             line-height: 1.35;
         }
+        .cal-cell {
+            border: 1px solid rgba(148, 163, 184, 0.5);
+            border-radius: 8px;
+            padding: 0.3rem 0.35rem 0.15rem 0.35rem;
+            min-height: 4.6rem;
+            margin-bottom: 0.25rem;
+            background: rgba(17, 24, 39, 0.28);
+        }
+        .cal-cell-spacer {
+            min-height: 0.5rem;
+        }
+        .cli-pill {
+            display: inline-block;
+            border-radius: 999px;
+            padding: 0.06rem 0.4rem;
+            font-weight: 600;
+            line-height: 1.2;
+            vertical-align: middle;
+            border: 1px solid transparent;
+        }
+        .cli-pill-reprogramada { background: #fff7ed; color: #ea580c; border-color: #fdba74; }
+        .cli-pill-priority { background: #fef2f2; color: #dc2626; border-color: #f87171; }
+        .cli-pill-returning { background: #eff6ff; color: #2563eb; border-color: #93c5fd; }
+        .cli-pill-new { background: #fdf2f8; color: #db2777; border-color: #f9a8d4; }
         </style>
         """,
         unsafe_allow_html=True,
     )
-    b1, b2 = st.columns([1, 1])
-    with b1:
-        if st.button("➕ Agendar cita", type="primary", use_container_width=True):
-            st.session_state["_ap_dlg"] = "create"
-    with b2:
-        if st.button("Actualizar listado", use_container_width=True):
-            st.session_state["_ap_reload"] = True
-
     if st.session_state.get("_ap_reload"):
         _fetch_appointments()
         st.session_state["_ap_reload"] = False
@@ -1135,6 +1572,7 @@ def render_citas_tab() -> None:
         }
     )
     status_values = ["Agendada", "Reprogramada", "Finalizada", "Cancelada"]
+    st.markdown("##### Filtros")
     f1, f2, f3, f4, f5 = st.columns([1.3, 1.0, 1.0, 0.9, 0.9])
     with f1:
         st.text_input("Filtrar nombre", key="_ap_f_name", placeholder="Nombre cliente")
@@ -1143,12 +1581,15 @@ def render_citas_tab() -> None:
     with f3:
         st.selectbox("Estado", options=["Todos", *status_values], key="_ap_f_status")
     with f4:
-        # Solo `key`; no mezclar value=session_state[misma_clave]: evita comportamiento raro del calendario
         st.date_input("Desde", key="_ap_f_from")
     with f5:
         st.date_input("Hasta", key="_ap_f_to")
 
+    hist_counts = _appointment_counts_by_client(items)
     filtered_items = _apply_appointment_filters(items)
+    by_day = _appointments_by_day_sorted(filtered_items)
+    _render_main_calendar(by_day, hist_counts)
+
     total_trabajo = 0.0
     total_abonado = 0.0
     total_pendiente = 0.0
@@ -1204,7 +1645,7 @@ def render_citas_tab() -> None:
     h1, h2, h3, h4, h5, h6, h7, h8, h9 = st.columns(colw)
     h1.markdown('<span class="ap-col-title">Nombre</span>', unsafe_allow_html=True)
     h2.markdown('<span class="ap-col-title">Servicio</span>', unsafe_allow_html=True)
-    h3.markdown('<span class="ap-col-title">Fecha</span>', unsafe_allow_html=True)
+    h3.markdown('<span class="ap-col-title">Fecha y hora</span>', unsafe_allow_html=True)
     h4.markdown('<span class="ap-col-title">Total</span>', unsafe_allow_html=True)
     h5.markdown('<span class="ap-col-title">Abonado</span>', unsafe_allow_html=True)
     h6.markdown('<span class="ap-col-title">Pendiente</span>', unsafe_allow_html=True)
@@ -1213,9 +1654,9 @@ def render_citas_tab() -> None:
     h9.markdown('<span class="ap-col-title">Acciones</span>', unsafe_allow_html=True)
     for r in rows:
         c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns(colw)
-        c1.write(r.get("customer_name", r.get("name", "")))
+        c1.markdown(_customer_name_pill_html(r, hist_counts), unsafe_allow_html=True)
         c2.write(r.get("service_type", r.get("service", "")))
-        c3.write(str(r.get("appointment_date", r.get("date", ""))))
+        c3.write(_format_appt_when(r.get("appointment_date", r.get("date", ""))))
         total_amount, deposit_amount, pending_balance = _financial_row_values(r)
         credito = _customer_credit_value(r)
         c4.write(_format_cop(total_amount))
@@ -1242,6 +1683,8 @@ def render_citas_tab() -> None:
         st.write("")
         st.caption(f"Página {page + 1}/{total_pages} · Total filtrado: {total} cita(s)")
 
+    if st.session_state.get("_cal_overflow_day"):
+        _dialog_calendar_day_appointments(by_day, hist_counts)
     if st.session_state.get("_ap_dlg") == "create":
         _dialog_agendar_cita()
     if st.session_state.get("_ap_reprogram_item"):
