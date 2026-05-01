@@ -1,0 +1,30 @@
+---
+description: Flujo Git — develop, ramas feature, push y PR
+alwaysApply: true
+---
+
+# Git y pull requests (cherry_tattoo)
+
+## Inicio de cada bloque de trabajo
+
+1. Actualizar y partir desde **`develop`**: `git fetch`, `git checkout develop`, `git pull` (ajustar si el remoto no es `origin`).
+2. Crear una rama **`feature/<descripcion-corta>`** (kebab-case o snake_case, coherente con el repo) y trabajar **solo** en esa rama.
+3. Agrupar los cambios del bloque en **commit(s)** con mensajes claros **siempre en español**.
+
+## Antes de subir
+
+4. **Preguntar al usuario** de forma explícita si quiere hacer **push** de la rama `feature/...`. **No** ejecutar `git push` sin confirmación.
+
+## Tras confirmar el push
+
+5. Hacer **`git push`** de la rama feature (si hace falta: `git push -u origin <rama>`).
+6. **Comprobar** si se puede abrir un **pull request hacia `develop`**:
+   - Con **GitHub CLI** autenticado: `gh pr create --base develop --head <rama-feature>` (título y cuerpo alineados con el bloque de trabajo). Si el remoto no se infiere del directorio, usar `--repo <owner>/<repo>` (en este proyecto suele ser `DILEPE/cherry-tatto`).
+   - **Windows (Cursor / PowerShell):** si `gh` no está en el `PATH` pero la CLI está instalada, usar la ruta típica: `& "$env:ProgramFiles\GitHub CLI\gh.exe" ...` (equivalente cmd: `"%ProgramFiles%\GitHub CLI\gh.exe"`). Probar antes `gh auth status` con esa ruta.
+   - Si **no** hay `gh` instalado o falla la autenticación: indicar al usuario que cree el PR manualmente en la web (**base: `develop`**, compare: la rama feature). Tras `git push`, GitHub suele mostrar una URL del tipo `https://github.com/<owner>/<repo>/pull/new/<rama>`.
+
+## Restricciones
+
+- **No** commitear ni pushear directamente sobre **`develop`** para trabajo de feature (salvo que el usuario pida explícitamente otra cosa).
+- **No** asumir que el push o el PR ya están hechos: siempre confirmar con el usuario antes del push.
+- **No** usar mensajes de commit en inglés: todos los commits deben escribirse en español.
