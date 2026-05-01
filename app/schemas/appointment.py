@@ -8,7 +8,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.domain.models import AppointmentCreate
-from app.schemas.customer import CustomerCreate
+from app.schemas.customer import CUSTOMER_EMBEDDED_IN_APPOINTMENT_DESCRIPTION, CustomerCreate
 
 _DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -49,7 +49,10 @@ class AppointmentCreateRequest(BaseModel):
     pending_balance: float = Field(ge=0, default=0)
     is_priority: bool = Field(default=False, description="Cita prioritaria (etiqueta roja en agenda).")
     customer_id: Optional[int] = Field(default=None, ge=1)
-    customer: Optional[CustomerCreate] = None
+    customer: Optional[CustomerCreate] = Field(
+        default=None,
+        description=CUSTOMER_EMBEDDED_IN_APPOINTMENT_DESCRIPTION,
+    )
 
     @field_validator("date")
     @classmethod

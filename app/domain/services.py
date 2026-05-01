@@ -126,10 +126,12 @@ class BusinessLogicService:
         return await asyncio.to_thread(_run)
 
     # --- Plantillas ---
-    async def get_templates(self, only_active: bool = False) -> list[ContractTemplateRead]:
+    async def get_templates(
+        self, only_active: bool = False, contract_kind: Optional[str] = None
+    ) -> list[ContractTemplateRead]:
 
         def _run() -> list[ContractTemplateRead]:
-            rows = self.repository.get_templates(only_active)
+            rows = self.repository.get_templates(only_active, contract_kind)
             return [ContractTemplateRead.model_validate(r) for r in rows]
 
         return await asyncio.to_thread(_run)

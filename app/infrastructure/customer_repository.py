@@ -1,13 +1,12 @@
 """Persistence for customers (MySQL)."""
 from __future__ import annotations
 
-import json
 import logging
 from typing import Optional
 
 from mysql.connector.connection import MySQLConnection
 
-from app.schemas.customer import CustomerCreate, CustomerUpdate
+from app.schemas.customer import SOCIAL_MEDIA_MAX_LEN, CustomerCreate, CustomerUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +23,10 @@ class CustomerRepository:
             return None
         out = dict(row)
         sm = out.get("social_media")
-        if isinstance(sm, (bytes, str)) and sm:
-            try:
-                out["social_media"] = json.loads(sm) if isinstance(sm, str) else json.loads(sm.decode())
-            except (json.JSONDecodeError, ValueError):
-                out["social_media"] = None
+        if isinstance(sm, bytes):
+            out["social_media"] = sm.decode("utf-8", errors="replace") or None
+        elif sm is not None and not isinstance(sm, str):
+            out["social_media"] = str(sm) if sm else None
         return out
 
     def get_by_id(self, customer_id: int, conn: Optional[MySQLConnection] = None) -> Optional[dict[str, object]]:
@@ -132,10 +130,16 @@ class CustomerRepository:
         finally:
             conn.close()
 
-    def _social_json(self, value: Optional[dict[str, object]]) -> Optional[str]:
+    def _social_for_db(self, value: object | None) -> str | None:
+        """Texto plano VARCHAR; la API ya valida longitud."""
         if value is None:
             return None
-        return json.dumps(value)
+        if isinstance(value, str):
+            s = value.strip()
+            if not s:
+                return None
+            return s[:SOCIAL_MEDIA_MAX_LEN]
+        raise TypeError(f"social_media debe ser texto o null, no {type(value)!r}")
 
     def insert(self, data: CustomerCreate, conn: MySQLConnection) -> int:
         cur = self._cursor(conn)
@@ -143,12 +147,12 @@ class CustomerRepository:
             INSERT INTO customers (
                 first_name, last_name, birth_date, document_type, document_number,
                 document_issue_date,
-                email, phone_number, address, nationality, profession, secondary_email,
+                email, phone_number, address, nationality, profession,
                 social_media, emergency_contact_name, emergency_contact_phone,
                 is_minor, guardian_name, guardian_document_type, guardian_document_number,
                 guardian_document_issue_date
             ) VALUES (
-                %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s
+                %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s
             )
         """
         values: tuple[object, ...] = (
@@ -163,8 +167,7 @@ class CustomerRepository:
             data.address,
             data.nationality,
             data.profession,
-            str(data.secondary_email) if data.secondary_email else None,
-            self._social_json(data.social_media),
+            self._social_for_db(data.social_media),
             data.emergency_contact_name,
             data.emergency_contact_phone,
             data.is_minor,
@@ -184,7 +187,7 @@ class CustomerRepository:
             UPDATE customers SET
                 first_name=%s, last_name=%s, birth_date=%s, document_type=%s, document_number=%s,
                 document_issue_date=%s,
-                email=%s, phone_number=%s, address=%s, nationality=%s, profession=%s, secondary_email=%s,
+                email=%s, phone_number=%s, address=%s, nationality=%s, profession=%s,
                 social_media=%s, emergency_contact_name=%s, emergency_contact_phone=%s,
                 is_minor=%s, guardian_name=%s, guardian_document_type=%s, guardian_document_number=%s,
                 guardian_document_issue_date=%s
@@ -202,8 +205,7 @@ class CustomerRepository:
             data.address,
             data.nationality,
             data.profession,
-            str(data.secondary_email) if data.secondary_email else None,
-            self._social_json(data.social_media),
+            self._social_for_db(data.social_media),
             data.emergency_contact_name,
             data.emergency_contact_phone,
             data.is_minor,

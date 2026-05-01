@@ -43,8 +43,9 @@ class ContractTemplate:
     """Modelo para las versiones de contratos."""
     id: Optional[int]
     name: str          # Ej: "Consentimiento Tatuaje V1"
-    content: str       # El texto largo del contrato
     version: str       # Ej: "1.0.2"
+    content: str       # Texto o HTML del contrato (placeholders {{nombres}}, etc.)
+    contract_kind: str = "tattoo"  # tattoo | piercing
     is_active: bool = True
 
 @dataclass

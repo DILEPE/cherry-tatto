@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Optional, Tuple
 
+from app.schemas.customer import SOCIAL_MEDIA_MAX_LEN
 from streamlit_app import api_client
 
 
@@ -53,7 +54,33 @@ def fetch_customer_by_document(document_number: str) -> Tuple[bool, str, Optiona
     return True, "ok", items[0]
 
 
+def social_media_form_text_to_api(raw: str) -> Optional[str]:
+    """Normaliza texto del formulario a lo que acepta la API (string o None, máx. BD)."""
+    s = (raw or "").strip()
+    if not s:
+        return None
+    return s[:SOCIAL_MEDIA_MAX_LEN]
+
+
+def social_media_api_to_form_text(val: Any) -> str:
+    """Muestra en un campo de texto lo devuelto por la API (texto plano; legado dict se resume)."""
+    if val is None:
+        return ""
+    if isinstance(val, str):
+        return val[:SOCIAL_MEDIA_MAX_LEN]
+    if isinstance(val, dict):
+        try:
+            return json.dumps(val, ensure_ascii=False)[:SOCIAL_MEDIA_MAX_LEN]
+        except (TypeError, ValueError):
+            return str(val)[:SOCIAL_MEDIA_MAX_LEN]
+    return str(val)[:SOCIAL_MEDIA_MAX_LEN]
+
+
 def parse_social_media_json(raw: str) -> Optional[Dict[str, Any]]:
+    """
+    Compatibilidad: intenta interpretar `raw` como JSON objeto; si no, devuelve None.
+    Preferir social_media_form_text_to_api para entradas de usuario actuales.
+    """
     raw = (raw or "").strip()
     if not raw:
         return None

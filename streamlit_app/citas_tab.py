@@ -12,7 +12,8 @@ import streamlit as st
 from pydantic import ValidationError
 
 from app.domain.service_types import resolve_service_type
-from app.schemas.customer import CustomerCreate
+from app.domain.contract_kinds import service_type_requires_contract
+from app.schemas.customer import CUSTOMER_BIRTH_PENDING, CustomerCreate
 from streamlit_app import api_client
 from streamlit_app.customer_sync import fetch_customer_by_document
 from streamlit_app.validation import validate_appointment
@@ -298,15 +299,6 @@ _BOOKING_WORK_KIND_META: Dict[str, Dict[str, Any]] = {
 }
 
 
-def _booking_client_age_years(bd: date) -> int:
-    t = date.today()
-    return t.year - bd.year - ((t.month, t.day) < (bd.month, bd.day))
-
-
-def _booking_is_minor_birth(bd: date) -> bool:
-    return _booking_client_age_years(bd) < 18
-
-
 def _duration_slots_for_existing_appointment(row: dict[str, Any]) -> int:
     """Franjas de 30 min ocupadas por citas ya guardadas (heurística por servicio y detalle)."""
     svc = str(row.get("service_type") or row.get("service") or "").strip().lower()
@@ -508,16 +500,40 @@ def _customer_name_pill_html(row: dict[str, Any], counts_by_client: dict[str, in
     return f'<span class="cli-pill {cls}">{html_mod.escape(name)}</span>'
 
 
+def _service_type_flag_html(row: dict[str, Any]) -> str:
+    """Insignia de tipo de servicio (diálogo citas del día)."""
+    raw = str(row.get("service_type") or "").strip()
+    if not raw:
+        return '<span class="svc-flag svc-flag-unknown" title="Tipo de servicio">—</span>'
+    key = raw.lower()
+    if "tatu" in key or key == "tattoo":
+        cls = "svc-flag-tattoo"
+    elif "pierc" in key or key == "piercing":
+        cls = "svc-flag-piercing"
+    elif "limpieza" in key:
+        cls = "svc-flag-limpieza"
+    elif "cambio" in key:
+        cls = "svc-flag-cambio"
+    else:
+        cls = "svc-flag-other"
+    return (
+        f'<span class="svc-flag {cls}" title="Tipo de servicio">'
+        f"{html_mod.escape(raw)}</span>"
+    )
+
+
 def _calendar_overflow_row_html(row: dict[str, Any], counts_by_client: dict[str, int]) -> str:
-    """Línea para el diálogo de citas extra: hora + nombre completo con pill de cliente."""
+    """Línea para el diálogo de citas extra: hora + tipo de servicio + nombre con pill de cliente."""
     hm = _appt_time_hm(row.get("appointment_date", row.get("date")))
     st_cl = str(row.get("status") or "").strip().lower()
     dim = "opacity:0.55;" if st_cl == "cancelada" else ""
     pill = _customer_name_pill_html(row, counts_by_client)
+    svc_flag = _service_type_flag_html(row)
     return (
         f"<div style='font-size:0.86rem;line-height:1.5;{dim}margin:0.4rem 0;padding-bottom:0.35rem;"
         f"border-bottom:1px solid rgba(148,163,184,0.35);display:flex;flex-wrap:wrap;align-items:center;gap:0.35rem'>"
-        f"<span style='font-weight:600'>{html_mod.escape(hm)}</span><span>·</span>{pill}</div>"
+        f"<span style='font-weight:600'>{html_mod.escape(hm)}</span><span>·</span>"
+        f"{svc_flag}<span>·</span>{pill}</div>"
     )
 
 
@@ -599,8 +615,6 @@ def _init_appt_form_state_once() -> None:
             st.session_state[k] = v
     if "ap_work_kind" not in st.session_state:
         st.session_state["ap_work_kind"] = "piercing"
-    if "ap_birth_date" not in st.session_state:
-        st.session_state["ap_birth_date"] = date(2000, 1, 1)
     if "ap_doc_type" not in st.session_state:
         st.session_state["ap_doc_type"] = "CC"
     st.session_state["_ap_form_ready"] = True
@@ -632,7 +646,6 @@ def _reset_appointment_form_state() -> None:
         "ap_total",
         "ap_priority",
         "ap_work_kind",
-        "ap_birth_date",
         "ap_doc_type",
     ):
         st.session_state.pop(key, None)
@@ -724,8 +737,8 @@ def _dialog_agendar_cita() -> None:
                 st.session_state["_ap_verified_doc_number"] = doc_in
                 st.session_state["_ap_verify_level"] = "warning"
                 st.session_state["_ap_verify_msg"] = (
-                    "Cliente no registrado. Indica fecha de nacimiento y tipo de documento; completa nombre, apellido, "
-                    "celular y correo. El tutor u otros datos legales pueden completarse después (estado Agendada)."
+                    "Cliente no registrado. Elige tipo de documento y completa nombre, apellido, celular y correo. "
+                    "La fecha de nacimiento y el tutor (si aplica) se registran al firmar el contrato o en la ficha del cliente."
                 )
             else:
                 st.session_state["_ap_booking_customer_id"] = int(row_f["id"])
@@ -752,15 +765,8 @@ def _dialog_agendar_cita() -> None:
 
     if st.session_state.get("_ap_need_new_customer"):
         st.caption(
-            "Para **menores de edad** no se exige tutor al crear la cita; complétalo después en la ficha del cliente o antes del contrato."
-        )
-        b_min, b_max = _date_range_100y_window()
-        st.date_input(
-            "Fecha de nacimiento del cliente *",
-            min_value=b_min,
-            max_value=today_d,
-            key="ap_birth_date",
-            format="DD/MM/YYYY",
+            "**Tarjeta de identidad (TI)** u otros documentos: se admite al agendar. "
+            "La fecha de nacimiento y el estado de menor/tutor se definen al completar la ficha o en la firma del contrato."
         )
         st.selectbox(
             "Tipo de documento *",
@@ -773,11 +779,6 @@ def _dialog_agendar_cita() -> None:
             }[x],
             key="ap_doc_type",
         )
-        _bd0 = st.session_state.get("ap_birth_date")
-        if isinstance(_bd0, date) and _booking_is_minor_birth(_bd0):
-            st.info(
-                "Cliente **menor de edad**: se marcará automáticamente en el registro. **TI** solo aplica a menores."
-            )
 
     st.markdown(
         f"**Fecha de la cita:** {picked.strftime('%d/%m/%Y')} _(elegida en el calendario)_"
@@ -815,7 +816,11 @@ def _dialog_agendar_cita() -> None:
         st.markdown('<p class="dlg-appt-col-h">Cliente</p>', unsafe_allow_html=True)
         fn = st.text_input("Nombre *", key="ap_fn")
         ln = st.text_input("Apellido *", key="ap_ln")
-        phone = st.text_input("Celular *", key="ap_phone")
+        phone = st.text_input(
+            "Celular *",
+            key="ap_phone",
+            help="10 dígitos; puedes incluir espacios o prefijo, se cuentan solo los números.",
+        )
         st.text_input("Correo electrónico *", key="ap_email")
     with col_right:
         st.markdown('<p class="dlg-appt-col-h">Cita y montos</p>', unsafe_allow_html=True)
@@ -905,29 +910,21 @@ def _dialog_agendar_cita() -> None:
             if cust_id is not None:
                 appt_payload["customer_id"] = int(cust_id)
             elif need_new:
-                bd_new = st.session_state.get("ap_birth_date")
-                if not isinstance(bd_new, date):
-                    st.error("Indica la fecha de nacimiento del cliente.")
-                    return
                 doc_ty = str(st.session_state.get("ap_doc_type") or "CC")
                 if doc_ty not in ("CC", "TI", "CE", "PAS"):
                     doc_ty = "CC"
-                if doc_ty == "TI" and not _booking_is_minor_birth(bd_new):
-                    st.error("La tarjeta de identidad (TI) solo aplica a menores de edad.")
-                    return
-                minor_flag = _booking_is_minor_birth(bd_new)
                 try:
                     c_new = CustomerCreate(
                         first_name=(fn or "").strip(),
                         last_name=(ln or "").strip(),
-                        birth_date=bd_new,
+                        birth_date=CUSTOMER_BIRTH_PENDING,
                         document_type=doc_ty,  # type: ignore[arg-type]
                         document_number=doc_in,
                         document_issue_date=None,
                         email=email_s,
                         phone_number=(phone or "").strip(),
                         address=None,
-                        is_minor=minor_flag,
+                        is_minor=False,
                         guardian_name=None,
                         guardian_document_type=None,
                         guardian_document_number=None,
@@ -1085,7 +1082,12 @@ def _dialog_calendar_day_appointments(
         appt_id = int(r.get("id", 0) or 0)
         status = str(r.get("status") or "Agendada")
         has_customer = r.get("customer_id") is not None
-        firmar_disabled = appt_id <= 0 or not has_customer or status in {"Cancelada", "Finalizada"}
+        firmar_disabled = (
+            appt_id <= 0
+            or not has_customer
+            or status in {"Cancelada", "Finalizada"}
+            or not service_type_requires_contract(str(r.get("service_type") or ""))
+        )
         repro_disabled = appt_id <= 0 or status == "Cancelada"
         montos_disabled = appt_id <= 0 or status not in {"Agendada", "Reprogramada"}
         anular_disabled = appt_id <= 0 or status in {"Cancelada", "Finalizada"}
@@ -1166,7 +1168,12 @@ def _render_cita_row_actions(r: Dict[str, Any], *, show_firma: bool = True) -> N
     appt_id = int(r.get("id", 0) or 0)
     status = str(r.get("status") or "Agendada")
     has_customer = r.get("customer_id") is not None
-    firmar_disabled = appt_id <= 0 or not has_customer or status in {"Cancelada", "Finalizada"}
+    firmar_disabled = (
+        appt_id <= 0
+        or not has_customer
+        or status in {"Cancelada", "Finalizada"}
+        or not service_type_requires_contract(str(r.get("service_type") or ""))
+    )
     repro_disabled = appt_id <= 0 or status == "Cancelada"
     montos_disabled = appt_id <= 0 or status not in {"Agendada", "Reprogramada"}
     anular_disabled = appt_id <= 0 or status in {"Cancelada", "Finalizada"}
@@ -1559,6 +1566,22 @@ def _inject_citas_shared_styles() -> None:
         .cli-pill-priority { background: #fef2f2; color: #dc2626; border-color: #f87171; }
         .cli-pill-returning { background: #eff6ff; color: #2563eb; border-color: #93c5fd; }
         .cli-pill-new { background: #fdf2f8; color: #db2777; border-color: #f9a8d4; }
+        .svc-flag {
+            display: inline-block;
+            font-size: 0.68rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            padding: 0.1rem 0.42rem;
+            border-radius: 5px;
+            border: 1px solid transparent;
+            white-space: nowrap;
+        }
+        .svc-flag-tattoo { background: #1e293b; color: #f8fafc; border-color: #334155; }
+        .svc-flag-piercing { background: #ede9fe; color: #5b21b6; border-color: #c4b5fd; }
+        .svc-flag-limpieza { background: #ecfeff; color: #0e7490; border-color: #67e8f9; }
+        .svc-flag-cambio { background: #fef9c3; color: #854d0e; border-color: #fde047; }
+        .svc-flag-other { background: #f3f4f6; color: #374151; border-color: #d1d5db; }
+        .svc-flag-unknown { background: #f9fafb; color: #9ca3af; border-color: #e5e7eb; }
         </style>
         """,
         unsafe_allow_html=True,
