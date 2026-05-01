@@ -20,6 +20,7 @@ from app.domain.services import BusinessLogicService
 from app.application.appointment_controller import AppointmentController
 from app.application.contract_controller import ContractController
 from app.application.survey_controller import SurveyController
+from app.application.survey_questions_controller import SurveyQuestionController
 from app.application.template_controller import TemplateController
 from app.application.customer_controller import CustomerController
 from app.application.health_controller import HealthController
@@ -66,6 +67,7 @@ app = Litestar(
         ContractController,
         TemplateController,
         SurveyController,
+        SurveyQuestionController,
         CustomerController,
     ],
     plugins=[PydanticPlugin()],

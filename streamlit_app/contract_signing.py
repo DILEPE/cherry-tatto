@@ -14,6 +14,7 @@ import streamlit as st
 
 from app.schemas.customer import CUSTOMER_BIRTH_PENDING, SOCIAL_MEDIA_MAX_LEN
 from app.domain.contract_kinds import KIND_LABEL_ES, appointment_to_contract_kind, service_type_requires_contract
+from app.domain.survey_question_helpers import QUESTION_TYPES_NEEDING_OPTIONS
 from streamlit_app import api_client
 from streamlit_app.customer_sync import social_media_api_to_form_text, social_media_form_text_to_api
 from streamlit_app.validation import (
@@ -738,19 +739,193 @@ def _render_step2_sign(
                 st.error(f"No se pudo guardar el contrato (HTTP {code_s}): {_detail(data_s)}")
 
 
-def _render_step3_questionnaire(appointment_id: int) -> None:
+def _panel_principal_from_step3() -> None:
+    st.query_params.clear()
+    st.session_state.pop("ctsig_step", None)
+    st.session_state.pop("ctsig_aid", None)
+    st.rerun()
+
+
+def _render_step3_questionnaire(appointment_id: int, appt: dict[str, Any]) -> None:
     st.markdown("#### Etapa 3 — Cuestionario")
     st.success("Contrato registrado correctamente.")
-    st.info(
-        "**Cuestionario de salud / consentimientos ampliados — en construcción.** "
-        "Próximamente podrás completar formularios adicionales vinculados a esta cita."
-    )
     st.caption(f"Cita #{appointment_id}")
-    if st.button("Volver al panel principal", type="primary", use_container_width=True, key="ctsig_s3_done"):
-        st.query_params.clear()
-        st.session_state.pop("ctsig_step", None)
-        st.session_state.pop("ctsig_aid", None)
-        st.rerun()
+
+    ok_s, code_s, surveys = api_client.get_surveys()
+    if ok_s and isinstance(surveys, list):
+        existing = next(
+            (
+                s
+                for s in surveys
+                if int(s.get("appointment_id", 0) or 0) == int(appointment_id)
+            ),
+            None,
+        )
+        if existing is not None:
+            st.info("El cuestionario para esta cita **ya fue enviado**.")
+            if st.button("Volver al panel principal", type="primary", use_container_width=True, key="ctsig_s3_done_existing"):
+                _panel_principal_from_step3()
+            return
+
+    kind = appointment_to_contract_kind(appt)
+    ok_q, code_q, questions = api_client.get_survey_questions(
+        include_inactive=False,
+        contract_kind=kind,
+    )
+    if not ok_q or not isinstance(questions, list):
+        st.error(f"No se pudieron cargar las preguntas (HTTP {code_q}): {_detail(questions)}")
+        if st.button("Volver al panel principal", use_container_width=True, key="ctsig_s3_errq"):
+            _panel_principal_from_step3()
+        return
+
+    qs = sorted(
+        questions,
+        key=lambda x: (int(x.get("sort_order") or 0), int(x.get("id") or 0)),
+    )
+    if not qs:
+        st.info(
+            "No hay preguntas activas en el sistema. Cuando el administrador las configure en "
+            "**Gestión de preguntas**, aparecerán aquí en orden."
+        )
+        if st.button("Volver al panel principal", type="primary", use_container_width=True, key="ctsig_s3_empty"):
+            _panel_principal_from_step3()
+        return
+
+    st.markdown("Completa el siguiente formulario.")
+
+    with st.form("ctsig_s3_survey"):
+        col_left, col_right = st.columns(2)
+        for i, q in enumerate(qs):
+            col = col_left if i % 2 == 0 else col_right
+            with col:
+                qid = int(q["id"])
+                qt = str(q.get("question_type") or "text_short")
+                lbl = str(q.get("label") or "Pregunta")
+                raw_o = q.get("options")
+                opts = [str(x).strip() for x in raw_o] if isinstance(raw_o, list) else []
+                opts = [x for x in opts if x]
+                st.markdown(f"**{lbl}**")
+                sk = f"ctsig3_{qid}"
+                if qt == "rating_1_5":
+                    st.select_slider(
+                        "Valor",
+                        options=[1, 2, 3, 4, 5],
+                        value=3,
+                        key=f"{sk}_r",
+                        label_visibility="collapsed",
+                    )
+                elif qt == "yes_no":
+                    st.radio("Respuesta", options=["Sí", "No"], horizontal=True, key=f"{sk}_yn")
+                elif qt == "textarea":
+                    st.text_area(
+                        "Tu respuesta", max_chars=5000, height=160, key=f"{sk}_t", label_visibility="collapsed"
+                    )
+                elif qt == "text_short":
+                    st.text_input("Tu respuesta", max_chars=500, key=f"{sk}_t")
+                elif qt == "text":
+                    st.text_area(
+                        "Tu respuesta", max_chars=5000, height=120, key=f"{sk}_t", label_visibility="collapsed"
+                    )
+                elif qt == "number":
+                    st.number_input("Valor numérico", value=0.0, format="%.4f", key=f"{sk}_n")
+                elif qt == "radio":
+                    if len(opts) < 2:
+                        st.error("Esta pregunta no tiene opciones configuradas; avisa al administrador.")
+                    else:
+                        st.radio("Elige una opción", options=opts, key=f"{sk}_radio")
+                elif qt == "select":
+                    if len(opts) < 2:
+                        st.error("Esta pregunta no tiene opciones configuradas; avisa al administrador.")
+                    else:
+                        st.selectbox("Elige una opción", options=opts, key=f"{sk}_sel")
+                elif qt == "checkbox":
+                    if len(opts) < 2:
+                        st.error("Esta pregunta no tiene opciones configuradas; avisa al administrador.")
+                    else:
+                        st.multiselect("Marca una o varias opciones", options=opts, key=f"{sk}_cb")
+                else:
+                    st.text_input("Tu respuesta", max_chars=500, key=f"{sk}_t")
+
+                st.divider()
+
+        would_rec = st.checkbox("¿Recomendaría nuestros servicios?", value=True, key="ctsig_s3_would_rec")
+        submitted = st.form_submit_button("Enviar cuestionario", type="primary", use_container_width=True)
+
+        if submitted:
+            errors: list[str] = []
+            items: list[dict[str, Any]] = []
+            for q in qs:
+                qid = int(q["id"])
+                qt = str(q.get("question_type") or "text_short")
+                lbl = str(q.get("label") or "Pregunta")
+                raw_o = q.get("options")
+                opts = [str(x).strip() for x in raw_o] if isinstance(raw_o, list) else []
+                opts = [x for x in opts if x]
+                sk = f"ctsig3_{qid}"
+                if qt == "rating_1_5":
+                    r = int(st.session_state.get(f"{sk}_r", 3))
+                    items.append({"question_id": qid, "rating": r})
+                elif qt == "yes_no":
+                    yn = st.session_state.get(f"{sk}_yn", "Sí")
+                    items.append({"question_id": qid, "yes_no": yn == "Sí"})
+                elif qt in ("text", "textarea", "text_short"):
+                    t = str(st.session_state.get(f"{sk}_t") or "").strip()
+                    items.append({"question_id": qid, "text": t or ""})
+                elif qt == "number":
+                    n_raw = st.session_state.get(f"{sk}_n")
+                    if n_raw is None:
+                        errors.append(f"Indica un número en «{lbl}».")
+                    else:
+                        try:
+                            items.append({"question_id": qid, "number": float(n_raw)})
+                        except (TypeError, ValueError):
+                            errors.append(f"Número no válido en «{lbl}».")
+                elif qt in QUESTION_TYPES_NEEDING_OPTIONS:
+                    if len(opts) < 2:
+                        errors.append(f"La pregunta «{lbl}» no está bien configurada (faltan opciones).")
+                        continue
+                    if qt == "radio":
+                        choice = st.session_state.get(f"{sk}_radio")
+                        if choice is None or str(choice).strip() == "":
+                            errors.append(f"Elige una opción en «{lbl}».")
+                        else:
+                            items.append({"question_id": qid, "text": str(choice).strip()})
+                    elif qt == "select":
+                        choice = st.session_state.get(f"{sk}_sel")
+                        if choice is None or str(choice).strip() == "":
+                            errors.append(f"Elige una opción en «{lbl}».")
+                        else:
+                            items.append({"question_id": qid, "text": str(choice).strip()})
+                    else:
+                        choice_list = st.session_state.get(f"{sk}_cb")
+                        if choice_list is None:
+                            choice_list = []
+                        if not isinstance(choice_list, list):
+                            choice_list = []
+                        cleaned = [str(x).strip() for x in choice_list if str(x).strip()]
+                        items.append({"question_id": qid, "choices": cleaned})
+                else:
+                    t = str(st.session_state.get(f"{sk}_t") or "").strip()
+                    items.append({"question_id": qid, "text": t or ""})
+
+            if errors:
+                for e in errors:
+                    st.error(e)
+            else:
+                payload: dict[str, Any] = {
+                    "appointment_id": int(appointment_id),
+                    "would_recommend": bool(would_rec),
+                    "answers": items,
+                }
+                ok_p, code_p, data_p = api_client.post_survey(payload)
+                if ok_p:
+                    st.success("Cuestionario enviado. Gracias.")
+                    st.rerun()
+                else:
+                    st.error(f"No se pudo guardar el cuestionario (HTTP {code_p}): {_detail(data_p)}")
+
+    if st.button("Volver al panel principal", use_container_width=True, key="ctsig_s3_done"):
+        _panel_principal_from_step3()
 
 
 def render_contract_signing_view(appointment_id: int) -> None:
@@ -814,4 +989,4 @@ def render_contract_signing_view(appointment_id: int) -> None:
             return
         _render_step2_sign(aid, customer_id, customer2, appt)
         return
-    _render_step3_questionnaire(aid)
+    _render_step3_questionnaire(aid, appt)

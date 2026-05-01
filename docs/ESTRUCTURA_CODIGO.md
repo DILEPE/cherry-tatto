@@ -30,6 +30,7 @@ streamlit_app/
 ├── contract_signing.py     # Flujo firma por cita (URL dedicada)
 ├── contract_read_view.py   # Lectura contrato firmado
 ├── contracts_admin.py      # Gestión plantillas de contrato
+├── survey_questions_admin.py # CRUD preguntas de encuesta (vincula con reporte)
 ├── validation.py           # Validaciones compartidas en formularios
 ├── customer_sync.py        # Helpers cliente ↔ API
 └── rich_text.py            # Editor enriquecido opcional (Quill) para plantillas
@@ -53,7 +54,7 @@ Cada controlador agrupa rutas bajo un prefijo (p. ej. `/api/appointments`). Resp
 - Invocar métodos asíncronos de `BusinessLogicService` vía `state.service`.
 - Traducir excepciones a `HTTPException`.
 
-Archivos habituales: `appointment_controller`, `customer_controller`, `contract_controller`, `template_controller`, `survey_controller`, `health_controller`.
+Archivos habituales: `appointment_controller`, `customer_controller`, `contract_controller`, `template_controller`, `survey_controller`, `survey_questions_controller`, `health_controller`.
 
 ### `app/domain/`
 
@@ -76,7 +77,7 @@ Archivos habituales: `appointment_controller`, `customer_controller`, `contract_
 
 ### `app/schemas/`
 
-Modelos Pydantic v2 por contexto: `appointment`, `customer`, `contract`, `template`, `survey`, `report`, `health`, `common`. Sirven de frontera estable entre JSON y el dominio (`to_domain`, `Read` models).
+Modelos Pydantic v2 por contexto: `appointment`, `customer`, `contract`, `template`, `survey`, `survey_questions`, `report`, `health`, `common`. Sirven de frontera estable entre JSON y el dominio (`to_domain`, `Read` models).
 
 ---
 

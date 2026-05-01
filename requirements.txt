@@ -9,3 +9,4 @@ streamlit-drawable-canvas
 pydantic>=2
 email-validator
 openpyxl
+plotly>=5.18

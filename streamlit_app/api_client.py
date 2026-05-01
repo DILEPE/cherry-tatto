@@ -138,6 +138,39 @@ def get_surveys() -> Tuple[bool, int, Any]:
     return _request("GET", "/api/surveys/")
 
 
+def get_survey_questions(
+    *, include_inactive: bool = False, contract_kind: str | None = None
+) -> Tuple[bool, int, Any]:
+    params: Dict[str, Any] = {"include_inactive": include_inactive}
+    if contract_kind is not None and str(contract_kind).strip():
+        params["contract_kind"] = str(contract_kind).strip()
+    return _request(
+        "GET",
+        "/api/survey-questions/",
+        params=params,
+    )
+
+
+def get_survey_question_stats_summary() -> Tuple[bool, int, Any]:
+    return _request("GET", "/api/survey-questions/stats/summary")
+
+
+def get_survey_question_deletion_impact(question_id: int) -> Tuple[bool, int, Any]:
+    return _request("GET", f"/api/survey-questions/{question_id}/deletion-impact")
+
+
+def post_survey_question(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
+    return _request("POST", "/api/survey-questions/", json_body=payload)
+
+
+def put_survey_question(question_id: int, payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
+    return _request("PUT", f"/api/survey-questions/{question_id}", json_body=payload)
+
+
+def delete_survey_question(question_id: int) -> Tuple[bool, int, Any]:
+    return _request("DELETE", f"/api/survey-questions/{question_id}")
+
+
 # --- Customers ---
 
 
