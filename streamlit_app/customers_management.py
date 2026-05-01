@@ -7,8 +7,14 @@ from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
+from app.schemas.customer import CUSTOMER_BIRTH_PENDING, SOCIAL_MEDIA_MAX_LEN
 from streamlit_app import api_client
-from streamlit_app.customer_sync import parse_social_media_json
+from streamlit_app.customer_sync import social_media_api_to_form_text, social_media_form_text_to_api
+from streamlit_app.validation import (
+    mobile_phone_co_10_error,
+    optional_mobile_phone_co_10_error,
+    social_media_text_error,
+)
 
 
 def _parse_date(val: Any) -> date:
@@ -175,7 +181,6 @@ def _reset_create_customer_form_state() -> None:
         "dlg_cc_nat",
         "dlg_cc_prof",
         "dlg_cc_addr",
-        "dlg_cc_se",
         "dlg_cc_sm",
         "dlg_cc_ecn",
         "dlg_cc_ecp",
@@ -222,18 +227,31 @@ def _dialog_crear_cliente() -> None:
         )
     with b:
         c_em = st.text_input("Correo electrónico *", key="dlg_cc_em")
-        c_ph = st.text_input("Teléfono *", key="dlg_cc_ph")
-        c_nat = st.text_input("Nacionalidad", key="dlg_cc_nat")
-        c_prof = st.text_input("Profesión", key="dlg_cc_prof")
+        c_ph = st.text_input(
+            "Celular *",
+            key="dlg_cc_ph",
+            help="10 dígitos (solo se cuentan los números).",
+        )
+        c_nat = st.text_input("Nacionalidad (recomendado)", key="dlg_cc_nat")
+        c_prof = st.text_input("Profesión (recomendado)", key="dlg_cc_prof")
 
     with st.expander("Contacto y redes", expanded=False):
         c_addr = st.text_input("Dirección", key="dlg_cc_addr")
-        c_se = st.text_input("Correo secundario", key="dlg_cc_se")
-        c_sm = st.text_area("Redes sociales (JSON)", height=70, key="dlg_cc_sm")
+        c_sm = st.text_area(
+            "Redes sociales (recomendado)",
+            height=70,
+            key="dlg_cc_sm",
+            max_chars=SOCIAL_MEDIA_MAX_LEN,
+            help=f"Texto plano, máximo {SOCIAL_MEDIA_MAX_LEN} caracteres. No uses JSON.",
+        )
 
     with st.expander("Contacto de emergencia", expanded=False):
         ecn = st.text_input("Nombre contacto emergencia", key="dlg_cc_ecn")
-        ecp = st.text_input("Teléfono contacto emergencia", key="dlg_cc_ecp")
+        ecp = st.text_input(
+            "Celular contacto emergencia",
+            key="dlg_cc_ecp",
+            help="Si lo completas: 10 dígitos.",
+        )
 
     c_minor = st.checkbox("Es menor de edad", key="dlg_cc_minor")
     if c_minor:
@@ -288,6 +306,33 @@ def _dialog_crear_cliente() -> None:
                     st.error("La fecha de expedición del documento del tutor debe tener al menos 18 años respecto a hoy.")
                     return
 
+            ph_err = mobile_phone_co_10_error(c_ph.strip())
+            if ph_err:
+                st.error(ph_err)
+                return
+            ecp_err = optional_mobile_phone_co_10_error(ecp.strip())
+            if ecp_err:
+                st.error(f"Contacto de emergencia: {ecp_err}")
+                return
+            sm_err = social_media_text_error(str(c_sm or ""))
+            if sm_err:
+                st.error(sm_err)
+                return
+            sm_parsed = social_media_form_text_to_api(str(c_sm or ""))
+            soft_missing: List[str] = []
+            if not c_nat.strip():
+                soft_missing.append("nacionalidad")
+            if not c_prof.strip():
+                soft_missing.append("profesión")
+            if not sm_parsed:
+                soft_missing.append("redes sociales")
+            if soft_missing:
+                st.warning(
+                    "**Recomendado completar:** "
+                    + ", ".join(soft_missing)
+                    + ". Puedes registrar el cliente igualmente."
+                )
+
             payload: Dict[str, Any] = {
                 "first_name": c_fn.strip(),
                 "last_name": c_ln.strip(),
@@ -300,8 +345,7 @@ def _dialog_crear_cliente() -> None:
                 "address": c_addr.strip() or None,
                 "nationality": c_nat.strip() or None,
                 "profession": c_prof.strip() or None,
-                "secondary_email": c_se.strip() or None,
-                "social_media": parse_social_media_json(c_sm),
+                "social_media": sm_parsed,
                 "emergency_contact_name": ecn.strip() or None,
                 "emergency_contact_phone": ecp.strip() or None,
                 "is_minor": bool(c_minor),
@@ -367,6 +411,12 @@ def _dialog_editar_cliente(cliente_id: int) -> None:
 
     ed = st.session_state["_dlg_edit_payload"]
 
+    if _parse_date(ed.get("birth_date")) == CUSTOMER_BIRTH_PENDING:
+        st.info(
+            "Este cliente tiene fecha de nacimiento **provisional** (creado solo al agendar). "
+            "Indica la fecha real para que las reglas de documento y menor de edad funcionen bien."
+        )
+
     min_date_100, max_date_today = _date_range_100y()
     st.markdown("##### Datos personales")
     a, b = st.columns(2)
@@ -405,22 +455,33 @@ def _dialog_editar_cliente(cliente_id: int) -> None:
         )
     with b:
         eem = st.text_input("Correo *", value=ed.get("email", ""), key="dlg_ed_em")
-        eph = st.text_input("Teléfono *", value=ed.get("phone_number", ""), key="dlg_ed_ph")
-        enat = st.text_input("Nacionalidad", value=ed.get("nationality") or "", key="dlg_ed_nat")
-        eprof = st.text_input("Profesión", value=ed.get("profession") or "", key="dlg_ed_prof")
+        eph = st.text_input(
+            "Celular *",
+            value=ed.get("phone_number", ""),
+            key="dlg_ed_ph",
+            help="10 dígitos (solo se cuentan los números).",
+        )
+        enat = st.text_input("Nacionalidad (recomendado)", value=ed.get("nationality") or "", key="dlg_ed_nat")
+        eprof = st.text_input("Profesión (recomendado)", value=ed.get("profession") or "", key="dlg_ed_prof")
 
     with st.expander("Contacto y redes", expanded=False):
         eaddr = st.text_input("Dirección", value=ed.get("address") or "", key="dlg_ed_addr")
-        ese = st.text_input("Correo secundario", value=ed.get("secondary_email") or "", key="dlg_ed_se")
         esm = st.text_area(
-            "Redes sociales (JSON)",
-            value=json.dumps(ed.get("social_media") or {}, ensure_ascii=False) if ed.get("social_media") else "",
+            "Redes sociales (recomendado)",
+            value=social_media_api_to_form_text(ed.get("social_media")),
             key="dlg_ed_sm",
+            max_chars=SOCIAL_MEDIA_MAX_LEN,
+            help=f"Texto plano, máximo {SOCIAL_MEDIA_MAX_LEN} caracteres. No uses JSON.",
         )
 
     with st.expander("Emergencia y tutor", expanded=False):
         een = st.text_input("Nombre contacto emergencia", value=ed.get("emergency_contact_name") or "", key="dlg_ed_ecn")
-        eep = st.text_input("Teléfono contacto emergencia", value=ed.get("emergency_contact_phone") or "", key="dlg_ed_ecp")
+        eep = st.text_input(
+            "Celular contacto emergencia",
+            value=ed.get("emergency_contact_phone") or "",
+            key="dlg_ed_ecp",
+            help="Si lo completas: 10 dígitos.",
+        )
         emin = st.checkbox("Es menor de edad", value=bool(ed.get("is_minor")), key="dlg_ed_minor")
         if emin:
             st.info("Menor de edad: debes completar los datos del tutor.")
@@ -478,6 +539,33 @@ def _dialog_editar_cliente(cliente_id: int) -> None:
                     st.error("La fecha de expedición del documento del tutor debe tener al menos 18 años respecto a hoy.")
                     return
 
+            ph_err = mobile_phone_co_10_error(eph.strip())
+            if ph_err:
+                st.error(ph_err)
+                return
+            eep_err = optional_mobile_phone_co_10_error(eep.strip())
+            if eep_err:
+                st.error(f"Contacto de emergencia: {eep_err}")
+                return
+            sm_err = social_media_text_error(str(esm or ""))
+            if sm_err:
+                st.error(sm_err)
+                return
+            sm_parsed_ed = social_media_form_text_to_api(str(esm or ""))
+            soft_missing_ed: List[str] = []
+            if not enat.strip():
+                soft_missing_ed.append("nacionalidad")
+            if not eprof.strip():
+                soft_missing_ed.append("profesión")
+            if not sm_parsed_ed:
+                soft_missing_ed.append("redes sociales")
+            if soft_missing_ed:
+                st.warning(
+                    "**Recomendado completar:** "
+                    + ", ".join(soft_missing_ed)
+                    + ". Puedes guardar igualmente."
+                )
+
             payload = {
                 "first_name": ef.strip(),
                 "last_name": el.strip(),
@@ -490,8 +578,7 @@ def _dialog_editar_cliente(cliente_id: int) -> None:
                 "address": eaddr.strip() or None,
                 "nationality": enat.strip() or None,
                 "profession": eprof.strip() or None,
-                "secondary_email": ese.strip() or None,
-                "social_media": parse_social_media_json(esm),
+                "social_media": sm_parsed_ed,
                 "emergency_contact_name": een.strip() or None,
                 "emergency_contact_phone": eep.strip() or None,
                 "is_minor": bool(emin),

@@ -33,6 +33,10 @@ class AppointmentController(Controller):
         """
         Crea una nueva cita.
         Si el vendedor la crea desde la tablet, se dispara la confirmación en n8n.
+
+        **Cliente embebido (`customer`):** si el documento aún no existe, puede enviarse el alta sin fecha de nacimiento
+        real usando el sentinela documentado en el esquema `CustomerCreate` (`birth_date` de nacimiento pendiente,
+        `is_minor=false`, sin expedición de documento). Los datos se completan después con `PUT /api/customers/{id}`.
         """
         try:
             service = state.service

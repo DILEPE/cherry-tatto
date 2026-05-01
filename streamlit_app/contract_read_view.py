@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import base64
+import html as html_mod
 import json
+import re
 from typing import Any
 
 import streamlit as st
@@ -30,6 +32,13 @@ def _image_from_data_url(data_url: Any) -> bytes | None:
     return None
 
 
+def _contract_text_looks_like_html(s: str) -> bool:
+    t = (s or "").lstrip()
+    if not t.startswith("<"):
+        return False
+    return re.search(r"<[a-zA-Z][\w:-]*", t) is not None
+
+
 def render_contract_read_view(contract_id: int) -> None:
     st.subheader("Contrato firmado")
     st.caption(f"Contrato #{contract_id}")
@@ -54,7 +63,49 @@ def render_contract_read_view(contract_id: int) -> None:
         st.text_area("Contenido (fallback)", value=json.dumps(data, ensure_ascii=False, indent=2), height=320)
         return
 
-    st.text_area("Contenido del contrato", value=str(text), height=420)
+    raw_text = str(text)
+    st.markdown(
+        """
+        <style>
+          .ctrv-contract-shell {
+            background: linear-gradient(165deg, #fdfbf7 0%, #f3ede4 45%, #ebe4d8 100%);
+            border: 1px solid #c9bfb0;
+            border-radius: 14px;
+            padding: 1.35rem 1.6rem;
+            margin: 0.85rem 0 1.35rem 0;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.65), 0 4px 14px rgba(41, 37, 36, 0.08);
+            max-height: min(72vh, 760px);
+            overflow-y: auto;
+            font-size: 0.98rem;
+            line-height: 1.62;
+            color: #1c1917;
+          }
+          .ctrv-contract-shell.ctrv-plain {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+          }
+          .ctrv-contract-html p { margin: 0.5em 0; }
+          .ctrv-contract-html h1, .ctrv-contract-html h2, .ctrv-contract-html h3 {
+            color: #1c1917;
+            margin-top: 0.75em;
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.caption("Contenido del contrato firmado")
+    if _contract_text_looks_like_html(raw_text):
+        st.markdown(
+            f'<div class="ctrv-contract-shell ctrv-contract-html">{raw_text}</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        body = html_mod.escape(raw_text).replace("\n", "<br>\n")
+        st.markdown(
+            f'<div class="ctrv-contract-shell ctrv-plain">{body}</div>',
+            unsafe_allow_html=True,
+        )
 
     st.markdown("### Firmas")
     c1, c2, c3 = st.columns(3)

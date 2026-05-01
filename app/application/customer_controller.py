@@ -25,6 +25,7 @@ class CustomerController(Controller):
 
     @post(status_code=status_codes.HTTP_201_CREATED)
     async def create_customer(self, data: CustomerCreate, state: State) -> CustomerCreatedResponse:
+        """Alta de cliente; ver campo `birth_date` en el body para nacimiento pendiente (agendamiento)."""
         try:
             cid = await state.service.create_customer(data)
             return CustomerCreatedResponse(
@@ -70,6 +71,7 @@ class CustomerController(Controller):
     async def update_customer(
         self, customer_id: int, data: CustomerUpdate, state: State
     ) -> MessageResponse:
+        """Actualización completa; sustituir `birth_date` sentinela por la fecha real al completar ficha o contrato."""
         try:
             await state.service.update_customer(customer_id, data)
             return MessageResponse(status="success", message="Customer updated")

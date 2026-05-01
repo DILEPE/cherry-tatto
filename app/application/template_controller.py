@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Optional
+
 from litestar import Controller, delete, get, post, put, status_codes
 from litestar.datastructures import State
 from litestar.exceptions import HTTPException
@@ -20,11 +22,17 @@ class TemplateController(Controller):
 
     @get("/")
     async def list_templates(
-        self, state: State, only_active: bool = False
+        self,
+        state: State,
+        only_active: bool = False,
+        contract_kind: Optional[str] = None,
     ) -> list[ContractTemplateRead]:
         """Obtiene el listado de todas las plantillas disponibles."""
         try:
-            return await state.service.get_templates(only_active=only_active)
+            return await state.service.get_templates(
+                only_active=only_active,
+                contract_kind=contract_kind,
+            )
         except Exception as e:
             raise HTTPException(detail=f"Error al listar plantillas: {str(e)}", status_code=500) from e
 

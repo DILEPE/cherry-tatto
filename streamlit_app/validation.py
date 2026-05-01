@@ -7,14 +7,50 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.schemas.customer import SOCIAL_MEDIA_MAX_LEN
 from pydantic import EmailStr, TypeAdapter
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _DATETIME_FULL = re.compile(
     r"^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$"
 )
-_PHONE_RE = re.compile(r"^[\d\s+\-().]{7,20}$")
 _VERSION_RE = re.compile(r"^\d+\.\d+(\.\d+)?$")
+
+
+def normalize_phone_digits(phone: str) -> str:
+    """Solo dígitos, para validar longitud de celular (ej. CO: 10)."""
+    return "".join(c for c in str(phone or "") if c.isdigit())
+
+
+def mobile_phone_co_10_error(phone: str) -> Optional[str]:
+    """
+    Celular Colombia: exactamente 10 dígitos (se ignoran espacios, +, guiones en el conteo).
+    """
+    if len(normalize_phone_digits(phone)) != 10:
+        return "El celular debe tener exactamente 10 dígitos."
+    return None
+
+
+def optional_mobile_phone_co_10_error(phone: Optional[str]) -> Optional[str]:
+    """Igual que mobile_phone_co_10_error si hay texto; vacío permite omitir."""
+    if not (phone or "").strip():
+        return None
+    return mobile_phone_co_10_error(phone)
+
+
+def social_media_text_error(raw: str, *, max_len: int = SOCIAL_MEDIA_MAX_LEN) -> Optional[str]:
+    """Validación para redes como texto plano."""
+    s = (raw or "").strip()
+    if not s:
+        return None
+    if len(s) > max_len:
+        return f"Redes sociales: como máximo {max_len} caracteres."
+    return None
+
+
+# Alias por compatibilidad con imports antiguos.
+def social_media_json_handle_error(raw: str) -> Optional[str]:
+    return social_media_text_error(raw)
 
 
 @dataclass
@@ -45,8 +81,9 @@ def validate_appointment(
 
     if len(name) < 2:
         _err(errors, "name", "El nombre debe tener al menos 2 caracteres.")
-    if not _PHONE_RE.match(phone):
-        _err(errors, "phone", "Introduce un teléfono válido (7–20 dígitos o símbolos + - espacio).")
+    ph_err = mobile_phone_co_10_error(phone)
+    if ph_err:
+        _err(errors, "phone", ph_err)
     if not email:
         _err(errors, "email", "El correo electrónico es obligatorio.")
     else:

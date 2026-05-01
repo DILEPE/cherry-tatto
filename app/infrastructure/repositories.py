@@ -378,28 +378,42 @@ class AppointmentRepository:
     # --- Plantillas ---
 
     def create_template(self, data: ContractTemplate) -> int:
-        """Crea una nueva plantilla de contrato en la base de datos."""
-        conn = self.db.get_connection()
-        try:
+        """Crea una nueva plantilla de contrato en la base de datos.
+        Si `is_active`, desactiva el resto de plantillas activas del mismo `contract_kind`.
+        """
+        with self.db.transaction() as conn:
             cursor = self._get_cursor(conn)
-            query = """INSERT INTO contract_templates (name, version, content, is_active) 
-                       VALUES (%s, %s, %s, %s)"""
-            values = (data.name, data.version, data.content, data.is_active)
+            query = """INSERT INTO contract_templates (name, contract_kind, version, content, is_active)
+                       VALUES (%s, %s, %s, %s, %s)"""
+            values = (data.name, data.contract_kind, data.version, data.content, data.is_active)
             cursor.execute(query, values)
-            new_id = cursor.lastrowid
-            conn.commit()
+            new_id = int(cursor.lastrowid or 0)
+            if data.is_active and new_id:
+                cursor.execute(
+                    """UPDATE contract_templates SET is_active = 0
+                       WHERE contract_kind = %s AND id != %s AND is_active = 1""",
+                    (data.contract_kind, new_id),
+                )
             return new_id
-        finally:
-            if conn: conn.close()
 
-    def get_templates(self, only_active: bool = False) -> list[dict[str, object]]:
+    def get_templates(
+        self, only_active: bool = False, contract_kind: Optional[str] = None
+    ) -> list[dict[str, object]]:
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn, dictionary=True)
-            query = "SELECT * FROM contract_templates"
+            query = "SELECT * FROM contract_templates WHERE 1=1"
+            params: list[object] = []
             if only_active:
-                query += " WHERE is_active = TRUE"
-            cursor.execute(query)
+                query += " AND is_active = TRUE"
+            if contract_kind:
+                query += " AND contract_kind = %s"
+                params.append(contract_kind)
+            query += " ORDER BY contract_kind ASC, name ASC, id DESC"
+            if params:
+                cursor.execute(query, tuple(params))
+            else:
+                cursor.execute(query)
             return cursor.fetchall()
         finally:
             if conn: conn.close()
@@ -411,30 +425,37 @@ class AppointmentRepository:
             cursor.execute("SELECT * FROM contract_templates WHERE id = %s", (template_id,))
             res = cursor.fetchone()
             if res:
+                ck = res.get("contract_kind")
+                if ck is None:
+                    ck = "tattoo"
                 return ContractTemplate(
-                    id=res['id'],
-                    name=res['name'],
-                    version=res['version'],
-                    content=res['content'],
-                    is_active=bool(res['is_active'])
+                    id=res["id"],
+                    name=res["name"],
+                    version=res["version"],
+                    content=res["content"],
+                    contract_kind=str(ck),
+                    is_active=bool(res["is_active"]),
                 )
             return None
         finally:
             if conn: conn.close()
 
     def update_template(self, template_id: int, data: ContractTemplate) -> None:
-        conn = self.db.get_connection()
-        try:
+        """Actualiza plantilla; si queda activa, desactiva las demás del mismo `contract_kind`."""
+        with self.db.transaction() as conn:
             cursor = self._get_cursor(conn)
             cursor.execute(
                 """UPDATE contract_templates
-                   SET name = %s, version = %s, content = %s, is_active = %s
+                   SET name = %s, contract_kind = %s, version = %s, content = %s, is_active = %s
                    WHERE id = %s""",
-                (data.name, data.version, data.content, data.is_active, template_id),
+                (data.name, data.contract_kind, data.version, data.content, data.is_active, template_id),
             )
-            conn.commit()
-        finally:
-            if conn: conn.close()
+            if data.is_active:
+                cursor.execute(
+                    """UPDATE contract_templates SET is_active = 0
+                       WHERE contract_kind = %s AND id != %s AND is_active = 1""",
+                    (data.contract_kind, template_id),
+                )
 
     def delete_template(self, template_id: int) -> None:
         conn = self.db.get_connection()

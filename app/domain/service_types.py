@@ -1,12 +1,12 @@
 
 """
-Valores válidos para la columna ENUM `service_type` en MySQL.
+Valores válidos para la columna `service_type` en MySQL (VARCHAR o ENUM).
 
-Define en `.env` la lista separada por comas, **exactamente** como en el ENUM:
+Define en `.env` la lista separada por comas, **exactamente** como en la base:
 
-  SERVICE_TYPE_ENUM_VALUES=tattoo,piercing,other
+  SERVICE_TYPE_ENUM_VALUES=Tatuaje,Piercing,Cambio,Limpieza
 
-Si no existe la variable, se usan por defecto literales en inglés habituales en ENUM.
+Si no existe la variable, se usan literales por defecto (inglés legacy).
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def configured_service_types() -> Tuple[str, ...]:
 
 def resolve_service_type(user_text: str) -> str:
     """
-    Convierte texto libre (o etiqueta de formulario) al literal ENUM que exista en la BD.
+    Convierte texto libre (o etiqueta de formulario) al literal configurado que exista en la BD.
     """
     labels = configured_service_types()
     if not labels:
@@ -41,6 +41,19 @@ def resolve_service_type(user_text: str) -> str:
             if predicate(label):
                 return label
         return None
+
+    # Limpieza antes que «cambio» por textos que mezclen palabras
+    if "limpieza" in t:
+        found = pick(lambda L: "limpieza" in L.lower())
+        if found:
+            return found
+
+    if "cambio" in t:
+        found = pick(
+            lambda L: "cambio" in L.lower() and "limpieza" not in L.lower()
+        )
+        if found:
+            return found
 
     if any(k in t for k in ("tatuaje", "tattoo", "tinta", "cover", "boceto", "retoque")):
         found = pick(lambda L: "tatu" in L.lower() or "tattoo" in L.lower())
@@ -60,13 +73,15 @@ def resolve_service_type(user_text: str) -> str:
             "consulta",
             "sesión",
             "sesion",
-            "limpieza",
             "mantenimiento",
             "curación",
             "curacion",
         )
     ):
-        found = pick(lambda L: "otr" in L.lower() or "other" in L.lower() or "consult" in L.lower())
+        found = pick(lambda L: "pierc" in L.lower() or "piercing" in L.lower())
+        if found:
+            return found
+        found = pick(lambda L: "otr" in L.lower() or "other" in L.lower())
         if found:
             return found
 

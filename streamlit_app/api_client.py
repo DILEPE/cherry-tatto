@@ -107,8 +107,11 @@ def get_contract(contract_id: int) -> Tuple[bool, int, Any]:
     return _request("GET", f"/api/contracts/{contract_id}")
 
 
-def get_templates(only_active: bool) -> Tuple[bool, int, Any]:
-    return _request("GET", "/api/templates/", params={"only_active": only_active})
+def get_templates(only_active: bool, contract_kind: Optional[str] = None) -> Tuple[bool, int, Any]:
+    params: Dict[str, Any] = {"only_active": only_active}
+    if contract_kind:
+        params["contract_kind"] = contract_kind
+    return _request("GET", "/api/templates/", params=params)
 
 
 def get_template(template_id: int) -> Tuple[bool, int, Any]:

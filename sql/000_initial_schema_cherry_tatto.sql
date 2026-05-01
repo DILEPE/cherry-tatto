@@ -22,8 +22,7 @@ CREATE TABLE IF NOT EXISTS customers (
     address VARCHAR(500) NULL,
     nationality VARCHAR(100) NULL,
     profession VARCHAR(150) NULL,
-    secondary_email VARCHAR(255) NULL,
-    social_media JSON NULL,
+    social_media VARCHAR(50) NULL,
     emergency_contact_name VARCHAR(150) NULL,
     emergency_contact_phone VARCHAR(32) NULL,
     is_minor BOOLEAN NOT NULL DEFAULT FALSE,
@@ -69,13 +68,14 @@ CREATE TABLE IF NOT EXISTS appointments (
 CREATE TABLE IF NOT EXISTS contract_templates (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     name VARCHAR(200) NOT NULL,
+    contract_kind VARCHAR(20) NOT NULL DEFAULT 'tattoo' COMMENT 'tattoo | piercing',
     version VARCHAR(50) NOT NULL,
     content LONGTEXT NOT NULL,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
-    UNIQUE KEY uk_contract_templates_name_version (name, version)
+    UNIQUE KEY uk_tpl_kind_name_version (contract_kind, name, version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =========================
