@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import calendar
 import html as html_mod
+import unicodedata
 from datetime import date, datetime, time
 from io import BytesIO
+from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
@@ -12,9 +14,10 @@ import streamlit as st
 from pydantic import ValidationError
 
 from app.domain.service_types import resolve_service_type
-from app.domain.contract_kinds import service_type_requires_contract
+from app.domain.contract_kinds import SCOPE_LABEL_ES, service_type_requires_contract
+from app.domain.survey_question_helpers import question_type_label_es, question_type_supports_distribution_chart
 from app.schemas.customer import CUSTOMER_BIRTH_PENDING, CustomerCreate
-from streamlit_app import api_client
+from streamlit_app import api_client, report_charts
 from streamlit_app.customer_sync import fetch_customer_by_document
 from streamlit_app.validation import validate_appointment
 
@@ -23,6 +26,19 @@ def _api_error(payload: Any) -> str:
     if isinstance(payload, dict):
         return str(payload.get("detail", payload))
     return str(payload)
+
+
+def _reprogram_disabled_for_row(r: Dict[str, Any]) -> bool:
+    """Reprogramar solo en Agendada/Reprogramada, sin contrato firmado y no cancelada."""
+    appt_id = int(r.get("id", 0) or 0)
+    status = str(r.get("status") or "Agendada")
+    if appt_id <= 0 or status == "Cancelada":
+        return True
+    if status not in {"Agendada", "Reprogramada"}:
+        return True
+    if bool(r.get("has_signed_contract")):
+        return True
+    return False
 
 
 def _show_validation_errors(errors: List[Any]) -> None:
@@ -1088,7 +1104,7 @@ def _dialog_calendar_day_appointments(
             or status in {"Cancelada", "Finalizada"}
             or not service_type_requires_contract(str(r.get("service_type") or ""))
         )
-        repro_disabled = appt_id <= 0 or status == "Cancelada"
+        repro_disabled = _reprogram_disabled_for_row(r)
         montos_disabled = appt_id <= 0 or status not in {"Agendada", "Reprogramada"}
         anular_disabled = appt_id <= 0 or status in {"Cancelada", "Finalizada"}
         b0, b1, b2, b3 = st.columns(4)
@@ -1106,7 +1122,7 @@ def _dialog_calendar_day_appointments(
                 key=f"cal_dlg_repr_{appt_id}_{y}_{m}_{d}_{idx}",
                 disabled=repro_disabled,
                 use_container_width=True,
-                help="Cambiar fecha, hora o detalle",
+                help="Solo citas agendadas/reprogramadas sin contrato firmado",
             ):
                 st.session_state.pop("_cal_overflow_day", None)
                 st.session_state["_ap_reprogram_item"] = r
@@ -1174,7 +1190,7 @@ def _render_cita_row_actions(r: Dict[str, Any], *, show_firma: bool = True) -> N
         or status in {"Cancelada", "Finalizada"}
         or not service_type_requires_contract(str(r.get("service_type") or ""))
     )
-    repro_disabled = appt_id <= 0 or status == "Cancelada"
+    repro_disabled = _reprogram_disabled_for_row(r)
     montos_disabled = appt_id <= 0 or status not in {"Agendada", "Reprogramada"}
     anular_disabled = appt_id <= 0 or status in {"Cancelada", "Finalizada"}
 
@@ -1196,7 +1212,7 @@ def _render_cita_row_actions(r: Dict[str, Any], *, show_firma: bool = True) -> N
                 disabled=repro_disabled,
                 use_container_width=True,
                 key=f"pop_repr_{appt_id}",
-                help="Antes columna «Mover»: cambiar fecha/detalle manteniendo el estado hábil.",
+                help="Solo **Agendada** o **Reprogramada** y sin contrato firmado. Tras firmar, la cita queda finalizada y no se reprograma.",
             ):
                 st.session_state["_ap_reprogram_item"] = r
                 st.rerun()
@@ -1293,6 +1309,16 @@ def _dialog_reprogramar_cita() -> None:
     if appt_id <= 0:
         st.error("No se encontró la cita a reprogramar.")
         if st.button("Cerrar", use_container_width=True):
+            st.session_state.pop("_ap_reprogram_item", None)
+            _cleanup_reprogram_dialog_state()
+            st.rerun()
+        return
+    if _reprogram_disabled_for_row(appt):
+        st.warning(
+            "No se puede reprogramar esta cita: debe estar **Agendada** o **Reprogramada**, "
+            "sin **contrato firmado** y no cancelada."
+        )
+        if st.button("Cerrar", use_container_width=True, key="ap_reprogram_blocked_close"):
             st.session_state.pop("_ap_reprogram_item", None)
             _cleanup_reprogram_dialog_state()
             st.rerun()
@@ -1613,35 +1639,231 @@ def _init_appt_tab_session_state() -> None:
         st.session_state["_ap_cal_f_status"] = "Todos"
 
 
-def _sync_appointments_from_api() -> None:
-    if st.session_state.get("_ap_reload"):
-        _fetch_appointments()
-        st.session_state["_ap_reload"] = False
-
-
-def render_reporte_citas_tab() -> None:
-    """Listado paginado, totales y export Excel (informe financiero) con los mismos filtros."""
-    _init_appt_tab_session_state()
-    _inject_citas_shared_styles()
-    _sync_appointments_from_api()
-
-    if st.session_state.get("_ap_err"):
-        st.error(st.session_state["_ap_err"])
-
-    items = list(st.session_state.get("_ap_list") or [])
-    svc_values = sorted(
-        {
-            str(i.get("service_type", i.get("service", "")) or "").strip()
-            for i in items
-            if str(i.get("service_type", i.get("service", "")) or "").strip()
-        }
-    )
-    status_values = ["Agendada", "Reprogramada", "Finalizada", "Cancelada"]
-    st.markdown("##### Reporte financiero — citas")
+def _render_procedure_value_bar_chart(filtered_items: list[dict[str, Any]]) -> None:
+    """Barras: suma de total trabajo por tipo de servicio (procedimiento), según el filtro actual."""
+    if not filtered_items:
+        return
+    by_svc: dict[str, float] = defaultdict(float)
+    for row in filtered_items:
+        svc = str(row.get("service_type", row.get("service", "")) or "").strip() or "Sin especificar"
+        t_total, _, _ = _financial_row_values(row)
+        by_svc[svc] += t_total
+    ordered = sorted(by_svc.items(), key=lambda x: -x[1])
+    categories = [k for k, _ in ordered]
+    values = [float(v) for _, v in ordered]
+    st.markdown("##### Valor por procedimiento")
     st.caption(
-        "Filtra el listado y los totales; descarga el Excel con el mismo criterio. "
-        "El calendario de agendamiento está en **Gestión citas**."
+        "Suma del **total trabajo** por tipo de servicio en las citas del filtro (Plotly, mismo estilo que encuestas)."
     )
+    report_charts.render_vertical_bars(
+        st,
+        categories=categories,
+        values=values,
+        x_title="Tipo de servicio / procedimiento",
+        y_title="Total trabajo (COP)",
+        height=min(420, 140 + len(ordered) * 42),
+        hovertemplate="<b>%{x}</b><br>%{y:,.0f} COP<extra></extra>",
+        key="rep_fin_valor_procedimiento",
+    )
+
+
+def _truncate_survey_chart_label(s: str, max_len: int = 50) -> str:
+    t = str(s).replace("\n", " ").strip()
+    if len(t) <= max_len:
+        return t
+    return t[: max_len - 1] + "…"
+
+
+def _survey_pie_chart_from_counts(
+    counts: dict[str, int],
+    *,
+    chart_key: str,
+    sort_key: Optional[Any] = None,
+    reverse: bool = False,
+    limit: Optional[int] = None,
+) -> None:
+    """Gráfica de torta (Plotly; mismo tema que barras del reporte)."""
+    if not counts:
+        return
+    items = [(str(k), int(v)) for k, v in counts.items() if int(v) > 0]
+    if not items:
+        return
+    if sort_key is not None:
+        items.sort(key=sort_key, reverse=reverse)
+    else:
+        items.sort(key=lambda x: x[1], reverse=True)
+    if limit is not None and limit > 0 and len(items) > limit:
+        head = list(items[: max(0, limit - 1)])
+        tail = items[limit - 1 :]
+        otros = sum(v for _, v in tail)
+        if otros > 0:
+            head.append(("Otros", otros))
+        items = head
+    pie_labels = [_truncate_survey_chart_label(k) for k, _ in items]
+    pie_values = [v for _, v in items]
+    if sum(pie_values) <= 0:
+        return
+    report_charts.render_pie(st, labels=pie_labels, values=pie_values, height=440, key=chart_key)
+
+
+def _normalize_survey_label_ascii_lower(s: str) -> str:
+    """Compara etiquetas sin distinguir tildes ni mayúsculas."""
+    t = unicodedata.normalize("NFKD", str(s or ""))
+    return "".join(c for c in t if not unicodedata.combining(c)).lower()
+
+
+def _survey_question_is_procedure_value_question(label: str) -> bool:
+    """P. ej. «¿Cuánto es el valor de tu procedimiento?» → barras Plotly (mismo estilo que finanzas)."""
+    n = _normalize_survey_label_ascii_lower(label)
+    return "procedimiento" in n and "valor" in n
+
+
+def _pairs_from_number_breakdown(nb: dict[str, int]) -> list[tuple[float, int]]:
+    out: list[tuple[float, int]] = []
+    for k, v in nb.items():
+        try:
+            out.append((float(k), int(v)))
+        except (TypeError, ValueError):
+            continue
+    out.sort(key=lambda x: x[0])
+    return out
+
+
+def _survey_number_bar_chart_2d(pairs: list[tuple[float, int]], *, x_title: str, chart_key: str) -> None:
+    """Barras respuesta numérica × frecuencia (Plotly, mismo estilo que el resto del reporte)."""
+    if not pairs:
+        return
+    vals = [p[0] for p in pairs]
+    ns = [p[1] for p in pairs]
+    categories = [f"{v:g}" for v in vals]
+    report_charts.render_vertical_bars(
+        st,
+        categories=categories,
+        values=ns,
+        x_title=x_title,
+        y_title="Respuestas (n)",
+        height=min(400, 140 + len(categories) * 36),
+        hovertemplate="<b>Valor %{x}</b><br>%{y} respuesta(s)<extra></extra>",
+        key=chart_key,
+    )
+
+
+def _render_survey_question_stats_report() -> None:
+    st.caption(
+        "Todas las gráficas usan **Plotly**. En **tortas**, cada sector muestra el **porcentaje** y la leyenda **Convenciones** (derecha) el detalle con **n**. "
+        "Instalación: `pip install plotly`. La pregunta del **valor de tu procedimiento** va en **barras**; "
+        "el resto en **torta**. Configura en **Gestión encuesta**."
+    )
+    ok, code, raw = api_client.get_survey_question_stats_summary()
+    if not ok:
+        det = _api_error(raw)
+        st.warning(
+            f"No se pudieron cargar las estadísticas de encuesta (HTTP {code}). "
+            f"Ejecuta las migraciones `011`–`014` en `sql/` según corresponda. Detalle: {det}"
+        )
+        return
+    if not isinstance(raw, list) or len(raw) == 0:
+        st.caption("No hay preguntas registradas o la lista está vacía.")
+        return
+    for idx, row in enumerate(raw):
+        if not isinstance(row, dict):
+            continue
+        qid = int(row.get("question_id") or idx)
+        label = str(row.get("label") or "")
+        qt = str(row.get("question_type") or "")
+        ql = question_type_label_es(qt)
+        ck = SCOPE_LABEL_ES.get(str(row.get("contract_kind") or "tattoo"), "—")
+        rc = int(row.get("response_count") or 0)
+        supports_chart = question_type_supports_distribution_chart(qt)
+        st.divider()
+        st.markdown(f"**{label}** · _{ql}_ · **{ck}** · n = **{rc}**")
+        chart_shown = False
+
+        rb = row.get("rating_breakdown")
+        if qt == "rating_1_5" and isinstance(rb, dict) and rb:
+            def _rk(item: tuple[str, int]) -> int:
+                try:
+                    return int(item[0])
+                except (TypeError, ValueError):
+                    return 0
+
+            _survey_pie_chart_from_counts(dict(rb), sort_key=_rk, chart_key=f"rep_survey_pie_{qid}_rating")
+            chart_shown = True
+            if row.get("avg_rating") is not None:
+                st.metric("Promedio (1–5)", f"{float(row['avg_rating']):.2f}")
+        elif qt == "yes_no":
+            yc = int(row.get("yes_count") or 0)
+            nc = int(row.get("no_count") or 0)
+            c1, c2 = st.columns(2)
+            c1.metric("Sí", yc)
+            c2.metric("No", nc)
+            if yc + nc > 0:
+                _survey_pie_chart_from_counts(
+                    {"Sí": yc, "No": nc},
+                    sort_key=lambda x: 0 if x[0] == "Sí" else 1,
+                    chart_key=f"rep_survey_pie_{qid}_yesno",
+                )
+                chart_shown = True
+        elif qt == "number":
+            nb = row.get("number_breakdown")
+            if isinstance(nb, dict) and nb:
+
+                def _nk(item: tuple[str, int]) -> float:
+                    try:
+                        return float(item[0])
+                    except (TypeError, ValueError):
+                        return 0.0
+
+                pairs = _pairs_from_number_breakdown(dict(nb))
+                if _survey_question_is_procedure_value_question(label) and pairs:
+                    st.caption(
+                        "Pregunta sobre **valor del procedimiento**: barras Plotly (mismo estilo que el reporte financiero)."
+                    )
+                    _survey_number_bar_chart_2d(
+                        pairs,
+                        x_title="Valor informado (tu procedimiento)",
+                        chart_key=f"rep_survey_bar_{qid}_procval",
+                    )
+                    chart_shown = True
+                else:
+                    _survey_pie_chart_from_counts(dict(nb), sort_key=_nk, chart_key=f"rep_survey_pie_{qid}_number")
+                    chart_shown = True
+            if row.get("avg_number") is not None:
+                st.metric("Promedio numérico", f"{float(row['avg_number']):.4f}")
+        elif qt in ("radio", "select", "checkbox"):
+            cb = row.get("choice_breakdown")
+            if isinstance(cb, dict) and cb:
+                lim = 24 if qt == "checkbox" else 32
+                _survey_pie_chart_from_counts(dict(cb), limit=lim, chart_key=f"rep_survey_pie_{qid}_choice")
+                chart_shown = True
+                if qt == "checkbox":
+                    st.caption(
+                        "Casillas: cada **sector** puede ser una combinación guardada (texto/JSON); "
+                        "no son opciones independientes. Si hay muchas categorías, el resto se agrupa en **Otros**."
+                    )
+        elif qt in ("text", "textarea", "text_short"):
+            tc = int(row.get("text_response_count") or 0)
+            st.caption(
+                f"Pregunta de **texto libre**: no tiene categorías fijas adecuadas para una torta. "
+                f"Respuestas no vacías: **{tc}**."
+            )
+        else:
+            tc = int(row.get("text_response_count") or 0)
+            st.caption(f"Respuestas con texto registrado: {tc}")
+
+        if supports_chart and not chart_shown and rc > 0:
+            st.info("Hay respuestas, pero aún no hay datos agregados para graficar (revisa el tipo de pregunta).")
+        elif supports_chart and rc == 0:
+            st.caption("Sin respuestas todavía.")
+
+
+def _render_reporte_financiero_citas_body(
+    items: list[dict[str, Any]],
+    svc_values: list[str],
+    status_values: list[str],
+) -> None:
+    """Filtros, métricas, export Excel y tabla paginada (solo finanzas)."""
+    st.caption("Filtra el listado y los totales; el Excel usa el mismo criterio.")
     st.markdown("##### Filtros")
     f1, f2, f3, f4, f5 = st.columns([1.3, 1.0, 1.0, 0.9, 0.9])
     with f1:
@@ -1674,6 +1896,8 @@ def render_reporte_citas_tab() -> None:
     m2.metric("Total abonado", _format_cop(total_abonado))
     m3.metric("Total saldo pendiente", _format_cop(total_pendiente))
     m4.metric("Saldo a favor (filtro)", _format_cop(total_credito_favor))
+
+    _render_procedure_value_bar_chart(filtered_items)
 
     _informe_dt = datetime.now()
     try:
@@ -1750,6 +1974,47 @@ def render_reporte_citas_tab() -> None:
     with p3:
         st.write("")
         st.caption(f"Página {page + 1}/{total_pages} · Total filtrado: {total} cita(s)")
+
+
+def _sync_appointments_from_api() -> None:
+    if st.session_state.get("_ap_reload"):
+        _fetch_appointments()
+        st.session_state["_ap_reload"] = False
+
+
+def render_reporte_citas_tab() -> None:
+    """Pestaña Reporte: finanzas y encuestas en sub-secciones; mismos filtros de citas para finanzas."""
+    _init_appt_tab_session_state()
+    _inject_citas_shared_styles()
+    _sync_appointments_from_api()
+
+    if st.session_state.get("_ap_err"):
+        st.error(st.session_state["_ap_err"])
+
+    items = list(st.session_state.get("_ap_list") or [])
+    svc_values = sorted(
+        {
+            str(i.get("service_type", i.get("service", "")) or "").strip()
+            for i in items
+            if str(i.get("service_type", i.get("service", "")) or "").strip()
+        }
+    )
+    status_values = ["Agendada", "Reprogramada", "Finalizada", "Cancelada"]
+
+    st.markdown("##### Reporte")
+    st.caption(
+        "**Finanzas**: montos, **barras Plotly** por procedimiento, export Excel y tabla. "
+        "**Encuestas**: **Plotly** (torta o barras). "
+        "Calendario en **Gestión citas**."
+    )
+    tab_finanzas, tab_encuestas = st.tabs(["Finanzas — citas", "Encuestas — satisfacción"])
+
+    with tab_finanzas:
+        _render_reporte_financiero_citas_body(items, svc_values, status_values)
+
+    with tab_encuestas:
+        st.markdown("##### Resumen por pregunta")
+        _render_survey_question_stats_report()
 
     if st.session_state.get("_ap_reprogram_item"):
         _dialog_reprogramar_cita()

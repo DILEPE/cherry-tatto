@@ -12,6 +12,15 @@ KIND_LABEL_ES: dict[ContractKind, str] = {
     "piercing": "Piercing",
 }
 
+"""Ámbito de una pregunta de encuesta (puede ser solo tatuaje, solo piercing, o ambos)."""
+SurveyQuestionScope = Literal["tattoo", "piercing", "both"]
+
+SCOPE_LABEL_ES: dict[SurveyQuestionScope, str] = {
+    "tattoo": "Tatuaje",
+    "piercing": "Piercing",
+    "both": "Ambas (tatuaje y piercing)",
+}
+
 _NO_CONTRACT_CANONICAL = frozenset({"cambio", "limpieza"})
 
 

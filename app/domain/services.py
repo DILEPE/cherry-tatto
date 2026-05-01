@@ -1,13 +1,21 @@
 import asyncio
+import json
 import logging
+import math
 from typing import Optional
 
 import mysql.connector
 
+from app.domain.contract_kinds import SurveyQuestionScope, appointment_to_contract_kind
 from app.domain.models import (
     AppointmentCreate,
     ContractSign,
     Survey,
+    SurveyQuestion,
+)
+from app.domain.survey_question_helpers import (
+    QUESTION_TYPES_NEEDING_OPTIONS,
+    parse_options_json,
 )
 from app.schemas.appointment import AppointmentListItem
 from app.schemas.customer import (
@@ -18,6 +26,14 @@ from app.schemas.customer import (
 )
 from app.schemas.report import FinancialReportRow
 from app.schemas.survey import SurveyRow
+from app.schemas.survey_questions import (
+    SurveyQuestionCreate,
+    SurveyQuestionDeletionImpact,
+    SurveyQuestionRead,
+    SurveyQuestionStatRow,
+    SurveyQuestionUpdate,
+    question_create_to_domain,
+)
 from app.schemas.template import ContractTemplateCreate, ContractTemplateRead, ContractTemplateUpdate
 
 logger = logging.getLogger(__name__)
@@ -104,13 +120,102 @@ class BusinessLogicService:
     async def get_contract(self, contract_id: int) -> Optional[dict[str, object]]:
         return await asyncio.to_thread(self.repository.get_contract_by_id, contract_id)
 
+    def _prepare_survey_for_persist(self, data: Survey) -> Survey:
+        """Valida respuestas dinámicas y rellena rating/comentarios/recomendación para la fila surveys."""
+        if not data.answers:
+            return data
+        appt_row = self.repository.get_by_id(data.appointment_id)
+        if appt_row is None:
+            raise ValueError(f"Cita con ID {data.appointment_id} no encontrada")
+        appt_kind = appointment_to_contract_kind(appt_row)
+        rows = self.repository.list_survey_questions(include_inactive=True)
+        qmap = {int(r["id"]): r for r in rows}
+        ratings: list[int] = []
+        texts: list[str] = []
+        first_bool: Optional[bool] = None
+        for ans in data.answers:
+            meta = qmap.get(ans.question_id)
+            if meta is None:
+                raise ValueError(f"Pregunta {ans.question_id} no existe")
+            ck = str(meta.get("contract_kind") or "tattoo").strip().lower()
+            if ck not in ("tattoo", "piercing", "both"):
+                ck = "tattoo"
+            if ck != appt_kind and ck != "both":
+                raise ValueError(
+                    "Una o más respuestas corresponden a preguntas de otro tipo de servicio (tatuaje / piercing)."
+                )
+            qt = str(meta["question_type"])
+            lbl = str(meta.get("label") or "")
+            opts = parse_options_json(meta.get("options_json"))
+            if qt == "rating_1_5":
+                if ans.answer_rating is None:
+                    raise ValueError(f"La pregunta «{lbl}» requiere una calificación del 1 al 5")
+                ratings.append(int(ans.answer_rating))
+            elif qt == "yes_no":
+                if ans.answer_bool is None:
+                    raise ValueError(f"La pregunta «{lbl}» requiere sí o no")
+                if first_bool is None:
+                    first_bool = ans.answer_bool
+            elif qt == "text":
+                if ans.answer_text and str(ans.answer_text).strip():
+                    texts.append(str(ans.answer_text).strip())
+            elif qt in ("textarea", "text_short"):
+                if ans.answer_text and str(ans.answer_text).strip():
+                    texts.append(str(ans.answer_text).strip())
+            elif qt == "number":
+                if ans.answer_number is None:
+                    raise ValueError(f"La pregunta «{lbl}» requiere un valor numérico")
+                num = float(ans.answer_number)
+                if not math.isfinite(num):
+                    raise ValueError(f"Número no válido en «{lbl}»")
+                texts.append(f"{lbl}: {num}")
+            elif qt in ("radio", "select"):
+                if not opts:
+                    raise ValueError(f"La pregunta «{lbl}» no tiene opciones configuradas")
+                val = (ans.answer_text or "").strip()
+                if val not in opts:
+                    raise ValueError(f"Debes elegir una opción válida para «{lbl}»")
+                texts.append(f"{lbl}: {val}")
+            elif qt == "checkbox":
+                selected: list[str] = []
+                raw_t = (ans.answer_text or "").strip()
+                if raw_t:
+                    try:
+                        parsed = json.loads(raw_t)
+                        if not isinstance(parsed, list):
+                            raise ValueError("lista esperada")
+                        selected = [str(x).strip() for x in parsed if str(x).strip()]
+                    except (json.JSONDecodeError, ValueError) as e:
+                        raise ValueError(
+                            f"La pregunta «{lbl}» requiere respuestas múltiples en formato lista (JSON)"
+                        ) from e
+                if opts:
+                    for s in selected:
+                        if s not in opts:
+                            raise ValueError(f"Opción no válida en «{lbl}»: {s}")
+                if selected:
+                    texts.append(f"{lbl}: {', '.join(selected)}")
+            else:
+                raise ValueError(f"Tipo de pregunta no soportado: {qt}")
+        rating_avg = int(round(sum(ratings) / len(ratings))) if ratings else 3
+        comments = " | ".join(texts) if texts else data.comments
+        would_rec = first_bool if first_bool is not None else data.would_recommend
+        return Survey(
+            appointment_id=data.appointment_id,
+            rating=rating_avg,
+            comments=comments,
+            would_recommend=would_rec,
+            answers=data.answers,
+        )
+
     async def register_survey(self, data: Survey) -> int:
-        new_id = self.repository.create_survey(data)
-        if data.rating <= 2:
+        prepared = await asyncio.to_thread(self._prepare_survey_for_persist, data)
+        new_id = await asyncio.to_thread(self.repository.create_survey, prepared)
+        if prepared.rating <= 2:
             pl: dict[str, object] = {
-                "appointment_id": data.appointment_id,
-                "rating": data.rating,
-                "comments": data.comments,
+                "appointment_id": prepared.appointment_id,
+                "rating": prepared.rating,
+                "comments": prepared.comments,
             }
             asyncio.create_task(self._async_notify("survey_low_rating", pl))
         return new_id
@@ -199,6 +304,12 @@ class BusinessLogicService:
         appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
         if appointment is None:
             raise ValueError("Cita no encontrada")
+        status = str(getattr(appointment, "status", "") or "")
+        if status not in {"Agendada", "Reprogramada"}:
+            raise ValueError("Solo se pueden reprogramar citas en estado Agendada o Reprogramada.")
+        has_contract = await asyncio.to_thread(self.repository.has_contract_for_appointment, appointment_id)
+        if has_contract:
+            raise ValueError("No se puede reprogramar: esta cita ya tiene contrato firmado.")
         await asyncio.to_thread(self.repository.reprogram_appointment, appointment_id, new_date, detail)
 
     async def update_appointment_financials(
@@ -255,6 +366,148 @@ class BusinessLogicService:
         def _run() -> list[SurveyRow]:
             rows = self.repository.get_surveys()
             return [SurveyRow.model_validate(r) for r in rows]
+
+        return await asyncio.to_thread(_run)
+
+    async def list_survey_questions(
+        self,
+        *,
+        include_inactive: bool = False,
+        contract_kind: Optional[str] = None,
+    ) -> list[SurveyQuestionRead]:
+
+        def _run() -> list[SurveyQuestionRead]:
+            ck: Optional[str] = None
+            if contract_kind is not None and str(contract_kind).strip():
+                v = str(contract_kind).strip().lower()
+                if v not in ("tattoo", "piercing", "both"):
+                    raise ValueError("contract_kind debe ser tattoo, piercing o both")
+                ck = v
+            rows = self.repository.list_survey_questions(
+                include_inactive=include_inactive,
+                contract_kind=ck,
+            )
+            return [SurveyQuestionRead.model_validate(r) for r in rows]
+
+        return await asyncio.to_thread(_run)
+
+    async def create_survey_question(self, data: SurveyQuestionCreate) -> int:
+        domain = question_create_to_domain(data)
+        return await asyncio.to_thread(self.repository.create_survey_question, domain)
+
+    async def update_survey_question(self, question_id: int, data: SurveyQuestionUpdate) -> None:
+
+        def _run() -> None:
+            row = self.repository.get_survey_question(question_id)
+            if row is None:
+                raise ValueError("Pregunta no encontrada")
+            merged_type = str(data.question_type) if data.question_type is not None else str(row["question_type"])
+            if merged_type in QUESTION_TYPES_NEEDING_OPTIONS:
+                if data.options is not None:
+                    merged_opts = list(data.options) if data.options else None
+                else:
+                    merged_opts = parse_options_json(row.get("options_json"))
+                if not merged_opts or len(merged_opts) < 2:
+                    raise ValueError("Este tipo requiere al menos 2 opciones en `options`")
+                opts_for_domain: Optional[list[str]] = merged_opts
+            else:
+                if data.options is not None and data.options:
+                    raise ValueError("Este tipo de pregunta no admite lista de opciones")
+                opts_for_domain = None
+            if data.contract_kind is not None:
+                merged_ck = str(data.contract_kind).strip().lower()
+            else:
+                merged_ck = str(row.get("contract_kind") or "tattoo").strip().lower()
+            if merged_ck not in ("tattoo", "piercing", "both"):
+                merged_ck = "tattoo"
+            merged = SurveyQuestion(
+                id=question_id,
+                label=str(data.label) if data.label is not None else str(row["label"]),
+                question_type=merged_type,
+                options=opts_for_domain,
+                sort_order=int(data.sort_order) if data.sort_order is not None else int(row.get("sort_order") or 0),
+                contract_kind=merged_ck,
+                is_active=bool(data.is_active) if data.is_active is not None else bool(row.get("is_active", True)),
+            )
+            self.repository.update_survey_question(merged)
+
+        return await asyncio.to_thread(_run)
+
+    async def delete_survey_question(self, question_id: int) -> None:
+
+        def _run() -> None:
+            row = self.repository.get_survey_question(question_id)
+            if row is None:
+                raise ValueError("Pregunta no encontrada")
+            self.repository.delete_survey_question(question_id)
+
+        return await asyncio.to_thread(_run)
+
+    async def survey_question_deletion_impact(self, question_id: int) -> SurveyQuestionDeletionImpact:
+
+        def _run() -> SurveyQuestionDeletionImpact:
+            row = self.repository.get_survey_question(question_id)
+            if row is None:
+                raise ValueError("Pregunta no encontrada")
+            n = self.repository.count_survey_answers_for_question(question_id)
+            return SurveyQuestionDeletionImpact(
+                question_id=question_id,
+                label=str(row["label"]),
+                registered_answers=n,
+            )
+
+        return await asyncio.to_thread(_run)
+
+    async def survey_question_stats_summary(self) -> list[SurveyQuestionStatRow]:
+
+        def _run() -> list[SurveyQuestionStatRow]:
+            rows = self.repository.get_survey_question_stats_summary()
+            out: list[SurveyQuestionStatRow] = []
+            for r in rows:
+                ar = r.get("avg_rating")
+                avg = float(ar) if ar is not None else None
+                yc = r.get("yes_count")
+                nc = r.get("no_count")
+                tc = r.get("text_response_count")
+                an = r.get("avg_number")
+                ck_stat = str(r.get("contract_kind") or "tattoo").strip().lower()
+                if ck_stat not in ("tattoo", "piercing", "both"):
+                    ck_stat = "tattoo"
+                row_ck: SurveyQuestionScope = (
+                    "piercing" if ck_stat == "piercing" else ("both" if ck_stat == "both" else "tattoo")
+                )
+                rb = r.get("rating_breakdown")
+                nb = r.get("number_breakdown")
+                cb = r.get("choice_breakdown")
+                rating_bd: Optional[dict[str, int]] = None
+                if isinstance(rb, dict) and rb:
+                    rating_bd = {str(k): int(v) for k, v in rb.items()}
+                number_bd: Optional[dict[str, int]] = None
+                if isinstance(nb, dict) and nb:
+                    number_bd = {str(k): int(v) for k, v in nb.items()}
+                choice_bd: Optional[dict[str, int]] = None
+                if isinstance(cb, dict) and cb:
+                    choice_bd = {str(k): int(v) for k, v in cb.items()}
+                out.append(
+                    SurveyQuestionStatRow(
+                        question_id=int(r["question_id"]),
+                        label=str(r["label"]),
+                        question_type=str(r["question_type"]),
+                        sort_order=int(r.get("sort_order") or 0),
+                        contract_kind=row_ck,
+                        is_active=bool(r.get("is_active", True)),
+                        response_count=int(r.get("response_count") or 0),
+                        avg_rating=avg,
+                        yes_count=int(yc) if yc is not None else None,
+                        no_count=int(nc) if nc is not None else None,
+                        text_response_count=int(tc) if tc is not None else None,
+                        avg_number=float(an) if an is not None else None,
+                        rating_breakdown=rating_bd,
+                        number_breakdown=number_bd,
+                        choice_breakdown=choice_bd,
+                    )
+                )
+            return out
 
         return await asyncio.to_thread(_run)
 

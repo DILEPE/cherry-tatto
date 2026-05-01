@@ -95,6 +95,7 @@ class AppointmentListItem(BaseModel):
     is_priority: Optional[bool] = None
     customer_id: Optional[int] = None
     created_at: Optional[datetime | str] = None
+    has_signed_contract: bool = Field(default=False, description="True si existe fila en contracts para esta cita.")
 
 
 class AppointmentStatusUpdateRequest(BaseModel):

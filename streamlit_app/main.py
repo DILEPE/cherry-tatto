@@ -31,6 +31,7 @@ from streamlit_app.contract_read_view import render_contract_read_view
 from streamlit_app.contract_signing import render_contract_signing_view
 from streamlit_app.contracts_admin import render_contract_admin_tab
 from streamlit_app.customers_management import render_customers_management_tab
+from streamlit_app.survey_questions_admin import render_survey_questions_tab
 
 LOGO_CANDIDATES = [
     Path(__file__).resolve().parent / "assets" / "branding.png",
@@ -215,7 +216,7 @@ def main() -> None:
         render_contract_admin_tab()
 
     with tab_encuestas:
-        st.info("Gestión encuesta — en construcción.")
+        render_survey_questions_tab()
 
     with tab_reporte:
         render_reporte_citas_tab()

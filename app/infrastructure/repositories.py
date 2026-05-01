@@ -1,6 +1,12 @@
 import json
 from typing import Any, Optional
-from app.domain.models import AppointmentCreate, ContractSign, ContractTemplate, Survey
+from app.domain.models import (
+    AppointmentCreate,
+    ContractSign,
+    ContractTemplate,
+    Survey,
+    SurveyQuestion,
+)
 from app.domain.service_types import resolve_service_type
 
 class AppointmentRepository:
@@ -23,8 +29,20 @@ class AppointmentRepository:
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn, dictionary=True)
-            cursor.execute("SELECT * FROM appointments ORDER BY created_at DESC")
-            return cursor.fetchall()
+            cursor.execute(
+                """
+                SELECT a.*,
+                    EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
+                        AS has_signed_contract
+                FROM appointments a
+                ORDER BY a.created_at DESC
+                """
+            )
+            rows = cursor.fetchall()
+            for row in rows:
+                raw = row.get("has_signed_contract")
+                row["has_signed_contract"] = bool(raw) if raw is not None else False
+            return rows
         finally:
             if conn: conn.close()
 
@@ -152,6 +170,18 @@ class AppointmentRepository:
             contract_id = cursor.lastrowid
             conn.commit()
             return contract_id
+        finally:
+            if conn: conn.close()
+
+    def has_contract_for_appointment(self, appointment_id: int) -> bool:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                "SELECT 1 FROM contracts WHERE appointment_id = %s LIMIT 1",
+                (appointment_id,),
+            )
+            return cursor.fetchone() is not None
         finally:
             if conn: conn.close()
 
@@ -337,25 +367,39 @@ class AppointmentRepository:
     # --- Encuestas ---
 
     def create_survey(self, data: Survey) -> int:
-        """Persiste la encuesta de satisfacción en la base de datos."""
+        """Persiste la encuesta y, si aplica, las respuestas por pregunta (survey_answers)."""
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn)
-            query = """
+            cursor.execute(
+                """
                 INSERT INTO surveys (appointment_id, rating, comments, would_recommend)
                 VALUES (%s, %s, %s, %s)
-            """
-            cursor.execute(query, (
-                data.appointment_id,
-                data.rating,
-                data.comments,
-                data.would_recommend
-            ))
+                """,
+                (data.appointment_id, data.rating, data.comments, data.would_recommend),
+            )
             new_id = cursor.lastrowid
+            if data.answers:
+                for a in data.answers:
+                    cursor.execute(
+                        """
+                        INSERT INTO survey_answers (survey_id, question_id, answer_rating, answer_bool, answer_text, answer_number)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            int(new_id),
+                            a.question_id,
+                            a.answer_rating,
+                            a.answer_bool,
+                            a.answer_text,
+                            a.answer_number,
+                        ),
+                    )
             conn.commit()
-            return new_id
+            return int(new_id)
         finally:
-            if conn: conn.close()
+            if conn:
+                conn.close()
 
     def get_survey_by_appointment(self, appointment_id: int) -> Optional[dict[str, object]]:
         conn = self.db.get_connection()
@@ -374,6 +418,216 @@ class AppointmentRepository:
             return cursor.fetchall()
         finally:
             if conn: conn.close()
+
+    # --- Preguntas de encuesta (configuración) ---
+
+    def list_survey_questions(
+        self,
+        include_inactive: bool = False,
+        contract_kind: Optional[str] = None,
+    ) -> list[dict[str, object]]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            q = "SELECT * FROM survey_questions WHERE 1=1"
+            params: list[object] = []
+            if not include_inactive:
+                q += " AND is_active = 1"
+            if contract_kind is not None and str(contract_kind).strip():
+                ck = str(contract_kind).strip().lower()
+                if ck == "both":
+                    q += " AND contract_kind = 'both'"
+                else:
+                    q += " AND (contract_kind = %s OR contract_kind = 'both')"
+                    params.append(ck)
+            q += " ORDER BY sort_order ASC, id ASC"
+            cursor.execute(q, tuple(params))
+            return cursor.fetchall()
+        finally:
+            if conn:
+                conn.close()
+
+    def get_survey_question(self, question_id: int) -> Optional[dict[str, object]]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute("SELECT * FROM survey_questions WHERE id = %s", (question_id,))
+            return cursor.fetchone()
+        finally:
+            if conn:
+                conn.close()
+
+    def create_survey_question(self, data: SurveyQuestion) -> int:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            oj = json.dumps(data.options, ensure_ascii=False) if data.options else None
+            cursor.execute(
+                """
+                INSERT INTO survey_questions (label, question_type, options_json, sort_order, contract_kind, is_active)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    data.label,
+                    data.question_type,
+                    oj,
+                    data.sort_order,
+                    str(data.contract_kind or "tattoo"),
+                    1 if data.is_active else 0,
+                ),
+            )
+            conn.commit()
+            return int(cursor.lastrowid or 0)
+        finally:
+            if conn:
+                conn.close()
+
+    def update_survey_question(self, data: SurveyQuestion) -> None:
+        if data.id is None:
+            raise ValueError("question id requerido")
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                """
+                UPDATE survey_questions
+                SET label = %s, question_type = %s, options_json = %s, sort_order = %s,
+                    contract_kind = %s, is_active = %s
+                WHERE id = %s
+                """,
+                (
+                    data.label,
+                    data.question_type,
+                    json.dumps(data.options, ensure_ascii=False) if data.options else None,
+                    data.sort_order,
+                    str(data.contract_kind or "tattoo"),
+                    1 if data.is_active else 0,
+                    data.id,
+                ),
+            )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
+    def delete_survey_question(self, question_id: int) -> None:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute("DELETE FROM survey_questions WHERE id = %s", (question_id,))
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
+    def count_survey_answers_for_question(self, question_id: int) -> int:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                "SELECT COUNT(*) FROM survey_answers WHERE question_id = %s",
+                (question_id,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return 0
+            return int(row[0])
+        finally:
+            if conn:
+                conn.close()
+
+    def get_survey_question_stats_summary(self) -> list[dict[str, object]]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT
+                    q.id AS question_id,
+                    q.label,
+                    q.question_type,
+                    q.sort_order,
+                    COALESCE(q.contract_kind, 'tattoo') AS contract_kind,
+                    q.is_active,
+                    COUNT(a.id) AS response_count,
+                    AVG(a.answer_rating) AS avg_rating,
+                    SUM(CASE WHEN a.answer_bool IS NOT NULL AND a.answer_bool = 1 THEN 1 ELSE 0 END) AS yes_count,
+                    SUM(CASE WHEN a.answer_bool IS NOT NULL AND a.answer_bool = 0 THEN 1 ELSE 0 END) AS no_count,
+                    SUM(
+                        CASE
+                            WHEN a.answer_text IS NOT NULL AND CHAR_LENGTH(TRIM(a.answer_text)) > 0 THEN 1
+                            ELSE 0
+                        END
+                    ) AS text_response_count,
+                    AVG(a.answer_number) AS avg_number
+                FROM survey_questions q
+                LEFT JOIN survey_answers a ON a.question_id = q.id
+                GROUP BY q.id, q.label, q.question_type, q.sort_order, q.contract_kind, q.is_active
+                ORDER BY q.sort_order ASC, q.id ASC
+                """
+            )
+            rows = cursor.fetchall()
+
+            rating_breakdown: dict[int, dict[str, int]] = {}
+            cursor.execute(
+                """
+                SELECT question_id, answer_rating AS rv, COUNT(*) AS cnt
+                FROM survey_answers
+                WHERE answer_rating IS NOT NULL
+                GROUP BY question_id, answer_rating
+                """
+            )
+            for r in cursor.fetchall():
+                qid = int(r["question_id"])
+                rv = int(r["rv"])
+                rating_breakdown.setdefault(qid, {})[str(rv)] = int(r["cnt"])
+
+            number_breakdown: dict[int, dict[str, int]] = {}
+            cursor.execute(
+                """
+                SELECT question_id, answer_number AS nv, COUNT(*) AS cnt
+                FROM survey_answers
+                WHERE answer_number IS NOT NULL
+                GROUP BY question_id, answer_number
+                """
+            )
+            for r in cursor.fetchall():
+                qid = int(r["question_id"])
+                nv = r["nv"]
+                key = format(float(nv), "g") if nv is not None else "0"
+                number_breakdown.setdefault(qid, {})[key] = int(r["cnt"])
+
+            choice_breakdown: dict[int, dict[str, int]] = {}
+            cursor.execute(
+                """
+                SELECT a.question_id, a.answer_text AS txt, COUNT(*) AS cnt
+                FROM survey_answers a
+                INNER JOIN survey_questions q ON q.id = a.question_id
+                WHERE q.question_type IN ('radio', 'select', 'checkbox')
+                  AND a.answer_text IS NOT NULL
+                  AND CHAR_LENGTH(TRIM(a.answer_text)) > 0
+                GROUP BY a.question_id, a.answer_text
+                """
+            )
+            for r in cursor.fetchall():
+                qid = int(r["question_id"])
+                txt = str(r["txt"] or "").strip()
+                if not txt:
+                    continue
+                choice_breakdown.setdefault(qid, {})[txt] = int(r["cnt"])
+
+            for row in rows:
+                qid = int(row["question_id"])
+                rb = rating_breakdown.get(qid)
+                nb = number_breakdown.get(qid)
+                cb = choice_breakdown.get(qid)
+                row["rating_breakdown"] = rb if rb else None
+                row["number_breakdown"] = nb if nb else None
+                row["choice_breakdown"] = cb if cb else None
+            return rows
+        finally:
+            if conn:
+                conn.close()
 
     # --- Plantillas ---
 

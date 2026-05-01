@@ -49,12 +49,35 @@ class ContractTemplate:
     is_active: bool = True
 
 @dataclass
+class SurveyAnswerWrite:
+    """Respuesta a una pregunta dinámica al registrar una encuesta."""
+    question_id: int
+    answer_rating: Optional[int] = None
+    answer_bool: Optional[bool] = None
+    answer_text: Optional[str] = None
+    answer_number: Optional[float] = None
+
+
+@dataclass
 class Survey:
     """Modelo para la encuesta de satisfacción."""
     appointment_id: int
-    rating: int  # Valor del 1 al 5
+    rating: int  # Valor del 1 al 5 (denormalizado; ver respuestas en survey_answers si aplica)
     comments: Optional[str] = None
     would_recommend: bool = True
+    answers: Optional[list[SurveyAnswerWrite]] = None
+
+
+@dataclass
+class SurveyQuestion:
+    """Definición de pregunta del formulario de encuesta."""
+    id: Optional[int]
+    label: str
+    question_type: str  # rating_1_5 | yes_no | text | radio | checkbox | select | textarea | text_short | number
+    options: Optional[list[str]] = None  # radio, checkbox, select
+    sort_order: int = 0
+    contract_kind: str = "tattoo"  # tattoo | piercing | both (encuesta de firma)
+    is_active: bool = True
 
 # ==========================================
 # ESQUEMAS DE SALIDA (RESPONSES)
