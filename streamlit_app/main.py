@@ -31,6 +31,7 @@ from streamlit_app.contract_read_view import render_contract_read_view
 from streamlit_app.contract_signing import render_contract_signing_view
 from streamlit_app.contracts_admin import render_contract_admin_tab
 from streamlit_app.customers_management import render_customers_management_tab
+from streamlit_app.panel_auth import panel_logout_button, render_login_gate
 from streamlit_app.survey_questions_admin import render_survey_questions_tab
 
 LOGO_CANDIDATES = [
@@ -162,6 +163,8 @@ def main() -> None:
             render_contract_read_view(contract_id)
         return
 
+    render_login_gate()
+
     with st.sidebar:
         logo = _logo_path()
         if logo:
@@ -193,6 +196,8 @@ def main() -> None:
                 st.warning(msg_n8n)
             else:
                 st.error(msg_n8n)
+
+        panel_logout_button()
 
     st.markdown('<p class="neon-title">Panel de operaciones</p>', unsafe_allow_html=True)
 

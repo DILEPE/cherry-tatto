@@ -92,9 +92,20 @@ API_BASE_URL=http://127.0.0.1:5000
 
 # Tipos de servicio en citas (debe coincidir con VARCHAR/ENUM en MySQL)
 SERVICE_TYPE_ENUM_VALUES=Tatuaje,Piercing,Cambio,Limpieza
+
+# Login del panel Streamlit (opcional). Valores reconocidos para activar: 1, true, yes, on
+# (sin distinguir mayúsculas). Las firmas y lectura de contrato por URL (?view=contract_sign / contract_read)
+# siguen siendo públicas y no pasan por este login.
+# PANEL_AUTH_ENABLED=1
+# PANEL_LOGIN_USER=operador
+# PANEL_LOGIN_PASSWORD=elige-una-contraseña-segura
+# PANEL_AUTH_USERS_SOURCE=database
+# Tras ejecutar sql/015_panel_users.sql: registro e inicio de sesión contra tabla panel_users (API en marcha).
 ```
 
-Ajusta `DB_*`, `API_BASE_URL` (si la API corre en otro host/puerto) y `SERVICE_TYPE_ENUM_VALUES` según tu despliegue.
+Ajusta `DB_*`, `API_BASE_URL` (si la API corre en otro host/puerto) y `SERVICE_TYPE_ENUM_VALUES` según tu despliegue. En desarrollo suele convenir dejar `PANEL_AUTH_ENABLED` sin definir o en falso para no pedir usuario al abrir el panel.
+
+Con **`PANEL_AUTH_USERS_SOURCE=database`**, los usuarios se crean desde el panel (pestaña **Crear cuenta**) o vía `POST /api/panel-users/register`; hace falta haber aplicado **`015_panel_users.sql`** y tener la API accesible en `API_BASE_URL`. Con **`PANEL_AUTH_USERS_SOURCE=env`** (por defecto si no defines la variable), el login sigue usando solo `PANEL_LOGIN_USER` y `PANEL_LOGIN_PASSWORD`.
 
 ### 4. Arrancar la API (Litestar + Uvicorn)
 

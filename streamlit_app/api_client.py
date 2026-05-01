@@ -130,6 +130,22 @@ def delete_template(template_id: int) -> Tuple[bool, int, Any]:
     return _request("DELETE", f"/api/templates/{template_id}")
 
 
+def post_panel_user_register(username: str, password: str) -> Tuple[bool, int, Any]:
+    return _request(
+        "POST",
+        "/api/panel-users/register",
+        json_body={"username": username, "password": password},
+    )
+
+
+def post_panel_user_login(username: str, password: str) -> Tuple[bool, int, Any]:
+    return _request(
+        "POST",
+        "/api/panel-users/login",
+        json_body={"username": username, "password": password},
+    )
+
+
 def post_survey(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
     return _request("POST", "/api/surveys", json_body=payload)
 
