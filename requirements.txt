@@ -10,3 +10,4 @@ pydantic>=2
 email-validator
 openpyxl
 plotly>=5.18
+bcrypt>=4.1

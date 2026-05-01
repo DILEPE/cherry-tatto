@@ -13,6 +13,7 @@ from app.domain.models import (
     Survey,
     SurveyQuestion,
 )
+from app.domain.panel_passwords import hash_password, verify_password
 from app.domain.survey_question_helpers import (
     QUESTION_TYPES_NEEDING_OPTIONS,
     parse_options_json,
@@ -24,6 +25,7 @@ from app.schemas.customer import (
     CustomerPublic,
     CustomerUpdate,
 )
+from app.schemas.panel_user import PanelUserRegister
 from app.schemas.report import FinancialReportRow
 from app.schemas.survey import SurveyRow
 from app.schemas.survey_questions import (
@@ -44,10 +46,11 @@ class BusinessLogicService:
     Capa de dominio / aplicación: orquesta citas, clientes, plantillas y notificaciones.
     """
 
-    def __init__(self, appointment_repository, customer_repository, notifier):
+    def __init__(self, appointment_repository, customer_repository, notifier, panel_user_repository=None):
         self.repository = appointment_repository
         self.customers = customer_repository
         self.notifier = notifier
+        self.panel_user_repo = panel_user_repository
 
     # --- Citas + cliente ---
 
@@ -569,6 +572,31 @@ class BusinessLogicService:
         if row is None:
             raise ValueError("Customer not found")
         await asyncio.to_thread(self.customers.soft_delete, customer_id)
+
+    async def register_panel_user(self, data: PanelUserRegister) -> int:
+        if self.panel_user_repo is None:
+            raise RuntimeError("Repositorio de usuarios del panel no configurado.")
+
+        def _run() -> int:
+            with self.panel_user_repo.db.transaction() as conn:
+                if self.panel_user_repo.get_by_username(data.username, conn):
+                    raise ValueError("USERNAME_TAKEN")
+                ph = hash_password(data.password)
+                return self.panel_user_repo.insert(data.username, ph, conn)
+
+        return await asyncio.to_thread(_run)
+
+    async def verify_panel_user_login(self, username: str, password: str) -> bool:
+        if self.panel_user_repo is None:
+            return False
+
+        def _run() -> bool:
+            row = self.panel_user_repo.get_by_username(username)
+            if not row or not row.get("is_active"):
+                return False
+            return verify_password(password, str(row["password_hash"]))
+
+        return await asyncio.to_thread(_run)
 
     async def _async_notify(self, event: str, payload: dict[str, object]) -> None:
         try:
