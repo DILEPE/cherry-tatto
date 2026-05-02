@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import math
+from datetime import datetime
 from typing import Optional
 
 import mysql.connector
@@ -11,6 +12,7 @@ from app.domain.contract_kinds import (
     appointment_to_contract_kind,
     service_type_to_assignee_panel_role,
 )
+from app.domain.contract_signing_guard import appointment_must_be_fully_paid_for_contract
 from app.domain.service_types import resolve_service_type
 from app.domain.models import (
     AppointmentCreate,
@@ -21,6 +23,7 @@ from app.domain.models import (
 from app.domain.panel_user_profile import PANEL_ROLE_LABEL_ES
 from app.domain.panel_modules import ASSIGNABLE_PANEL_MODULE_KEYS
 from app.domain.panel_passwords import hash_password, verify_password
+from app.domain.payment_receipt_pdf import PaymentReceiptPdfContext, build_payment_receipt_pdf
 from app.domain.survey_question_helpers import (
     QUESTION_TYPES_NEEDING_OPTIONS,
     parse_options_json,
@@ -67,9 +70,55 @@ class BusinessLogicService:
         self.notifier = notifier
         self.panel_user_repo = panel_user_repository
 
+    def _issue_payment_receipt(
+        self,
+        appointment_id: int,
+        *,
+        kind: str,
+        appointment_payment_id: Optional[int],
+        receipt_amount: float,
+        payment_note: Optional[str],
+    ) -> Optional[int]:
+        """Genera PDF y lo guarda en `appointment_payment_receipts`. Ejecutar en worker thread."""
+        appt = self.repository.get_by_id(appointment_id)
+        if appt is None:
+            return None
+        raw_cust = getattr(appt, "customer_id", None)
+        customer_id = int(raw_cust) if raw_cust is not None else None
+        kind_label = "Abono adicional" if kind == "abono" else "Agendamiento / primer abono"
+        ctx = PaymentReceiptPdfContext(
+            client_name=str(getattr(appt, "name", "") or ""),
+            client_phone=str(getattr(appt, "phone", "") or ""),
+            appointment_when=str(getattr(appt, "date", "") or ""),
+            service=str(getattr(appt, "service", "") or ""),
+            detail=str(getattr(appt, "detail", "") or ""),
+            total_amount=float(getattr(appt, "total_amount", 0) or 0),
+            this_payment=float(receipt_amount),
+            deposit_total_after=float(getattr(appt, "deposit", 0) or 0),
+            pending_after=float(getattr(appt, "pending_balance", 0) or 0),
+            kind_label=kind_label,
+            issued_at=datetime.now(),
+            payment_note=payment_note,
+        )
+        pdf_bytes = build_payment_receipt_pdf(ctx)
+        file_name = f"recibo_cita_{appointment_id}_{int(datetime.now().timestamp() * 1000)}.pdf"
+        return self.repository.insert_payment_receipt(
+            appointment_id,
+            customer_id,
+            appointment_payment_id,
+            kind,
+            float(receipt_amount),
+            float(ctx.total_amount),
+            float(ctx.deposit_total_after),
+            float(ctx.pending_after),
+            payment_note,
+            file_name,
+            pdf_bytes,
+        )
+
     # --- Citas + cliente ---
 
-    async def register_appointment(self, data: AppointmentCreate) -> int:
+    async def register_appointment(self, data: AppointmentCreate) -> tuple[int, Optional[int]]:
         """
         Crea cita. Si viene `customer` (dict), valida con Pydantic y hace upsert por documento.
         Si viene `customer_id`, verifica existencia. Usa transacción para cliente + cita.
@@ -112,17 +161,36 @@ class BusinessLogicService:
                 return new_id, resolved_id
 
         new_id, customer_id = await asyncio.to_thread(_sync_register)
+        initial_pay_id: Optional[int] = None
         if data.deposit > 0:
             try:
-                # create() ya guardó deposit en appointments; solo trazabilidad en ledger (evitar doble suma).
-                await asyncio.to_thread(
+                initial_pay_id = await asyncio.to_thread(
                     self.repository.insert_payment_ledger_row_only,
                     new_id,
                     float(data.deposit),
                     "Abono inicial al agendar",
                 )
             except Exception:
-                logger.warning("No fue posible registrar abono inicial en historial para cita id=%s", new_id)
+                logger.warning(
+                    "No fue posible registrar abono inicial en historial para cita id=%s",
+                    new_id,
+                )
+        try:
+            await asyncio.to_thread(
+                lambda: self._issue_payment_receipt(
+                    new_id,
+                    kind="inicial",
+                    appointment_payment_id=initial_pay_id,
+                    receipt_amount=float(data.deposit),
+                    payment_note=(
+                        "Abono inicial al agendar"
+                        if data.deposit > 0
+                        else "Confirmación de cita"
+                    ),
+                )
+            )
+        except Exception:
+            logger.exception("No se pudo emitir recibo inicial para cita id=%s", new_id)
 
         payload: dict[str, object] = {
             "id": new_id,
@@ -133,12 +201,20 @@ class BusinessLogicService:
             "customer_id": customer_id,
         }
         asyncio.create_task(self._async_notify("appointment_created", payload))
-        return new_id
+        return new_id, customer_id
 
     async def process_contract_signature(self, data: ContractSign) -> None:
         appointment = self.repository.get_by_id(data.appointment_id)
         if not appointment:
             raise ValueError(f"Cita con ID {data.appointment_id} no encontrada.")
+
+        ok_pay, pay_err = appointment_must_be_fully_paid_for_contract(
+            total_amount=getattr(appointment, "total_amount", None),
+            deposit=getattr(appointment, "deposit", None),
+            pending_balance=getattr(appointment, "pending_balance", None),
+        )
+        if not ok_pay and pay_err:
+            raise ValueError(pay_err)
 
         self.repository.create_contract(data)
         self.repository.update_status(data.appointment_id, "Finalizada")
@@ -386,7 +462,7 @@ class BusinessLogicService:
             raise ValueError("Cita no encontrada")
         return await asyncio.to_thread(self.repository.list_payments_by_appointment, appointment_id)
 
-    async def add_appointment_payment(self, appointment_id: int, amount: float, note: Optional[str] = None) -> None:
+    async def add_appointment_payment(self, appointment_id: int, amount: float, note: Optional[str] = None) -> int:
         appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
         if appointment is None:
             raise ValueError("Cita no encontrada")
@@ -399,7 +475,47 @@ class BusinessLogicService:
         current_deposit = float(getattr(appointment, "deposit", 0) or 0)
         if current_deposit + amount > total_amount:
             raise ValueError("El abono adicional excede el valor total del trabajo")
-        await asyncio.to_thread(self.repository.create_payment, appointment_id, float(amount), note)
+
+        def _pay() -> int:
+            return self.repository.create_payment(appointment_id, float(amount), note)
+
+        pay_id = await asyncio.to_thread(_pay)
+        try:
+            await asyncio.to_thread(
+                lambda: self._issue_payment_receipt(
+                    appointment_id,
+                    kind="abono",
+                    appointment_payment_id=pay_id,
+                    receipt_amount=float(amount),
+                    payment_note=note,
+                )
+            )
+        except Exception:
+            logger.exception("No se pudo emitir recibo de abono para cita id=%s pago id=%s", appointment_id, pay_id)
+        return pay_id
+
+    async def list_appointment_payment_receipts(self, appointment_id: int) -> list[dict[str, object]]:
+        appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
+        if appointment is None:
+            raise ValueError("Cita no encontrada")
+        return await asyncio.to_thread(self.repository.list_payment_receipts_by_appointment, appointment_id)
+
+    async def get_appointment_receipt_pdf(self, appointment_id: int, receipt_id: int) -> tuple[bytes, str]:
+        appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
+        if appointment is None:
+            raise ValueError("Cita no encontrada")
+
+        def _fetch() -> Optional[dict[str, object]]:
+            return self.repository.get_payment_receipt_file(appointment_id, receipt_id)
+
+        row = await asyncio.to_thread(_fetch)
+        if row is None:
+            raise ValueError("Recibo no encontrado")
+        raw_pdf = row.get("pdf")
+        if raw_pdf is None:
+            raise ValueError("Recibo sin archivo")
+        fn = str(row.get("file_name") or "recibo.pdf")
+        return bytes(raw_pdf), fn
 
     async def list_surveys(self) -> list[SurveyRow]:
 

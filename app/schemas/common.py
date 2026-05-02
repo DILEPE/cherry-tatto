@@ -19,11 +19,18 @@ class AppointmentCreatedResponse(BaseModel):
     id: int
     status: str
     message: str
+    customer_id: Optional[int] = None
 
 
 class MessageResponse(BaseModel):
     status: str
     message: str
+
+
+class AppointmentPaymentCreatedResponse(MessageResponse):
+    """Respuesta al registrar un abono adicional (incluye id del movimiento en historial)."""
+
+    payment_id: int
 
 
 class CustomerCreatedResponse(BaseModel):

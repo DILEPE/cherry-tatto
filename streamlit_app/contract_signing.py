@@ -14,6 +14,7 @@ import streamlit as st
 
 from app.schemas.customer import CUSTOMER_BIRTH_PENDING, SOCIAL_MEDIA_MAX_LEN
 from app.domain.contract_kinds import KIND_LABEL_ES, appointment_to_contract_kind, service_type_requires_contract
+from app.domain.contract_signing_guard import appointment_must_be_fully_paid_for_contract
 from app.domain.survey_question_helpers import QUESTION_TYPES_NEEDING_OPTIONS
 from streamlit_app import api_client
 from streamlit_app.customer_sync import social_media_api_to_form_text, social_media_form_text_to_api
@@ -239,7 +240,7 @@ def _steps_progress(step: int) -> None:
     st.caption(f"Paso **{step}/3** — {titles[step - 1]}")
 
 
-def _render_step1_personal(customer_id: int, customer: dict[str, Any]) -> None:
+def _render_step1_personal(customer_id: int, customer: dict[str, Any], appointment: dict[str, Any]) -> None:
     st.markdown("#### Etapa 1 — Completar datos del cliente")
     st.caption(
         "Alineado con **Gestión de clientes**: revisa y completa lo que falte. "
@@ -429,6 +430,14 @@ def _render_step1_personal(customer_id: int, customer: dict[str, Any]) -> None:
             }
             ok, code, data = api_client.put_customer(customer_id, payload)
             if ok:
+                ok_pay, pay_err = appointment_must_be_fully_paid_for_contract(
+                    total_amount=appointment.get("total_amount"),
+                    deposit=appointment.get("deposit"),
+                    pending_balance=appointment.get("pending_balance"),
+                )
+                if not ok_pay:
+                    st.error(pay_err or "Completa el abono antes de firmar el contrato.")
+                    return
                 st.session_state["ctsig_step"] = 2
                 st.success("Datos guardados. Continúa en la etapa 2.")
                 st.rerun()
@@ -447,6 +456,20 @@ def _render_step2_sign(
     appointment: dict[str, Any],
 ) -> None:
     st.markdown("#### Etapa 2 — Firma del contrato")
+    ok_pay, pay_err = appointment_must_be_fully_paid_for_contract(
+        total_amount=appointment.get("total_amount"),
+        deposit=appointment.get("deposit"),
+        pending_balance=appointment.get("pending_balance"),
+    )
+    if not ok_pay:
+        st.error(pay_err or "Completa el abono antes de firmar el contrato.")
+        st.info(
+            "Abre **Gestión de citas**, localiza esta cita y usa **Montos** hasta dejar **saldo pendiente** en cero."
+        )
+        if st.button("← Volver a datos personales", use_container_width=True, key="ctsig_s2_pay_block_back"):
+            st.session_state["ctsig_step"] = 1
+            st.rerun()
+        return
     birth_d = _parse_date(customer.get("birth_date"))
     is_minor = _is_minor_by_birth_date(birth_d)
     if is_minor != bool(customer.get("is_minor")):
@@ -669,6 +692,14 @@ def _render_step2_sign(
 
     with nav3:
         if st.button("Guardar contrato firmado", type="primary", use_container_width=True, key="ctsig_save"):
+            ok_pay2, pay_err2 = appointment_must_be_fully_paid_for_contract(
+                total_amount=appointment.get("total_amount"),
+                deposit=appointment.get("deposit"),
+                pending_balance=appointment.get("pending_balance"),
+            )
+            if not ok_pay2:
+                st.error(pay_err2 or "Saldo pendiente: no se puede firmar.")
+                return
             if not client_signature:
                 st.error("La firma del cliente es obligatoria.")
                 return
@@ -995,7 +1026,7 @@ def render_contract_signing_view(appointment_id: int) -> None:
         return
 
     if step == 1:
-        _render_step1_personal(customer_id, customer)
+        _render_step1_personal(customer_id, customer, appt)
         return
     if step == 2:
         ok_c2, code_c2, customer2 = api_client.get_customer(customer_id)
