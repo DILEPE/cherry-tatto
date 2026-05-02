@@ -399,6 +399,26 @@ class AppointmentRepository:
             if conn:
                 conn.close()
 
+    def insert_payment_ledger_row_only(
+        self, appointment_id: int, amount: float, note: Optional[str] = None
+    ) -> None:
+        """Solo escribe el historial en appointment_payments; no modifica deposit ni pending_balance.
+        El abono ya debe estar reflejado en la fila de la cita (p. ej. create() con deposit inicial)."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                """
+                INSERT INTO appointment_payments (appointment_id, amount, note)
+                VALUES (%s, %s, %s)
+                """,
+                (appointment_id, amount, note),
+            )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
     def cancel_appointment(self, appointment_id: int, on_cancel_abono: str) -> None:
         """
         on_cancel_abono:
