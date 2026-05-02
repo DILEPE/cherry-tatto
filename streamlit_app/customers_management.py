@@ -705,7 +705,8 @@ def render_customers_management_tab() -> None:
     page = int(st.session_state["_cust_page"])
 
     if st.session_state.get("_cust_reload"):
-        _fetch_list(search, limit, page)
+        with st.spinner("Cargando clientes…"):
+            _fetch_list(search, limit, page)
         st.session_state["_cust_reload"] = False
 
     err = st.session_state.get("_cust_last_error")
@@ -722,24 +723,24 @@ def render_customers_management_tab() -> None:
     st.markdown(f"**{total}** cliente(s) en total · mostrando página **{page + 1}** de **{max(1, (total + limit - 1) // limit)}**")
 
     st.markdown(
-        """
-        <style>
-          .cust-col-title {
-            display: inline-block;
-            font-weight: 700;
-            letter-spacing: 0.02em;
-            color: #111827;
-            background: #f3f4f6;
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            padding: 0.18rem 0.45rem;
-            white-space: nowrap;
-            line-height: 1.35;
-          }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+            """
+            <style>
+              .cust-col-title {
+                display: inline-block;
+                font-weight: 700;
+                letter-spacing: 0.02em;
+                color: #111827;
+                background: #f3f4f6;
+                border: 1px solid #e5e7eb;
+                border-radius: 8px;
+                padding: 0.18rem 0.45rem;
+                white-space: nowrap;
+                line-height: 1.35;
+              }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
 
     cust_colw = [1.62, 1.22, 1.52, 1.12, 1.52]
     h1, h2, h3, h4, h5 = st.columns(cust_colw)

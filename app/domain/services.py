@@ -114,8 +114,9 @@ class BusinessLogicService:
         new_id, customer_id = await asyncio.to_thread(_sync_register)
         if data.deposit > 0:
             try:
+                # create() ya guardó deposit en appointments; solo trazabilidad en ledger (evitar doble suma).
                 await asyncio.to_thread(
-                    self.repository.create_payment,
+                    self.repository.insert_payment_ledger_row_only,
                     new_id,
                     float(data.deposit),
                     "Abono inicial al agendar",

@@ -22,6 +22,10 @@ from app.domain.contract_kinds import (
 from app.domain.survey_question_helpers import question_type_label_es, question_type_supports_distribution_chart
 from app.schemas.customer import CUSTOMER_BIRTH_PENDING, CustomerCreate
 from streamlit_app import api_client, report_charts
+from streamlit_app.cached_public_api import (
+    get_panel_users_assignable_cached,
+    get_survey_question_stats_summary_cached,
+)
 from streamlit_app.customer_sync import fetch_customer_by_document
 from streamlit_app.validation import validate_appointment
 
@@ -58,7 +62,7 @@ def _ensure_assignable_staff() -> list[dict[str, Any]]:
     cached = st.session_state.get("_ap_assignable_staff")
     if isinstance(cached, list):
         return cached
-    ok, _, data = api_client.get_panel_users_assignable_for_appointments()
+    ok, _, data = get_panel_users_assignable_cached()
     if ok and isinstance(data, list):
         st.session_state["_ap_assignable_staff"] = data
         return data
@@ -704,10 +708,20 @@ def _client_pill_class(row: dict[str, Any], counts_by_client: dict[str, int]) ->
     return "cli-pill-new"
 
 
+_CAL_PILL_THEME: dict[str, str] = {
+    "cli-pill-reprogramada": "background:#fff7ed;color:#c2410c;border:1px solid #fdba74;",
+    "cli-pill-priority": "background:#fef2f2;color:#b91c1c;border:1px solid #f87171;",
+    "cli-pill-returning": "background:#eff6ff;color:#1d4ed8;border:1px solid #93c5fd;",
+    "cli-pill-new": "background:#fdf2f8;color:#be185d;border:1px solid #f9a8d4;",
+}
+
+
 def _customer_name_pill_html(row: dict[str, Any], counts_by_client: dict[str, int]) -> str:
     name = str(row.get("customer_name") or row.get("name") or "").strip() or "—"
     cls = _client_pill_class(row, counts_by_client)
-    return f'<span class="cli-pill {cls}">{html_mod.escape(name)}</span>'
+    base = _CAL_PILL_THEME.get(cls, _CAL_PILL_THEME["cli-pill-new"])
+    layout = "border-radius:999px;padding:0.06rem 0.4rem;font-weight:600;font-size:0.78rem;line-height:1.2;display:inline-block;"
+    return f'<span class="cli-pill {cls}" style="{base}{layout}">{html_mod.escape(name)}</span>'
 
 
 def _service_type_flag_html(row: dict[str, Any]) -> str:
@@ -780,8 +794,13 @@ def _calendar_appt_line_html(
     dim = "opacity:0.5;" if st_cl == "cancelada" else ""
     # En celda angosta, hora + pill + artista en una sola línea activaba ellipsis en todo el bloque y quedaba solo "…".
     # Se muestra hora y cliente; el artista va en el title (hover).
-    pill_inner = f'<span class="cli-pill {cls}" style="display:inline-block;max-width:100%;overflow:hidden;'
-    pill_inner += f'text-overflow:ellipsis;white-space:nowrap;vertical-align:middle">{html_mod.escape(short)}</span>'
+    # Tema inline + clase: el tema oscuro de Streamlit suele anular colores solo con CSS en markdown.
+    _pill_base = _CAL_PILL_THEME.get(cls, _CAL_PILL_THEME["cli-pill-new"])
+    _pill_layout = "display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;border-radius:999px;padding:0.06rem 0.4rem;font-weight:600;font-size:0.72rem;line-height:1.2;"
+    pill_inner = (
+        f'<span class="cli-pill {cls}" style="{_pill_base}{_pill_layout}">'
+        f"{html_mod.escape(short)}</span>"
+    )
     pill = f'<span style="min-width:0;flex:1 1 auto;overflow:hidden">{pill_inner}</span>'
     t_s = html_mod.escape(hm)
     sep = '<span style="opacity:0.55;flex-shrink:0">·</span>'
@@ -1330,13 +1349,15 @@ def _render_main_calendar(
                     st.markdown("<div class='cal-cell-spacer'></div>", unsafe_allow_html=True)
                 else:
                     day_rows = buckets.get((y, m, d), [])
+                    picked_cell = date(y, m, d)
+                    today_cls = " cal-cell-today" if picked_cell == today else ""
                     parts: list[str] = []
                     for r in day_rows[:max_lines]:
                         parts.append(_calendar_appt_line_html(r, counts_by_client))
                     more = len(day_rows) - max_lines
                     body = "".join(parts) if parts else "<div style='font-size:0.72rem;opacity:0.55'>—</div>"
                     st.markdown(
-                        f"<div class='cal-cell'>{body}</div>",
+                        f"<div class='cal-cell{today_cls}'><div class='cal-day-inner'>{body}</div></div>",
                         unsafe_allow_html=True,
                     )
                     if more > 0:
@@ -1357,7 +1378,6 @@ def _render_main_calendar(
                         ):
                             st.session_state["_cal_overflow_day"] = (y, m, d)
                             st.rerun()
-                    picked_cell = date(y, m, d)
                     is_past = picked_cell < date.today()
                     if st.button(
                         str(d),
@@ -1457,12 +1477,35 @@ def _dialog_calendar_day_appointments(
         st.rerun()
 
 
+_AP_FIN_PAYMENTS_CACHE_PREFIX = "_ap_fin_payments_"
+
+
+def _purge_appointment_payment_caches() -> None:
+    """Evita historial de abonos obsoleto tras refrescar la lista de citas."""
+    for k in list(st.session_state.keys()):
+        if isinstance(k, str) and k.startswith(_AP_FIN_PAYMENTS_CACHE_PREFIX):
+            st.session_state.pop(k, None)
+
+
+def _get_appointment_payments_cached(appt_id: int) -> tuple[bool, int, Any]:
+    """Un GET por cita y sesión (se invalida al refrescar citas o tras guardar montos)."""
+    key = f"{_AP_FIN_PAYMENTS_CACHE_PREFIX}{int(appt_id)}"
+    hit = st.session_state.get(key)
+    if isinstance(hit, tuple) and len(hit) == 3:
+        return hit[0], hit[1], hit[2]
+    with st.spinner("Cargando historial de abonos…"):
+        ok_p, code_p, payments = api_client.get_appointment_payments(appt_id)
+    st.session_state[key] = (ok_p, code_p, payments)
+    return ok_p, code_p, payments
+
+
 def _fetch_appointments() -> None:
     qid = _appointments_query_assigned_user_id()
     ok, code, data = api_client.get_appointments(assigned_panel_user_id=qid)
     if ok and isinstance(data, list):
         st.session_state["_ap_list"] = data
         st.session_state["_ap_err"] = None
+        _purge_appointment_payment_caches()
     else:
         st.session_state["_ap_list"] = []
         st.session_state["_ap_err"] = f"HTTP {code}: {_api_error(data)}"
@@ -1812,6 +1855,25 @@ def _dialog_ajustar_montos() -> None:
     st.caption(
         f"Cita #{appt_id} · Estado: {status} · Artista: **{_assigned_artist_display_name(appt)}**"
     )
+
+    if st.session_state.get("_ap_fin_dialog_appt_id") != appt_id:
+        st.session_state.pop("_ap_fin_save_error", None)
+    st.session_state["_ap_fin_dialog_appt_id"] = appt_id
+
+    st.markdown("##### Historial de abonos")
+    ok_p, code_p, payments = _get_appointment_payments_cached(appt_id)
+    if ok_p and isinstance(payments, list):
+        if payments:
+            for p in payments:
+                when = str(p.get("created_at") or "")
+                note = str(p.get("note") or "Sin nota")
+                amount = _to_float(p.get("amount"), 0.0)
+                st.write(f"- {when[:19]} · {_format_cop(amount)} · {note}")
+        else:
+            st.info("Aún no hay abonos registrados.")
+    else:
+        st.warning(f"No se pudo cargar historial (HTTP {code_p}).")
+
     current_total = float(appt.get("total_amount") or 0)
     current_deposit = float(appt.get("deposit") or 0)
     total_amount = st.number_input(
@@ -1825,40 +1887,78 @@ def _dialog_ajustar_montos() -> None:
     st.caption(f"Abonado actual: {_format_cop(current_deposit)}")
     st.caption(f"Saldo pendiente calculado: {_format_cop(max(pending, 0))}")
 
-    ok_p, code_p, payments = api_client.get_appointment_payments(appt_id)
-    st.markdown("##### Historial de abonos")
-    if ok_p and isinstance(payments, list):
-        if payments:
-            for p in payments:
-                when = str(p.get("created_at") or "")
-                note = str(p.get("note") or "Sin nota")
-                amount = _to_float(p.get("amount"), 0.0)
-                st.write(f"- {when[:19]} · {_format_cop(amount)} · {note}")
-        else:
-            st.info("Aún no hay abonos registrados.")
-    else:
-        st.warning(f"No se pudo cargar historial (HTTP {code_p}).")
+    pend_ui = max(float(pending), 0.0)
+    can_add_extra = pend_ui > 0.009
+    if not can_add_extra:
+        st.info("Trabajo cubierto: no hay saldo pendiente; no se pueden agregar abonos adicionales.")
+        st.session_state["ap_fin_extra_payment"] = 0.0
+        st.session_state["ap_fin_extra_note"] = ""
 
     extra_payment = st.number_input(
         "Agregar abono adicional (COP)",
         min_value=0.0,
+        max_value=float(pend_ui) if can_add_extra else 0.0,
         step=10000.0,
-        value=0.0,
         key="ap_fin_extra_payment",
+        disabled=not can_add_extra,
+        help=(
+            "Solo si el saldo pendiente es mayor a cero."
+            if can_add_extra
+            else "Saldo pendiente en cero; no aplica otro abono."
+        ),
     )
     payment_note = st.text_input(
         "Nota del abono (opcional)",
-        value="",
         key="ap_fin_extra_note",
         placeholder="Ej: abono en efectivo",
+        disabled=not can_add_extra,
     )
+
+    save_err = st.session_state.get("_ap_fin_save_error")
+    if save_err:
+        st.error(save_err)
 
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("Guardar", type="primary", use_container_width=True, key="ap_fin_save_btn"):
-            if current_deposit > total_amount:
-                st.error("El abonado acumulado no puede ser mayor al valor total.")
-                return
+        do_save = st.button("Guardar", type="primary", use_container_width=True, key="ap_fin_save_btn")
+    with c2:
+        do_cancel = st.button("Cancelar", use_container_width=True, key="ap_fin_cancel_btn")
+
+    if save_err:
+        if st.button("Cerrar", use_container_width=True, key="ap_fin_err_close"):
+            st.session_state.pop("_ap_fin_save_error", None)
+            with st.spinner("Cerrando…"):
+                st.session_state.pop("_ap_fin_item", None)
+                st.session_state.pop("ap_fin_total", None)
+                st.session_state.pop("ap_fin_extra_payment", None)
+                st.session_state.pop("ap_fin_extra_note", None)
+                st.session_state.pop("_ap_fin_dialog_appt_id", None)
+            st.rerun()
+
+    if do_cancel:
+        st.session_state.pop("_ap_fin_save_error", None)
+        with st.spinner("Cerrando…"):
+            st.session_state.pop("_ap_fin_item", None)
+            st.session_state.pop("ap_fin_total", None)
+            st.session_state.pop("ap_fin_extra_payment", None)
+            st.session_state.pop("ap_fin_extra_note", None)
+            st.session_state.pop("_ap_fin_dialog_appt_id", None)
+        st.rerun()
+
+    if do_save:
+        if current_deposit > total_amount:
+            st.session_state["_ap_fin_save_error"] = (
+                "El abonado acumulado no puede ser mayor al valor total."
+            )
+            st.rerun()
+        ex = float(st.session_state.get("ap_fin_extra_payment") or 0)
+        if ex > 0 and not can_add_extra:
+            st.session_state["_ap_fin_save_error"] = (
+                "No hay saldo pendiente; no puedes registrar otro abono."
+            )
+            st.rerun()
+        err_save: Optional[str] = None
+        with st.spinner("Guardando montos y abonos…"):
             ok, code, data = api_client.patch_appointment_financials(
                 appt_id,
                 float(total_amount),
@@ -1866,32 +1966,33 @@ def _dialog_ajustar_montos() -> None:
                 float(max(pending, 0)),
             )
             if not ok:
-                st.error(f"Error HTTP {code}: {_api_error(data)}")
-                return
-            if extra_payment > 0:
+                err_save = f"Error HTTP {code}: {_api_error(data)}"
+            elif ex > 0:
+                note_s = (st.session_state.get("ap_fin_extra_note") or "").strip()
                 ok_pay, code_pay, data_pay = api_client.post_appointment_payment(
                     appt_id,
-                    float(extra_payment),
-                    (payment_note or "").strip() or None,
+                    ex,
+                    note_s or None,
                 )
                 if not ok_pay:
-                    st.error(f"No se pudo registrar abono (HTTP {code_pay}): {_api_error(data_pay)}")
-                    return
-            st.success("Montos y abonos actualizados.")
-            st.session_state["_ap_reload"] = True
-            st.session_state.pop("_ap_fin_item", None)
+                    err_save = f"No se pudo registrar abono (HTTP {code_pay}): {_api_error(data_pay)}"
+        if err_save:
+            st.session_state["_ap_fin_save_error"] = err_save
             st.rerun()
-    with c2:
-        if st.button("Cancelar", use_container_width=True, key="ap_fin_cancel_btn"):
-            st.session_state.pop("_ap_fin_item", None)
-            st.session_state.pop("ap_fin_total", None)
-            st.session_state.pop("ap_fin_extra_payment", None)
-            st.session_state.pop("ap_fin_extra_note", None)
-            st.rerun()
+        st.session_state.pop("_ap_fin_save_error", None)
+        st.session_state.pop(f"{_AP_FIN_PAYMENTS_CACHE_PREFIX}{appt_id}", None)
+        st.success("Montos y abonos actualizados.")
+        st.session_state["_ap_reload"] = True
+        st.session_state.pop("_ap_fin_item", None)
+        st.session_state.pop("ap_fin_total", None)
+        st.session_state.pop("ap_fin_extra_payment", None)
+        st.session_state.pop("ap_fin_extra_note", None)
+        st.session_state.pop("_ap_fin_dialog_appt_id", None)
+        st.rerun()
 
 
 def _inject_citas_shared_styles() -> None:
-    """Estilos para calendario, pills de estado/cliente y cabeceras de tabla."""
+    """Se emite en cada rerun del módulo: al cambiar de pestaña el árbol anterior se desmonta y el CSS debe reaplicarse."""
     st.markdown(
         """
         <style>
@@ -1922,12 +2023,32 @@ def _inject_citas_shared_styles() -> None:
             line-height: 1.35;
         }
         .cal-cell {
-            border: 1px solid rgba(148, 163, 184, 0.5);
-            border-radius: 8px;
-            padding: 0.3rem 0.35rem 0.15rem 0.35rem;
-            min-height: 4.6rem;
-            margin-bottom: 0.25rem;
-            background: rgba(17, 24, 39, 0.28);
+            border: 1px solid rgba(255, 0, 127, 0.38);
+            border-radius: 10px;
+            padding: 0.35rem 0.32rem 0.28rem 0.32rem;
+            min-height: 4.75rem;
+            margin-bottom: 0.28rem;
+            background: rgba(15, 23, 42, 0.55);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 2px 8px rgba(0, 0, 0, 0.35);
+        }
+        .cal-cell-today {
+            border-color: rgba(255, 0, 127, 0.72);
+            box-shadow: inset 0 0 0 1px rgba(167, 154, 255, 0.22), 0 0 16px rgba(255, 0, 127, 0.18);
+        }
+        .cal-day-inner {
+            border: 1px solid rgba(226, 232, 240, 0.22);
+            border-radius: 7px;
+            background: rgba(0, 0, 0, 0.32);
+            padding: 0.28rem 0.32rem 0.22rem 0.32rem;
+            margin-bottom: 0.32rem;
+            min-height: 2.85rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.18rem;
+        }
+        .cal-cell-today .cal-day-inner {
+            border-color: rgba(255, 0, 127, 0.45);
+            background: rgba(255, 0, 127, 0.06);
         }
         .cal-cell-spacer {
             min-height: 0.5rem;
@@ -1941,10 +2062,42 @@ def _inject_citas_shared_styles() -> None:
             vertical-align: middle;
             border: 1px solid transparent;
         }
-        .cli-pill-reprogramada { background: #fff7ed; color: #ea580c; border-color: #fdba74; }
-        .cli-pill-priority { background: #fef2f2; color: #dc2626; border-color: #f87171; }
-        .cli-pill-returning { background: #eff6ff; color: #2563eb; border-color: #93c5fd; }
-        .cli-pill-new { background: #fdf2f8; color: #db2777; border-color: #f9a8d4; }
+        /* Streamlit aplica color claro al markdown; forzamos pills en calendario y tablas */
+        .cal-cell span.cli-pill.cli-pill-reprogramada,
+        span.cli-pill.cli-pill-reprogramada {
+            background: #fff7ed !important;
+            color: #c2410c !important;
+            border: 1px solid #fdba74 !important;
+        }
+        .cal-cell span.cli-pill.cli-pill-priority,
+        span.cli-pill.cli-pill-priority {
+            background: #fef2f2 !important;
+            color: #b91c1c !important;
+            border: 1px solid #f87171 !important;
+        }
+        .cal-cell span.cli-pill.cli-pill-returning,
+        span.cli-pill.cli-pill-returning {
+            background: #eff6ff !important;
+            color: #1d4ed8 !important;
+            border: 1px solid #93c5fd !important;
+        }
+        .cal-cell span.cli-pill.cli-pill-new,
+        span.cli-pill.cli-pill-new {
+            background: #fdf2f8 !important;
+            color: #be185d !important;
+            border: 1px solid #f9a8d4 !important;
+        }
+        .cal-cell span.cli-pill {
+            border-radius: 999px !important;
+            padding: 0.06rem 0.4rem !important;
+            font-weight: 600 !important;
+            font-size: 0.72rem !important;
+            line-height: 1.2 !important;
+            display: inline-block !important;
+            border-style: solid !important;
+            border-width: 1px !important;
+            vertical-align: middle !important;
+        }
         .svc-flag {
             display: inline-block;
             font-size: 0.68rem;
@@ -2107,7 +2260,7 @@ def _render_survey_question_stats_report() -> None:
         "Instalación: `pip install plotly`. La pregunta del **valor de tu procedimiento** va en **barras**; "
         "el resto en **torta**. Configura en **Gestión encuesta**."
     )
-    ok, code, raw = api_client.get_survey_question_stats_summary()
+    ok, code, raw = get_survey_question_stats_summary_cached()
     if not ok:
         det = _api_error(raw)
         st.warning(
@@ -2331,9 +2484,47 @@ def _render_reporte_financiero_citas_body(
         st.caption(f"Página {page + 1}/{total_pages} · Total filtrado: {total} cita(s)")
 
 
+def warm_session_after_login(allowed_module_keys: frozenset[str]) -> None:
+    """Precarga agenda en sesión tras iniciar sesión (usar dentro del spinner en main)."""
+    if "citas" not in allowed_module_keys and "reporte" not in allowed_module_keys:
+        return
+    _init_appt_tab_session_state()
+    st.session_state["_ap_reload"] = True
+    _sync_appointments_from_api()
+
+
+def _invoke_citas_tab_dialogs(
+    by_day: dict[tuple[int, int, int], list[dict[str, Any]]],
+    hist_counts: dict[str, int],
+) -> None:
+    """Invoca diálogos al inicio del flujo para que el overlay no quede al final del DOM."""
+    if (
+        st.session_state.get("_ap_fin_item")
+        or st.session_state.get("_ap_reprogram_item")
+        or st.session_state.get("_ap_cancel_item")
+    ):
+        st.session_state.pop("_cal_overflow_day", None)
+    if st.session_state.get("_ap_reprogram_item"):
+        _dialog_reprogramar_cita()
+    if st.session_state.get("_ap_fin_item"):
+        _dialog_ajustar_montos()
+    if st.session_state.get("_ap_cancel_item"):
+        _dialog_cancelar_cita()
+    if st.session_state.get("_cal_overflow_day"):
+        _dialog_calendar_day_appointments(by_day, hist_counts)
+    if st.session_state.get("_ap_dlg") == "create":
+        _dialog_agendar_cita()
+
+
 def _sync_appointments_from_api() -> None:
-    _fetch_appointments()
-    st.session_state["_ap_reload"] = False
+    """GET /appointments solo si hubo cambios, cambio de filtro API, módulo o primera carga."""
+    qid = _appointments_query_assigned_user_id()
+    prev_qid = st.session_state.get("_ap_last_fetch_qid")
+    if st.session_state.get("_ap_reload", True) or prev_qid != qid:
+        with st.spinner("Actualizando citas…"):
+            _fetch_appointments()
+        st.session_state["_ap_reload"] = False
+        st.session_state["_ap_last_fetch_qid"] = qid
 
 
 def render_reporte_citas_tab() -> None:
@@ -2355,6 +2546,13 @@ def render_reporte_citas_tab() -> None:
     )
     status_values = ["Agendada", "Reprogramada", "Finalizada", "Cancelada"]
 
+    if st.session_state.get("_ap_reprogram_item"):
+        _dialog_reprogramar_cita()
+    if st.session_state.get("_ap_fin_item"):
+        _dialog_ajustar_montos()
+    if st.session_state.get("_ap_cancel_item"):
+        _dialog_cancelar_cita()
+
     st.markdown("##### Reporte")
     st.caption(
         "**Finanzas**: montos, **barras Plotly** por procedimiento, export Excel y tabla. "
@@ -2362,21 +2560,19 @@ def render_reporte_citas_tab() -> None:
         "Calendario en **Gestión citas**. "
         "El filtro **Profesional** de **Gestión citas** aplica al cargar citas desde la API (vendedor/admin)."
     )
-    tab_finanzas, tab_encuestas = st.tabs(["Finanzas — citas", "Encuestas — satisfacción"])
-
-    with tab_finanzas:
+    # st.tabs ejecuta cada pestaña en cada rerun; el radio solo dibuja una rama.
+    rep_sec = st.radio(
+        "Sección",
+        ["Finanzas — citas", "Encuestas — satisfacción"],
+        horizontal=True,
+        key="rep_subsection",
+    )
+    if rep_sec.startswith("Finanzas"):
         _render_reporte_financiero_citas_body(items, svc_values, status_values)
-
-    with tab_encuestas:
+    else:
         st.markdown("##### Resumen por pregunta")
-        _render_survey_question_stats_report()
-
-    if st.session_state.get("_ap_reprogram_item"):
-        _dialog_reprogramar_cita()
-    if st.session_state.get("_ap_fin_item"):
-        _dialog_ajustar_montos()
-    if st.session_state.get("_ap_cancel_item"):
-        _dialog_cancelar_cita()
+        with st.spinner("Cargando estadísticas de encuesta…"):
+            _render_survey_question_stats_report()
 
 
 def render_citas_tab() -> None:
@@ -2424,9 +2620,7 @@ def render_citas_tab() -> None:
     )
     hist_counts = _appointment_counts_by_client(items)
     by_day = _appointments_by_day_sorted(cal_filtered)
-    _render_main_calendar(by_day, hist_counts)
 
-    if st.session_state.get("_cal_overflow_day"):
-        _dialog_calendar_day_appointments(by_day, hist_counts)
-    if st.session_state.get("_ap_dlg") == "create":
-        _dialog_agendar_cita()
+    _invoke_citas_tab_dialogs(by_day, hist_counts)
+
+    _render_main_calendar(by_day, hist_counts)
