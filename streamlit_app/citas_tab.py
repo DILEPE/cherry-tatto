@@ -14,7 +14,11 @@ import streamlit as st
 from pydantic import ValidationError
 
 from app.domain.service_types import resolve_service_type
-from app.domain.contract_kinds import SCOPE_LABEL_ES, service_type_requires_contract
+from app.domain.contract_kinds import (
+    SCOPE_LABEL_ES,
+    appointment_to_contract_kind,
+    service_type_requires_contract,
+)
 from app.domain.survey_question_helpers import question_type_label_es, question_type_supports_distribution_chart
 from app.schemas.customer import CUSTOMER_BIRTH_PENDING, CustomerCreate
 from streamlit_app import api_client, report_charts
@@ -26,6 +30,171 @@ def _api_error(payload: Any) -> str:
     if isinstance(payload, dict):
         return str(payload.get("detail", payload))
     return str(payload)
+
+
+def _may_see_all_appointments() -> bool:
+    """Vendedor / administrador / modo env con acceso total ven el listado completo (con filtro opcional)."""
+    from streamlit_app.panel_auth import panel_auth_enabled
+
+    if not panel_auth_enabled():
+        return True
+    if st.session_state.get("_panel_session_full_access"):
+        return True
+    role = str(st.session_state.get("_panel_user_role") or "")
+    return role in ("administrador", "vendedor")
+
+
+def _appointments_query_assigned_user_id() -> Optional[int]:
+    if not _may_see_all_appointments():
+        uid = st.session_state.get("_panel_user_id")
+        return int(uid) if uid is not None else None
+    raw = st.session_state.get("_ap_filter_artist_id")
+    if raw is None or raw == 0:
+        return None
+    return int(raw)
+
+
+def _ensure_assignable_staff() -> list[dict[str, Any]]:
+    cached = st.session_state.get("_ap_assignable_staff")
+    if isinstance(cached, list):
+        return cached
+    ok, _, data = api_client.get_panel_users_assignable_for_appointments()
+    if ok and isinstance(data, list):
+        st.session_state["_ap_assignable_staff"] = data
+        return data
+    return []
+
+
+def _work_kind_to_assignee_role(work_kind: str) -> str:
+    if work_kind == "tatuaje":
+        return "tatuador"
+    return "perforador"
+
+
+def _work_kind_to_schedule_kind(work_kind: str) -> str:
+    """
+    Eje de agenda: solo sesión de tatuaje vs todo lo de piercing (colocación, limpieza, cambio).
+    Las franjas de un eje no bloquean al otro.
+    """
+    if work_kind == "tatuaje":
+        return "tattoo"
+    return "piercing"
+
+
+def _appointments_for_artist_schedule(
+    items: list[dict[str, Any]],
+    day: date,
+    artist_id: Optional[int],
+    *,
+    schedule_kind: str,
+    exclude_appointment_id: Optional[int] = None,
+) -> list[dict[str, Any]]:
+    """
+    Citas que compiten por huecos: mismo profesional (o sin asignar en legacy, todas las ramas)
+    y mismo tipo de agenda (`tattoo` vs `piercing`).
+    """
+    out: list[dict[str, Any]] = []
+    for row in _appointments_same_day_raw(items, day):
+        rid = int(row.get("id") or 0)
+        if exclude_appointment_id is not None and rid == exclude_appointment_id:
+            continue
+        if str(row.get("status") or "").strip().lower() == "cancelada":
+            continue
+        if appointment_to_contract_kind(row) != schedule_kind:
+            continue
+        ra = row.get("assigned_panel_user_id")
+        if ra is None or ra == "":
+            out.append(row)
+        elif artist_id is not None and int(ra) == int(artist_id):
+            out.append(row)
+    return out
+
+
+def _appointments_same_day_schedule_kind(
+    items: list[dict[str, Any]],
+    day: date,
+    schedule_kind: str,
+) -> list[dict[str, Any]]:
+    """Mismo día y eje tatuaje/piercing (sin filtrar por profesional; p. ej. falta asignación)."""
+    out: list[dict[str, Any]] = []
+    for row in _appointments_same_day_raw(items, day):
+        if str(row.get("status") or "").strip().lower() == "cancelada":
+            continue
+        if appointment_to_contract_kind(row) != schedule_kind:
+            continue
+        out.append(row)
+    return out
+
+
+def _assigned_staff_label(row: dict[str, Any]) -> str:
+    fn = str(row.get("assigned_first_name") or "").strip()
+    ln = str(row.get("assigned_last_name") or "").strip()
+    un = str(row.get("assigned_username") or "").strip()
+    if not fn and not ln and not un:
+        return "—"
+    name = f"{fn} {ln}".strip()
+    if name and un:
+        return f"{name} (@{un})"
+    if name:
+        return name
+    return f"@{un}" if un else "—"
+
+
+def _assigned_artist_display_name(row: dict[str, Any]) -> str:
+    """Nombre del artista/profesional asignado (nombre y apellido; si no hay, usuario de panel)."""
+    fn = str(row.get("assigned_first_name") or "").strip()
+    ln = str(row.get("assigned_last_name") or "").strip()
+    name = f"{fn} {ln}".strip()
+    if name:
+        return name
+    un = str(row.get("assigned_username") or "").strip()
+    if un:
+        return f"@{un}"
+    return "Sin asignar"
+
+
+def _artist_filter_labels_and_map() -> tuple[list[str], dict[str, int]]:
+    from app.domain.panel_user_profile import PANEL_ROLE_LABEL_ES
+
+    staff = _ensure_assignable_staff()
+    labels: list[str] = ["Todos"]
+    id_by_label: dict[str, int] = {"Todos": 0}
+    for s in staff:
+        r = str(s.get("role") or "")
+        tag = PANEL_ROLE_LABEL_ES.get(r, r)
+        lab = (
+            f"{s.get('first_name', '')} {s.get('last_name', '')} (@{s.get('username', '')}) — {tag}"
+        ).strip()
+        if lab in id_by_label:
+            lab = f"{lab} · id {s.get('id')}"
+        labels.append(lab)
+        id_by_label[lab] = int(s["id"])
+    return labels, id_by_label
+
+
+def _render_professional_calendar_filter() -> None:
+    """Filtro por tatuador/perforador para quien puede ver toda la agenda."""
+    from app.domain.panel_user_profile import PANEL_ROLE_LABEL_ES
+
+    if not _may_see_all_appointments():
+        st.caption(
+            "Solo ves citas asignadas a **tu usuario** del panel ("
+            f"{PANEL_ROLE_LABEL_ES.get(str(st.session_state.get('_panel_user_role') or ''), 'operador')})."
+        )
+        st.session_state["_ap_filter_artist_id"] = 0
+        return
+    labels, id_by_label = _artist_filter_labels_and_map()
+    sb_key = "_ap_filt_artist_cal"
+    if sb_key not in st.session_state:
+        st.session_state[sb_key] = "Todos"
+    choice = st.selectbox(
+        "Profesional (filtro de citas)",
+        options=labels,
+        key=sb_key,
+        help="Filtra qué citas se cargan desde la API. "
+        "Tatuadores y perforadores solo ven las asignadas a ellos.",
+    )
+    st.session_state["_ap_filter_artist_id"] = id_by_label.get(str(choice), 0)
 
 
 def _reprogram_disabled_for_row(r: Dict[str, Any]) -> bool:
@@ -126,9 +295,11 @@ def _citas_filtered_to_excel_bytes(rows: list[dict[str, Any]], *, generated_at: 
         tot, abo, pend = _financial_row_values(r)
         cred = _customer_credit_value(r)
         nombre = str(r.get("customer_name") or r.get("name") or "").strip()
+        artista = _assigned_artist_display_name(r)
         datos.append(
             [
                 nombre,
+                artista,
                 round(tot, 2),
                 round(abo, 2),
                 round(pend, 2),
@@ -136,7 +307,14 @@ def _citas_filtered_to_excel_bytes(rows: list[dict[str, Any]], *, generated_at: 
             ]
         )
 
-    headers = ["Cliente", "Valor total (COP)", "Abonado (COP)", "Pendiente (COP)", "Saldo a favor (COP)"]
+    headers = [
+        "Cliente",
+        "Artista / profesional",
+        "Valor total (COP)",
+        "Abonado (COP)",
+        "Pendiente (COP)",
+        "Saldo a favor (COP)",
+    ]
     ncol = len(headers)
 
     wb = Workbook()
@@ -172,7 +350,7 @@ def _citas_filtered_to_excel_bytes(rows: list[dict[str, Any]], *, generated_at: 
             headers[col - 1],
             font=font_header,
             fill=fill_header,
-            alignment=align_left if col == 1 else align_right_num,
+            alignment=align_left if col <= 2 else align_right_num,
             border=bd,
         )
 
@@ -182,7 +360,7 @@ def _citas_filtered_to_excel_bytes(rows: list[dict[str, Any]], *, generated_at: 
             r = row_start_body + i
             for col in range(1, ncol + 1):
                 v = row_vals[col - 1]
-                align = align_left if col == 1 else align_right_num
+                align = align_left if col <= 2 else align_right_num
                 _excel_set_cell(ws1, r, col, v, font=font_body, alignment=align, border=bd)
             rmax = r
         _excel_apply_border_block(ws1, header_row, rmax, 1, ncol, bd)
@@ -195,7 +373,12 @@ def _citas_filtered_to_excel_bytes(rows: list[dict[str, Any]], *, generated_at: 
 
     for col in range(1, ncol + 1):
         letter = get_column_letter(col)
-        ws1.column_dimensions[letter].width = 36 if col == 1 else 18
+        w = 18
+        if col == 1:
+            w = 34
+        elif col == 2:
+            w = 28
+        ws1.column_dimensions[letter].width = w
 
     # --- Resumen ---
     ws2 = wb.create_sheet("Resumen financiero", 1)
@@ -286,33 +469,44 @@ def _time_slot_options() -> List[str]:
     return slots
 
 
-_BOOKING_WORK_KIND_ORDER = ("piercing", "tatuaje", "limpieza_tatuaje", "cambio_piercing")
+_BOOKING_WORK_KIND_ORDER = ("piercing", "limpieza_piercing", "cambio_piercing", "tatuaje")
 _BOOKING_WORK_KIND_META: Dict[str, Dict[str, Any]] = {
     "piercing": {
         "label": "Piercing (colocación)",
-        "duration_slots": 2,
         "service_token": "piercing",
         "detail_tag": "[Piercing]",
     },
-    "tatuaje": {
-        "label": "Tatuaje (sesión)",
-        "duration_slots": 4,
-        "service_token": "tattoo",
-        "detail_tag": "[Tatuaje]",
-    },
-    "limpieza_tatuaje": {
-        "label": "Limpieza de tatuaje",
-        "duration_slots": 1,
-        "service_token": "tattoo",
-        "detail_tag": "[Limpieza tatuaje]",
+    "limpieza_piercing": {
+        "label": "Limpieza (piercing)",
+        "service_token": "piercing",
+        "detail_tag": "[Limpieza piercing]",
     },
     "cambio_piercing": {
         "label": "Cambio de piercing",
-        "duration_slots": 1,
         "service_token": "piercing",
         "detail_tag": "[Cambio piercing]",
     },
+    "tatuaje": {
+        "label": "Tatuaje (sesión)",
+        "service_token": "tattoo",
+        "detail_tag": "[Tatuaje]",
+    },
 }
+
+_MIN_BOOKING_DURATION_SLOTS = 1
+_MAX_BOOKING_DURATION_SLOTS = 16
+
+
+def _booking_duration_slots_from_session() -> int:
+    """Franjas de 30 min al agendar (control único; no depende del tipo de trabajo)."""
+    raw = st.session_state.get("ap_duration_slots")
+    if raw is None:
+        return 2
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return 2
+    return max(_MIN_BOOKING_DURATION_SLOTS, min(_MAX_BOOKING_DURATION_SLOTS, n))
 
 
 def _duration_slots_for_existing_appointment(row: dict[str, Any]) -> int:
@@ -543,35 +737,60 @@ def _calendar_overflow_row_html(row: dict[str, Any], counts_by_client: dict[str,
     hm = _appt_time_hm(row.get("appointment_date", row.get("date")))
     st_cl = str(row.get("status") or "").strip().lower()
     dim = "opacity:0.55;" if st_cl == "cancelada" else ""
-    pill = _customer_name_pill_html(row, counts_by_client)
     svc_flag = _service_type_flag_html(row)
+    pill = _customer_name_pill_html(row, counts_by_client)
+    staff_s = _assigned_artist_display_name(row)
+    staff_el = ""
+    if staff_s != "Sin asignar":
+        staff_el = f"<span style='opacity:0.95;font-weight:600'> · Artista: {html_mod.escape(staff_s)}</span>"
     return (
         f"<div style='font-size:0.86rem;line-height:1.5;{dim}margin:0.4rem 0;padding-bottom:0.35rem;"
         f"border-bottom:1px solid rgba(148,163,184,0.35);display:flex;flex-wrap:wrap;align-items:center;gap:0.35rem'>"
         f"<span style='font-weight:600'>{html_mod.escape(hm)}</span><span>·</span>"
-        f"{svc_flag}<span>·</span>{pill}</div>"
+        f"{svc_flag}<span>·</span>{pill}{staff_el}</div>"
     )
+
+
+def _calendar_cell_customer_label(full_name: str, *, long_from_len: int = 18) -> str:
+    """Texto compacto en celda del calendario: nombre completo si es corto; si no, solo el primer nombre."""
+    nm = (full_name or "").strip() or "—"
+    if nm == "—" or len(nm) <= long_from_len:
+        return nm
+    parts = nm.split()
+    if not parts:
+        return nm[: long_from_len - 1] + "…"
+    first = parts[0]
+    if len(first) > long_from_len:
+        return first[: long_from_len - 1] + "…"
+    return first
 
 
 def _calendar_appt_line_html(
     row: dict[str, Any],
     counts_by_client: dict[str, int],
     *,
-    short_len: int = 12,
+    long_name_from: int = 18,
 ) -> str:
     """HTML de una línea en celda del calendario (hora + nombre en pill)."""
     hm = _appt_time_hm(row.get("appointment_date", row.get("date")))
     nm = str(row.get("customer_name") or row.get("name") or "").strip() or "—"
-    short = nm if len(nm) <= short_len else nm[: short_len - 1] + "…"
+    short = _calendar_cell_customer_label(nm, long_from_len=long_name_from)
     cls = _client_pill_class(row, counts_by_client)
     st_cl = str(row.get("status") or "").strip().lower()
     dim = "opacity:0.5;" if st_cl == "cancelada" else ""
-    pill = f'<span class="cli-pill {cls}">{html_mod.escape(short)}</span>'
-    inner = f"{html_mod.escape(hm)} · {pill}"
-    title = html_mod.escape(f"{hm} · {nm}")
+    # En celda angosta, hora + pill + artista en una sola línea activaba ellipsis en todo el bloque y quedaba solo "…".
+    # Se muestra hora y cliente; el artista va en el title (hover).
+    pill_inner = f'<span class="cli-pill {cls}" style="display:inline-block;max-width:100%;overflow:hidden;'
+    pill_inner += f'text-overflow:ellipsis;white-space:nowrap;vertical-align:middle">{html_mod.escape(short)}</span>'
+    pill = f'<span style="min-width:0;flex:1 1 auto;overflow:hidden">{pill_inner}</span>'
+    t_s = html_mod.escape(hm)
+    sep = '<span style="opacity:0.55;flex-shrink:0">·</span>'
+    title = html_mod.escape(
+        f"{hm} · {nm}" + (f" · {_assigned_staff_label(row)}" if _assigned_staff_label(row) != "—" else "")
+    )
     return (
-        f"<div title='{title}' style='font-size:0.72rem;line-height:1.35;{dim}white-space:nowrap;"
-        f"overflow:hidden;text-overflow:ellipsis'>{inner}</div>"
+        f"<div title='{title}' style='font-size:0.72rem;line-height:1.35;{dim}display:flex;align-items:center;"
+        f"gap:0.2rem;min-width:0'><span style='flex-shrink:0;font-weight:600'>{t_s}</span>{sep}{pill}</div>"
     )
 
 
@@ -625,12 +844,15 @@ def _init_appt_form_state_once() -> None:
         "ap_dep": 0.0,
         "ap_total": 0.0,
         "ap_priority": False,
+        "ap_duration_slots": 2,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
     if "ap_work_kind" not in st.session_state:
         st.session_state["ap_work_kind"] = "piercing"
+    if st.session_state.get("ap_work_kind") == "limpieza_tatuaje":
+        st.session_state["ap_work_kind"] = "limpieza_piercing"
     if "ap_doc_type" not in st.session_state:
         st.session_state["ap_doc_type"] = "CC"
     st.session_state["_ap_form_ready"] = True
@@ -663,6 +885,8 @@ def _reset_appointment_form_state() -> None:
         "ap_priority",
         "ap_work_kind",
         "ap_doc_type",
+        "ap_assigned_staff_id",
+        "ap_duration_slots",
     ):
         st.session_state.pop(key, None)
     st.session_state["_ap_form_ready"] = False
@@ -721,12 +945,66 @@ def _dialog_agendar_cita() -> None:
         "¿Qué se va a realizar? *",
         options=list(_BOOKING_WORK_KIND_ORDER),
         key="ap_work_kind",
-        format_func=lambda k: (
-            f"{_BOOKING_WORK_KIND_META[k]['label']} "
-            f"({_BOOKING_WORK_KIND_META[k]['duration_slots'] * 30} min)"
-        ),
-        help="La duración define cuántas franjas de 30 min se bloquean; la hora solo ofrece inicios libres ese día.",
+        format_func=lambda k: str(_BOOKING_WORK_KIND_META[k]["label"]),
+        help="Define el servicio y el profesional (tatuador o perforador). La ocupación en agenda se elige aparte.",
     )
+
+    st.markdown('<p class="dlg-appt-col-h">Duración en agenda</p>', unsafe_allow_html=True)
+    st.number_input(
+        "Franjas de 30 min a reservar *",
+        min_value=_MIN_BOOKING_DURATION_SLOTS,
+        max_value=_MAX_BOOKING_DURATION_SLOTS,
+        step=1,
+        key="ap_duration_slots",
+        help="Desde la hora de inicio se bloquean tantas franjas de media hora. No está ligada al tipo de trabajo.",
+    )
+
+    wk_sel = str(st.session_state.get("ap_work_kind") or "piercing")
+    if wk_sel not in _BOOKING_WORK_KIND_META:
+        wk_sel = "piercing"
+    need_role = _work_kind_to_assignee_role(wk_sel)
+    staff_opts = [s for s in _ensure_assignable_staff() if str(s.get("role")) == need_role]
+
+    st.markdown('<p class="dlg-appt-col-h">Profesional asignado</p>', unsafe_allow_html=True)
+    from streamlit_app.panel_auth import panel_auth_enabled
+
+    assigned_id: Optional[int] = None
+    role_me = str(st.session_state.get("_panel_user_role") or "")
+    uid_me = st.session_state.get("_panel_user_id")
+    locked_self = (
+        panel_auth_enabled()
+        and not st.session_state.get("_panel_session_full_access")
+        and role_me == need_role
+        and uid_me is not None
+    )
+    if locked_self:
+        assigned_id = int(uid_me)
+        st.session_state["ap_assigned_staff_id"] = assigned_id
+        st.caption(
+            "Las franjas horarias se calculan con tu disponibilidad; la cita quedará asignada a **tu usuario** del panel."
+        )
+    elif not staff_opts:
+        st.error(
+            f"No hay ningún usuario activo con rol **{need_role}** en el panel. "
+            "Da de alta al profesional en **Gestión de usuarios** antes de agendar."
+        )
+    else:
+        labels_p = [
+            f"{s.get('first_name', '')} {s.get('last_name', '')} (@{s.get('username', '')})"
+            for s in staff_opts
+        ]
+        pick_key = "ap_assigned_staff_pick"
+        if pick_key not in st.session_state or st.session_state[pick_key] not in labels_p:
+            st.session_state[pick_key] = labels_p[0]
+        choice_p = st.selectbox(
+            "Tatuador o perforador (según el tipo de trabajo) *",
+            options=labels_p,
+            key=pick_key,
+            help="Cada profesional tiene su propia ocupación por día; elige quién atenderá.",
+        )
+        idx_p = labels_p.index(choice_p)
+        assigned_id = int(staff_opts[idx_p]["id"])
+        st.session_state["ap_assigned_staff_id"] = assigned_id
 
     st.markdown('<p class="dlg-appt-col-h">Verificación de documento</p>', unsafe_allow_html=True)
     st.text_input(
@@ -804,9 +1082,24 @@ def _dialog_agendar_cita() -> None:
     wk = str(st.session_state.get("ap_work_kind") or "piercing")
     if wk not in _BOOKING_WORK_KIND_META:
         wk = "piercing"
-    need_slots = int(_BOOKING_WORK_KIND_META[wk]["duration_slots"])
+    need_slots = _booking_duration_slots_from_session()
+    sched_kind = _work_kind_to_schedule_kind(wk)
     raw_appt_list = list(st.session_state.get("_ap_list") or [])
-    day_rows_cal = _appointments_same_day_raw(raw_appt_list, picked)
+    aid_raw = st.session_state.get("ap_assigned_staff_id")
+    artist_for_busy: Optional[int] = None
+    if aid_raw not in (None, "", 0):
+        try:
+            artist_for_busy = int(aid_raw)
+        except (TypeError, ValueError):
+            artist_for_busy = None
+    if artist_for_busy is not None:
+        day_rows_cal = _appointments_for_artist_schedule(
+            raw_appt_list, picked, artist_for_busy, schedule_kind=sched_kind
+        )
+    else:
+        day_rows_cal = _appointments_same_day_schedule_kind(
+            raw_appt_list, picked, sched_kind
+        )
     busy_idx = _busy_slot_indices_for_day(day_rows_cal, slot_opts)
     avail_slots = _available_start_slots(slot_opts, need_slots, busy_idx)
     cur_slot = st.session_state.get("ap_slot")
@@ -844,7 +1137,7 @@ def _dialog_agendar_cita() -> None:
             "Notas u observaciones (opcional)",
             height=80,
             key="ap_det",
-            help="Se guardan junto a la etiqueta del tipo de trabajo (piercing, limpieza, cambio).",
+            help="Se guardan junto al tipo de trabajo (piercing, limpieza, cambio, tatuaje).",
         )
         st.checkbox(
             "Cita prioritaria",
@@ -872,13 +1165,21 @@ def _dialog_agendar_cita() -> None:
                 return
             cust_id = st.session_state.get("_ap_booking_customer_id")
             need_new = bool(st.session_state.get("_ap_need_new_customer"))
+            aid_submit = st.session_state.get("ap_assigned_staff_id")
+            if aid_submit is None or aid_submit == "":
+                st.error("Indica el **profesional** que atenderá la cita (tatuador o perforador).")
+                return
+            aid_int = int(aid_submit)
             wk_submit = str(st.session_state.get("ap_work_kind") or "piercing")
             if wk_submit not in _BOOKING_WORK_KIND_META:
                 wk_submit = "piercing"
-            need_slots_submit = int(_BOOKING_WORK_KIND_META[wk_submit]["duration_slots"])
+            need_slots_submit = _booking_duration_slots_from_session()
+            sched_submit = _work_kind_to_schedule_kind(wk_submit)
             slot_opts_chk = _time_slot_options()
             raw_chk = list(st.session_state.get("_ap_list") or [])
-            day_chk = _appointments_same_day_raw(raw_chk, picked)
+            day_chk = _appointments_for_artist_schedule(
+                raw_chk, picked, aid_int, schedule_kind=sched_submit
+            )
             busy_chk = _busy_slot_indices_for_day(day_chk, slot_opts_chk)
             avail_chk = _available_start_slots(slot_opts_chk, need_slots_submit, busy_chk)
             if not avail_chk:
@@ -922,6 +1223,7 @@ def _dialog_agendar_cita() -> None:
                 "total_amount": float(total_amount),
                 "pending_balance": float(max(pending_balance, 0)),
                 "is_priority": bool(st.session_state.get("ap_priority")),
+                "assigned_panel_user_id": aid_int,
             }
             if cust_id is not None:
                 appt_payload["customer_id"] = int(cust_id)
@@ -1030,7 +1332,7 @@ def _render_main_calendar(
                     day_rows = buckets.get((y, m, d), [])
                     parts: list[str] = []
                     for r in day_rows[:max_lines]:
-                        parts.append(_calendar_appt_line_html(r, counts_by_client, short_len=12))
+                        parts.append(_calendar_appt_line_html(r, counts_by_client))
                     more = len(day_rows) - max_lines
                     body = "".join(parts) if parts else "<div style='font-size:0.72rem;opacity:0.55'>—</div>"
                     st.markdown(
@@ -1156,7 +1458,8 @@ def _dialog_calendar_day_appointments(
 
 
 def _fetch_appointments() -> None:
-    ok, code, data = api_client.get_appointments()
+    qid = _appointments_query_assigned_user_id()
+    ok, code, data = api_client.get_appointments(assigned_panel_user_id=qid)
     if ok and isinstance(data, list):
         st.session_state["_ap_list"] = data
         st.session_state["_ap_err"] = None
@@ -1199,6 +1502,7 @@ def _render_cita_row_actions(r: Dict[str, Any], *, show_firma: bool = True) -> N
         with pop("Acciones", use_container_width=True):
             if appt_id > 0:
                 st.caption(f"Cita #{appt_id}")
+                st.caption(f"Artista: **{_assigned_artist_display_name(r)}**")
             if show_firma:
                 st.link_button(
                     "Firmar contrato",
@@ -1234,6 +1538,9 @@ def _render_cita_row_actions(r: Dict[str, Any], *, show_firma: bool = True) -> N
                 st.rerun()
         return
 
+    if appt_id > 0:
+        st.caption(f"Cita #{appt_id}")
+    st.caption(f"Artista: **{_assigned_artist_display_name(r)}**")
     if show_firma:
         ln1, ln2 = st.columns(2)
         with ln1:
@@ -1335,7 +1642,10 @@ def _dialog_reprogramar_cita() -> None:
         st.session_state["ap_reprogram_slot"] = sl0
         st.session_state["ap_reprogram_detail"] = detail_default
 
-    st.caption(f"Cita #{appt_id} · {appt.get('customer_name', appt.get('name', ''))}")
+    st.caption(
+        f"Cita #{appt_id} · {appt.get('customer_name', appt.get('name', ''))} · "
+        f"Artista: **{_assigned_artist_display_name(appt)}**"
+    )
     # Detalle primero para no autofocos en el calendar al abrir el diálogo
     new_detail = st.text_area(
         "Detalle actualizado (opcional)",
@@ -1351,10 +1661,49 @@ def _dialog_reprogramar_cita() -> None:
         format="DD/MM/YYYY",
     )
     slot_opts = _time_slot_options()
+    need_slots_repr = _duration_slots_for_existing_appointment(appt)
+    raw_list_repr = list(st.session_state.get("_ap_list") or [])
+    sched_repr = appointment_to_contract_kind(appt)
+    ra_raw = appt.get("assigned_panel_user_id")
+    artist_repr: Optional[int] = None
+    if ra_raw not in (None, "", 0):
+        try:
+            artist_repr = int(ra_raw)
+        except (TypeError, ValueError):
+            artist_repr = None
+    if artist_repr is not None:
+        day_rows_repr = _appointments_for_artist_schedule(
+            raw_list_repr,
+            new_date,
+            artist_repr,
+            schedule_kind=sched_repr,
+            exclude_appointment_id=appt_id,
+        )
+        st.caption(
+            "Franjas según **este profesional** y solo citas del **mismo tipo** (tatuaje o piercing)."
+        )
+    else:
+        day_rows_repr = _appointments_same_day_schedule_kind(
+            raw_list_repr, new_date, sched_repr
+        )
+        st.caption(
+            "Sin profesional asignado en base de datos; se usan citas del **mismo tipo** ese día."
+        )
+    busy_repr = _busy_slot_indices_for_day(day_rows_repr, slot_opts)
+    avail_repr = _available_start_slots(slot_opts, need_slots_repr, busy_repr)
+    if not avail_repr:
+        st.warning(
+            "No hay franjas libres ese día para esta duración. Puedes forzar una hora de la lista completa abajo; revisa conflictos en agenda."
+        )
+        avail_repr = slot_opts
     cur_sl = st.session_state.get("ap_reprogram_slot")
-    if cur_sl not in slot_opts:
-        st.session_state["ap_reprogram_slot"] = slot_opts[0]
-    new_slot = st.selectbox("Nueva franja horaria *", options=slot_opts, key="ap_reprogram_slot")
+    if cur_sl not in avail_repr:
+        st.session_state["ap_reprogram_slot"] = avail_repr[0]
+    new_slot = st.selectbox(
+        "Nueva franja horaria *",
+        options=avail_repr,
+        key="ap_reprogram_slot",
+    )
     dt_reschedule = _combine_appointment_datetime(new_date, str(new_slot))
     c1, c2 = st.columns(2)
     with c1:
@@ -1400,9 +1749,11 @@ def _dialog_cancelar_cita() -> None:
             st.rerun()
         return
     deposit = float(appt.get("deposit") or 0)
+    art_nm = _assigned_artist_display_name(appt)
     warning = (
         f"Vas a anular la cita #{appt_id} de "
-        f"{appt.get('customer_name', appt.get('name', 'cliente'))}. Esta acción cambia el estado a Cancelada."
+        f"{appt.get('customer_name', appt.get('name', 'cliente'))}. "
+        f"Artista asignado: **{art_nm}**. Esta acción cambia el estado a Cancelada."
     )
     if deposit > 0:
         warning += f" Hay {_format_cop(deposit)} abonados en esta fila."
@@ -1458,7 +1809,9 @@ def _dialog_ajustar_montos() -> None:
             st.session_state.pop("_ap_fin_item", None)
             st.rerun()
         return
-    st.caption(f"Cita #{appt_id} · Estado: {status}")
+    st.caption(
+        f"Cita #{appt_id} · Estado: {status} · Artista: **{_assigned_artist_display_name(appt)}**"
+    )
     current_total = float(appt.get("total_amount") or 0)
     current_deposit = float(appt.get("deposit") or 0)
     total_amount = st.number_input(
@@ -1933,31 +2286,33 @@ def _render_reporte_financiero_citas_body(
     start = page * limit
     rows = filtered_items[start : start + limit]
 
-    colw = [1.48, 0.92, 0.82, 0.78, 0.78, 0.92, 0.85, 0.76, 1.52]
-    h1, h2, h3, h4, h5, h6, h7, h8, h9 = st.columns(colw)
+    colw = [1.48, 1.0, 0.92, 0.82, 0.78, 0.78, 0.92, 0.85, 0.76, 1.52]
+    h1, h2, h3, h4, h5, h6, h7, h8, h9, h10 = st.columns(colw)
     h1.markdown('<span class="ap-col-title">Nombre</span>', unsafe_allow_html=True)
-    h2.markdown('<span class="ap-col-title">Servicio</span>', unsafe_allow_html=True)
-    h3.markdown('<span class="ap-col-title">Fecha y hora</span>', unsafe_allow_html=True)
-    h4.markdown('<span class="ap-col-title">Total</span>', unsafe_allow_html=True)
-    h5.markdown('<span class="ap-col-title">Abonado</span>', unsafe_allow_html=True)
-    h6.markdown('<span class="ap-col-title">Pendiente</span>', unsafe_allow_html=True)
-    h7.markdown('<span class="ap-col-title">A favor</span>', unsafe_allow_html=True)
-    h8.markdown('<span class="ap-col-title">Estado</span>', unsafe_allow_html=True)
-    h9.markdown('<span class="ap-col-title">Acciones</span>', unsafe_allow_html=True)
+    h2.markdown('<span class="ap-col-title">Artista</span>', unsafe_allow_html=True)
+    h3.markdown('<span class="ap-col-title">Servicio</span>', unsafe_allow_html=True)
+    h4.markdown('<span class="ap-col-title">Fecha y hora</span>', unsafe_allow_html=True)
+    h5.markdown('<span class="ap-col-title">Total</span>', unsafe_allow_html=True)
+    h6.markdown('<span class="ap-col-title">Abonado</span>', unsafe_allow_html=True)
+    h7.markdown('<span class="ap-col-title">Pendiente</span>', unsafe_allow_html=True)
+    h8.markdown('<span class="ap-col-title">A favor</span>', unsafe_allow_html=True)
+    h9.markdown('<span class="ap-col-title">Estado</span>', unsafe_allow_html=True)
+    h10.markdown('<span class="ap-col-title">Acciones</span>', unsafe_allow_html=True)
     for r in rows:
-        c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns(colw)
+        c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 = st.columns(colw)
         c1.markdown(_customer_name_pill_html(r, hist_counts), unsafe_allow_html=True)
-        c2.write(r.get("service_type", r.get("service", "")))
-        c3.write(_format_appt_when(r.get("appointment_date", r.get("date", ""))))
+        c2.write(_assigned_artist_display_name(r))
+        c3.write(r.get("service_type", r.get("service", "")))
+        c4.write(_format_appt_when(r.get("appointment_date", r.get("date", ""))))
         total_amount, deposit_amount, pending_balance = _financial_row_values(r)
         credito = _customer_credit_value(r)
-        c4.write(_format_cop(total_amount))
-        c5.write(_format_cop(deposit_amount))
-        c6.write(_format_cop(pending_balance))
-        c7.write("—" if credito <= 0 else _format_cop(credito))
+        c5.write(_format_cop(total_amount))
+        c6.write(_format_cop(deposit_amount))
+        c7.write(_format_cop(pending_balance))
+        c8.write("—" if credito <= 0 else _format_cop(credito))
         status = str(r.get("status") or "Agendada")
-        c8.markdown(_status_pill_html(status), unsafe_allow_html=True)
-        with c9:
+        c9.markdown(_status_pill_html(status), unsafe_allow_html=True)
+        with c10:
             _render_cita_row_actions(r, show_firma=False)
 
     p1, p2, p3 = st.columns([1, 1, 2.5])
@@ -1977,9 +2332,8 @@ def _render_reporte_financiero_citas_body(
 
 
 def _sync_appointments_from_api() -> None:
-    if st.session_state.get("_ap_reload"):
-        _fetch_appointments()
-        st.session_state["_ap_reload"] = False
+    _fetch_appointments()
+    st.session_state["_ap_reload"] = False
 
 
 def render_reporte_citas_tab() -> None:
@@ -2005,7 +2359,8 @@ def render_reporte_citas_tab() -> None:
     st.caption(
         "**Finanzas**: montos, **barras Plotly** por procedimiento, export Excel y tabla. "
         "**Encuestas**: **Plotly** (torta o barras). "
-        "Calendario en **Gestión citas**."
+        "Calendario en **Gestión citas**. "
+        "El filtro **Profesional** de **Gestión citas** aplica al cargar citas desde la API (vendedor/admin)."
     )
     tab_finanzas, tab_encuestas = st.tabs(["Finanzas — citas", "Encuestas — satisfacción"])
 
@@ -2057,6 +2412,8 @@ def render_citas_tab() -> None:
         st.selectbox("Servicio", options=["Todos", *svc_values], key="_ap_cal_f_service")
     with cf3:
         st.selectbox("Estado", options=["Todos", *status_values], key="_ap_cal_f_status")
+
+    _render_professional_calendar_filter()
 
     cal_filtered = _apply_appointment_filters(
         items,

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -35,8 +35,11 @@ def _request(
     return ok, r.status_code, data
 
 
-def get_appointments() -> Tuple[bool, int, Any]:
-    return _request("GET", "/api/appointments")
+def get_appointments(assigned_panel_user_id: Optional[int] = None) -> Tuple[bool, int, Any]:
+    params: Optional[Dict[str, Any]] = None
+    if assigned_panel_user_id is not None:
+        params = {"assigned_panel_user_id": int(assigned_panel_user_id)}
+    return _request("GET", "/api/appointments", params=params)
 
 
 def post_appointment(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
@@ -130,20 +133,72 @@ def delete_template(template_id: int) -> Tuple[bool, int, Any]:
     return _request("DELETE", f"/api/templates/{template_id}")
 
 
-def post_panel_user_register(username: str, password: str) -> Tuple[bool, int, Any]:
-    return _request(
-        "POST",
-        "/api/panel-users/register",
-        json_body={"username": username, "password": password},
-    )
+def post_panel_user_register(
+    username: str,
+    password: str,
+    *,
+    first_name: str = "",
+    last_name: str = "",
+    address: Optional[str] = None,
+    phone: Optional[str] = None,
+    store: str = "cherry_tattoo",
+    role: str = "vendedor",
+) -> Tuple[bool, int, Any]:
+    body: Dict[str, Any] = {
+        "username": username,
+        "password": password,
+        "first_name": first_name,
+        "last_name": last_name,
+        "store": store,
+        "role": role,
+    }
+    if address is not None:
+        body["address"] = address
+    if phone is not None:
+        body["phone"] = phone
+    return _request("POST", "/api/panel-users/register", json_body=body)
 
 
 def post_panel_user_login(username: str, password: str) -> Tuple[bool, int, Any]:
+    if not (username or "").strip() or not password:
+        return False, 422, {"detail": "Usuario y contraseña son obligatorios."}
     return _request(
         "POST",
         "/api/panel-users/login",
-        json_body={"username": username, "password": password},
+        json_body={"username": username.strip().lower(), "password": password},
     )
+
+
+def get_panel_users_assignable_for_appointments() -> Tuple[bool, int, Any]:
+    return _request("GET", "/api/panel-users/assignable-for-appointments")
+
+
+def get_panel_users() -> Tuple[bool, int, Any]:
+    return _request("GET", "/api/panel-users/")
+
+
+def get_panel_user(user_id: int) -> Tuple[bool, int, Any]:
+    return _request("GET", f"/api/panel-users/{user_id}")
+
+
+def post_panel_user_create(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
+    return _request("POST", "/api/panel-users/", json_body=payload)
+
+
+def patch_panel_user(user_id: int, payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
+    return _request("PATCH", f"/api/panel-users/{user_id}", json_body=payload)
+
+
+def get_panel_user_effective_modules(user_id: int) -> Tuple[bool, int, Any]:
+    return _request("GET", f"/api/panel-users/{user_id}/modules/effective")
+
+
+def get_panel_user_module_grants(user_id: int) -> Tuple[bool, int, Any]:
+    return _request("GET", f"/api/panel-users/{user_id}/modules")
+
+
+def put_panel_user_modules(user_id: int, modules: List[str]) -> Tuple[bool, int, Any]:
+    return _request("PUT", f"/api/panel-users/{user_id}/modules", json_body={"modules": modules})
 
 
 def post_survey(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from typing import Optional
+
 from litestar import Controller, patch, get, post, status_codes
 from litestar.datastructures import State
 from litestar.exceptions import HTTPException
+from litestar.params import Parameter
 
 from app.schemas.appointment import (
     AppointmentCreateRequest,
@@ -21,10 +24,18 @@ class AppointmentController(Controller):
     path = "/api/appointments"
 
     @get()
-    async def list_all(self, state: State) -> list[AppointmentListItem]:
-        """Lista todas las citas registradas."""
+    async def list_all(
+        self,
+        state: State,
+        assigned_panel_user_id: Optional[int] = Parameter(
+            default=None, ge=1, query="assigned_panel_user_id"
+        ),
+    ) -> list[AppointmentListItem]:
+        """Lista citas; opcionalmente solo las asignadas a un profesional del panel."""
         try:
-            return await state.service.list_appointments()
+            return await state.service.list_appointments(
+                assigned_panel_user_id=assigned_panel_user_id,
+            )
         except Exception as e:
             raise HTTPException(detail=f"Error al obtener citas: {str(e)}", status_code=500)
 
