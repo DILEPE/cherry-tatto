@@ -183,3 +183,22 @@ class AppointmentPaymentItem(BaseModel):
     amount: float
     note: Optional[str] = None
     created_at: Optional[datetime | str] = None
+
+
+class AppointmentPaymentReceiptListItem(BaseModel):
+    """Metadatos de un recibo PDF (sin el binario)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    appointment_id: int
+    customer_id: Optional[int] = None
+    appointment_payment_id: Optional[int] = None
+    kind: str
+    amount: float
+    total_amount_snapshot: float
+    deposit_after: float
+    pending_after: float
+    note: Optional[str] = None
+    file_name: str
+    created_at: Optional[datetime | str] = None

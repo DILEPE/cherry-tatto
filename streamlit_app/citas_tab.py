@@ -19,6 +19,7 @@ from app.domain.contract_kinds import (
     appointment_to_contract_kind,
     service_type_requires_contract,
 )
+from app.domain.contract_signing_guard import appointment_must_be_fully_paid_for_contract
 from app.domain.survey_question_helpers import question_type_label_es, question_type_supports_distribution_chart
 from app.schemas.customer import CUSTOMER_BIRTH_PENDING, CustomerCreate
 from streamlit_app import api_client, report_charts
@@ -46,6 +47,16 @@ def _may_see_all_appointments() -> bool:
         return True
     role = str(st.session_state.get("_panel_user_role") or "")
     return role in ("administrador", "vendedor")
+
+
+def _contract_firma_blocked_por_saldo(r: Dict[str, Any]) -> bool:
+    """True si hay valor total en la cita y aún queda saldo pendiente (no se puede firmar)."""
+    ok, _ = appointment_must_be_fully_paid_for_contract(
+        total_amount=r.get("total_amount"),
+        deposit=r.get("deposit"),
+        pending_balance=r.get("pending_balance"),
+    )
+    return not ok
 
 
 def _appointments_query_assigned_user_id() -> Optional[int]:
@@ -1278,7 +1289,10 @@ def _dialog_agendar_cita() -> None:
             ok_a, code_a, data_a = api_client.post_appointment(appt_payload)
             if ok_a:
                 st.session_state["_ap_reload"] = True
-                st.success("Cita creada correctamente.")
+                st.success(
+                    "Cita creada correctamente. Se generó el recibo inicial (PDF); "
+                    "puedes descargarlo desde **Recibos** en el menú de la cita."
+                )
                 _reset_appointment_form_state()
                 st.session_state.pop("_ap_dlg", None)
                 st.rerun()
@@ -1413,7 +1427,7 @@ def _dialog_calendar_day_appointments(
     st.markdown(f"**{day_date.strftime('%d/%m/%Y')}** · **{len(day_rows)}** cita(s)")
     st.caption(
         "Mismas etiquetas de cliente que en el calendario. **Firmar contrato** abre la vista de firma; "
-        "Reprogramar o Montos cierran este panel y abren el formulario correspondiente."
+        "Reprogramar, Montos o Recibos cierran este panel y abren el formulario correspondiente."
     )
     for idx, r in enumerate(day_rows):
         st.markdown(_calendar_overflow_row_html(r, hist_counts), unsafe_allow_html=True)
@@ -1425,11 +1439,12 @@ def _dialog_calendar_day_appointments(
             or not has_customer
             or status in {"Cancelada", "Finalizada"}
             or not service_type_requires_contract(str(r.get("service_type") or ""))
+            or _contract_firma_blocked_por_saldo(r)
         )
         repro_disabled = _reprogram_disabled_for_row(r)
         montos_disabled = appt_id <= 0 or status not in {"Agendada", "Reprogramada"}
         anular_disabled = appt_id <= 0 or status in {"Cancelada", "Finalizada"}
-        b0, b1, b2, b3 = st.columns(4)
+        b0, b1, b2, b3, b4 = st.columns(5)
         with b0:
             st.link_button(
                 "Firmar contrato",
@@ -1461,6 +1476,18 @@ def _dialog_calendar_day_appointments(
                 st.session_state["_ap_fin_item"] = r
                 st.rerun()
         with b3:
+            rec_disabled = appt_id <= 0
+            if st.button(
+                "Recibos",
+                key=f"cal_dlg_rec_{appt_id}_{y}_{m}_{d}_{idx}",
+                disabled=rec_disabled,
+                use_container_width=True,
+                help="Ver y descargar recibos PDF de esta cita",
+            ):
+                st.session_state.pop("_cal_overflow_day", None)
+                st.session_state["_ap_receipts_item"] = r
+                st.rerun()
+        with b4:
             if st.button(
                 "Anular",
                 key=f"cal_dlg_can_{appt_id}_{y}_{m}_{d}_{idx}",
@@ -1478,12 +1505,21 @@ def _dialog_calendar_day_appointments(
 
 
 _AP_FIN_PAYMENTS_CACHE_PREFIX = "_ap_fin_payments_"
+_AP_RECEIPTS_CACHE_PREFIX = "_ap_receipts_list_"
 
 
 def _purge_appointment_payment_caches() -> None:
     """Evita historial de abonos obsoleto tras refrescar la lista de citas."""
     for k in list(st.session_state.keys()):
         if isinstance(k, str) and k.startswith(_AP_FIN_PAYMENTS_CACHE_PREFIX):
+            st.session_state.pop(k, None)
+
+
+def _purge_appointment_receipt_caches() -> None:
+    for k in list(st.session_state.keys()):
+        if not isinstance(k, str):
+            continue
+        if k.startswith(_AP_RECEIPTS_CACHE_PREFIX) or k.startswith("_ap_receipt_pdf_"):
             st.session_state.pop(k, None)
 
 
@@ -1506,6 +1542,7 @@ def _fetch_appointments() -> None:
         st.session_state["_ap_list"] = data
         st.session_state["_ap_err"] = None
         _purge_appointment_payment_caches()
+        _purge_appointment_receipt_caches()
     else:
         st.session_state["_ap_list"] = []
         st.session_state["_ap_err"] = f"HTTP {code}: {_api_error(data)}"
@@ -1535,6 +1572,7 @@ def _render_cita_row_actions(r: Dict[str, Any], *, show_firma: bool = True) -> N
         or not has_customer
         or status in {"Cancelada", "Finalizada"}
         or not service_type_requires_contract(str(r.get("service_type") or ""))
+        or _contract_firma_blocked_por_saldo(r)
     )
     repro_disabled = _reprogram_disabled_for_row(r)
     montos_disabled = appt_id <= 0 or status not in {"Agendada", "Reprogramada"}
@@ -1571,6 +1609,16 @@ def _render_cita_row_actions(r: Dict[str, Any], *, show_firma: bool = True) -> N
             ):
                 st.session_state["_ap_fin_item"] = r
                 st.rerun()
+            rec_dis = appt_id <= 0
+            if st.button(
+                "Recibos (PDF)",
+                disabled=rec_dis,
+                use_container_width=True,
+                key=f"pop_rec_{appt_id}",
+                help="Descargar comprobantes emitidos al agendar o al abonar",
+            ):
+                st.session_state["_ap_receipts_item"] = r
+                st.rerun()
             if st.button(
                 "Anular",
                 disabled=anular_disabled,
@@ -1602,12 +1650,23 @@ def _render_cita_row_actions(r: Dict[str, Any], *, show_firma: bool = True) -> N
         if st.button("Mover", disabled=repro_disabled, use_container_width=True, key=f"fb_repr_{appt_id}"):
             st.session_state["_ap_reprogram_item"] = r
             st.rerun()
-    bn1, bn2 = st.columns(2)
+    bn1, bn2, bn3 = st.columns(3)
     with bn1:
         if st.button("Montos", disabled=montos_disabled, use_container_width=True, key=f"fb_fin_{appt_id}"):
             st.session_state["_ap_fin_item"] = r
             st.rerun()
     with bn2:
+        rec_key_dis = appt_id <= 0
+        if st.button(
+            "Recibos",
+            disabled=rec_key_dis,
+            use_container_width=True,
+            key=f"fb_rec_{appt_id}",
+            help="PDF por agenda y por cada abono",
+        ):
+            st.session_state["_ap_receipts_item"] = r
+            st.rerun()
+    with bn3:
         if st.button("Anular", disabled=anular_disabled, use_container_width=True, key=f"fb_can_{appt_id}"):
             st.session_state["_ap_cancel_item"] = r
             st.rerun()
@@ -1981,13 +2040,96 @@ def _dialog_ajustar_montos() -> None:
             st.rerun()
         st.session_state.pop("_ap_fin_save_error", None)
         st.session_state.pop(f"{_AP_FIN_PAYMENTS_CACHE_PREFIX}{appt_id}", None)
-        st.success("Montos y abonos actualizados.")
+        _purge_appointment_receipt_caches()
+        if ex > 0:
+            st.success("Montos y abonos actualizados. Hay un nuevo recibo PDF en **Recibos**.")
+        else:
+            st.success("Montos y abonos actualizados.")
         st.session_state["_ap_reload"] = True
         st.session_state.pop("_ap_fin_item", None)
         st.session_state.pop("ap_fin_total", None)
         st.session_state.pop("ap_fin_extra_payment", None)
         st.session_state.pop("ap_fin_extra_note", None)
         st.session_state.pop("_ap_fin_dialog_appt_id", None)
+        st.rerun()
+
+
+@st.dialog("Recibos de pago (PDF)", width="large", dismissible=False)
+def _dialog_recibos_cita() -> None:
+    appt = st.session_state.get("_ap_receipts_item") or {}
+    appt_id = int(appt.get("id", 0) or 0)
+    if appt_id <= 0:
+        st.error("No se encontró la cita.")
+        if st.button("Cerrar", use_container_width=True, key="ap_rec_close_bad"):
+            st.session_state.pop("_ap_receipts_item", None)
+            st.rerun()
+        return
+    name = str(appt.get("customer_name") or appt.get("name") or "").strip()
+    st.markdown(f"**Cita #{appt_id}** · {name or '—'}")
+    st.caption(
+        "Cada vez que confirmas una cita y cada abono adicional generan un recibo en PDF "
+        "(logo y datos del estudio). Los archivos se guardan en el servidor."
+    )
+
+    list_key = f"{_AP_RECEIPTS_CACHE_PREFIX}{appt_id}"
+    cached = st.session_state.get(list_key)
+    if not isinstance(cached, tuple) or len(cached) != 3:
+        with st.spinner("Cargando índice de recibos…"):
+            ok, code, data = api_client.get_appointment_receipts(appt_id)
+        st.session_state[list_key] = (ok, code, data)
+    ok, code, data = st.session_state[list_key]
+    if not ok:
+        st.error(f"No se pudieron listar los recibos (HTTP {code}): {_api_error(data)}")
+        if st.button("Cerrar", use_container_width=True, key="ap_rec_close_list_err"):
+            st.session_state.pop(list_key, None)
+            st.session_state.pop("_ap_receipts_item", None)
+            st.rerun()
+        return
+
+    rows: List[Dict[str, Any]] = []
+    if isinstance(data, list):
+        rows = [x for x in data if isinstance(x, dict)]
+
+    if not rows:
+        st.info("Todavía no hay recibos registrados para esta cita.")
+
+    for r in rows:
+        rid = int(r.get("id", 0) or 0)
+        if rid <= 0:
+            continue
+        kind = str(r.get("kind") or "")
+        kind_es = "Agenda / primer abono" if kind == "inicial" else "Abono adicional"
+        try:
+            amt = float(r.get("amount") or 0)
+        except (TypeError, ValueError):
+            amt = 0.0
+        when = str(r.get("created_at") or "")
+        if len(when) >= 19:
+            when = when[:19]
+        st.markdown(f"**{kind_es}** · {when or '—'} · **{_format_cop(amt)}**")
+
+        pdf_key = f"_ap_receipt_pdf_{appt_id}_{rid}"
+        if pdf_key not in st.session_state:
+            ok_pdf, _pc, blob, fname = api_client.fetch_appointment_receipt_pdf(appt_id, rid)
+            if ok_pdf and blob:
+                st.session_state[pdf_key] = (blob, fname)
+        got = st.session_state.get(pdf_key)
+        if isinstance(got, tuple) and len(got) == 2 and got[0]:
+            blob, fname = got[0], got[1]
+            st.download_button(
+                "Descargar PDF",
+                data=blob,
+                file_name=str(fname or f"recibo_{appt_id}_{rid}.pdf"),
+                mime="application/pdf",
+                use_container_width=True,
+                key=f"ap_rec_dl_{appt_id}_{rid}",
+            )
+        else:
+            st.caption("No se pudo cargar el archivo PDF.")
+        st.divider()
+
+    if st.button("Cerrar", use_container_width=True, key="ap_rec_close_main"):
+        st.session_state.pop("_ap_receipts_item", None)
         st.rerun()
 
 
@@ -2502,6 +2644,7 @@ def _invoke_citas_tab_dialogs(
         st.session_state.get("_ap_fin_item")
         or st.session_state.get("_ap_reprogram_item")
         or st.session_state.get("_ap_cancel_item")
+        or st.session_state.get("_ap_receipts_item")
     ):
         st.session_state.pop("_cal_overflow_day", None)
     if st.session_state.get("_ap_reprogram_item"):
@@ -2510,6 +2653,8 @@ def _invoke_citas_tab_dialogs(
         _dialog_ajustar_montos()
     if st.session_state.get("_ap_cancel_item"):
         _dialog_cancelar_cita()
+    if st.session_state.get("_ap_receipts_item"):
+        _dialog_recibos_cita()
     if st.session_state.get("_cal_overflow_day"):
         _dialog_calendar_day_appointments(by_day, hist_counts)
     if st.session_state.get("_ap_dlg") == "create":
@@ -2552,6 +2697,8 @@ def render_reporte_citas_tab() -> None:
         _dialog_ajustar_montos()
     if st.session_state.get("_ap_cancel_item"):
         _dialog_cancelar_cita()
+    if st.session_state.get("_ap_receipts_item"):
+        _dialog_recibos_cita()
 
     st.markdown("##### Reporte")
     st.caption(

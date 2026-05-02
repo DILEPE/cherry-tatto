@@ -22,7 +22,11 @@ class ContractController(Controller):
                 message="Contrato firmado. n8n iniciará los flujos de seguimiento.",
             )
         except ValueError as e:
-            raise HTTPException(detail=str(e), status_code=404) from e
+            msg = str(e)
+            status_code404 = status_codes.HTTP_404_NOT_FOUND
+            status_code400 = status_codes.HTTP_400_BAD_REQUEST
+            code = status_code404 if "no encontrada" in msg.lower() else status_code400
+            raise HTTPException(detail=msg, status_code=code) from e
         except Exception as e:
             raise HTTPException(
                 detail=f"Error al procesar contrato: {str(e)}", status_code=500

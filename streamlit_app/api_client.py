@@ -90,12 +90,36 @@ def get_appointment_payments(appointment_id: int) -> Tuple[bool, int, Any]:
     return _request("GET", f"/api/appointments/{appointment_id}/payments")
 
 
-def post_appointment_payment(appointment_id: int, amount: float, note: Optional[str] = None) -> Tuple[bool, int, Any]:
+def post_appointment_payment(
+    appointment_id: int, amount: float, note: Optional[str] = None
+) -> Tuple[bool, int, Any]:
     return _request(
         "POST",
         f"/api/appointments/{appointment_id}/payments",
         json_body={"amount": float(amount), "note": note},
     )
+
+
+def get_appointment_receipts(appointment_id: int) -> Tuple[bool, int, Any]:
+    return _request("GET", f"/api/appointments/{appointment_id}/receipts")
+
+
+def fetch_appointment_receipt_pdf(appointment_id: int, receipt_id: int) -> Tuple[bool, int, bytes, str]:
+    """Descarga binario PDF. El cuarto valor es nombre sugerido o mensaje de error corto."""
+    url = f"{base_url()}/api/appointments/{appointment_id}/receipts/{int(receipt_id)}/pdf"
+    try:
+        r = requests.get(url, timeout=60)
+    except requests.RequestException as e:
+        return False, 0, b"", str(e)
+    if not (200 <= r.status_code < 300):
+        return False, r.status_code, b"", ""
+    fname = f"recibo_{appointment_id}_{receipt_id}.pdf"
+    cd = r.headers.get("Content-Disposition") or ""
+    if "filename=" in cd:
+        part = cd.split("filename=", 1)[-1].strip().strip('"')
+        if part:
+            fname = part.split(";", 1)[0].strip('"')
+    return True, r.status_code, r.content, fname
 
 
 def post_contract(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:

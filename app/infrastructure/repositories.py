@@ -219,6 +219,8 @@ class AppointmentRepository:
                     deposit=float(res.get('deposit') or 0),
                     total_amount=float(res.get('total_amount') or 0),
                     pending_balance=float(res.get('pending_balance') or 0),
+                    customer_id=res.get('customer_id'),
+                    detail=(res.get('detail') or '') or '',
                 )
             return None
         finally:
@@ -374,7 +376,7 @@ class AppointmentRepository:
             if conn:
                 conn.close()
 
-    def create_payment(self, appointment_id: int, amount: float, note: Optional[str] = None) -> None:
+    def create_payment(self, appointment_id: int, amount: float, note: Optional[str] = None) -> int:
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn)
@@ -385,23 +387,25 @@ class AppointmentRepository:
                 """,
                 (appointment_id, amount, note),
             )
+            new_pid = int(cursor.lastrowid or 0)
             cursor.execute(
                 """
                 UPDATE appointments
-                SET deposit = COALESCE(deposit, 0) + %s,
-                    pending_balance = GREATEST(COALESCE(total_amount, 0) - (COALESCE(deposit, 0) + %s), 0)
+                SET deposit = (@_new_dep := COALESCE(deposit, 0) + %s),
+                    pending_balance = GREATEST(COALESCE(total_amount, 0) - @_new_dep, 0)
                 WHERE id = %s
                 """,
-                (amount, amount, appointment_id),
+                (amount, appointment_id),
             )
             conn.commit()
+            return new_pid
         finally:
             if conn:
                 conn.close()
 
     def insert_payment_ledger_row_only(
         self, appointment_id: int, amount: float, note: Optional[str] = None
-    ) -> None:
+    ) -> int:
         """Solo escribe el historial en appointment_payments; no modifica deposit ni pending_balance.
         El abono ya debe estar reflejado en la fila de la cita (p. ej. create() con deposit inicial)."""
         conn = self.db.get_connection()
@@ -414,7 +418,9 @@ class AppointmentRepository:
                 """,
                 (appointment_id, amount, note),
             )
+            new_pid = int(cursor.lastrowid or 0)
             conn.commit()
+            return new_pid
         finally:
             if conn:
                 conn.close()
@@ -853,3 +859,92 @@ class AppointmentRepository:
             return cursor.fetchall()
         finally:
             if conn: conn.close()
+
+    # --- Recibos de pago (PDF) ---
+
+    def insert_payment_receipt(
+        self,
+        appointment_id: int,
+        customer_id: Optional[int],
+        appointment_payment_id: Optional[int],
+        kind: str,
+        amount: float,
+        total_amount_snapshot: float,
+        deposit_after: float,
+        pending_after: float,
+        note: Optional[str],
+        file_name: str,
+        pdf_bytes: bytes,
+    ) -> int:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                """
+                INSERT INTO appointment_payment_receipts (
+                    appointment_id, customer_id, appointment_payment_id, kind,
+                    amount, total_amount_snapshot, deposit_after, pending_after,
+                    note, file_name, pdf
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    appointment_id,
+                    customer_id,
+                    appointment_payment_id,
+                    kind,
+                    float(amount),
+                    float(total_amount_snapshot),
+                    float(deposit_after),
+                    float(pending_after),
+                    note,
+                    file_name,
+                    pdf_bytes,
+                ),
+            )
+            conn.commit()
+            return int(cursor.lastrowid or 0)
+        finally:
+            if conn:
+                conn.close()
+
+    def list_payment_receipts_by_appointment(self, appointment_id: int) -> list[dict[str, object]]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT id, appointment_id, customer_id, appointment_payment_id, kind,
+                       amount, total_amount_snapshot, deposit_after, pending_after,
+                       note, file_name, created_at
+                FROM appointment_payment_receipts
+                WHERE appointment_id = %s
+                ORDER BY created_at ASC, id ASC
+                """,
+                (appointment_id,),
+            )
+            return cursor.fetchall()
+        finally:
+            if conn:
+                conn.close()
+
+    def get_payment_receipt_file(self, appointment_id: int, receipt_id: int) -> Optional[dict[str, object]]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT id, appointment_id, file_name, pdf
+                FROM appointment_payment_receipts
+                WHERE id = %s AND appointment_id = %s
+                LIMIT 1
+                """,
+                (receipt_id, appointment_id),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return row
+        finally:
+            if conn:
+                conn.close()
