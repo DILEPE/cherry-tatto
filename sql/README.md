@@ -19,6 +19,9 @@ Esta carpeta contiene scripts SQL para crear la estructura base y aplicar cambio
 13. `013_survey_questions_contract_kind.sql` (columna **tatuaje / piercing** por pregunta; el cuestionario de firma filtra según el tipo de cita)
 14. `014_survey_questions_scope_both.sql` (solo si aplicaste un `013` anterior sin `both`: permite ámbito **tatuaje y piercing**)
 15. `015_panel_users.sql` (usuarios del panel cuando `PANEL_AUTH_USERS_SOURCE=database`)
+16. `016_panel_users_profile.sql` (nombre, contacto, tienda y rol para cada usuario del panel)
+17. `017_panel_user_module_access.sql` (qué pestañas del panel puede ver cada usuario no administrador; los administradores tienen acceso total)
+18. `018_appointments_assigned_panel_user.sql` (columna `assigned_panel_user_id` en citas; FK a `panel_users` para agenda por tatuador/perforador)
 
 > Nota: `001_customers_and_appointments_fk.sql` queda como referencia histórica porque la estructura base ya está consolidada en `000_initial_schema_cherry_tatto.sql`.
 
@@ -39,7 +42,10 @@ Si tu base ya existe y solo quieres actualizar:
 11. `012_survey_question_formats_options_number.sql` (omitir si tu `011` ya incluye columnas y CHECK ampliados)
 12. `013_survey_questions_contract_kind.sql`
 13. `014_survey_questions_scope_both.sql` (omitir si tu `013` o `recreate_survey_tables` ya incluye `both` en el CHECK)
-14. `015_panel_users.sql` (usuarios del panel; necesario si usas `PANEL_AUTH_USERS_SOURCE=database`)
+14. `015_panel_users.sql`
+15. `016_panel_users_profile.sql` (perfil ampliado: nombre, dirección, tienda, rol)
+16. `017_panel_user_module_access.sql` (módulos asignables por usuario; requerido para el control de pestañas cuando no eres administrador)
+17. `018_appointments_assigned_panel_user.sql` (profesional asignado por cita; ejecutar después de `015`)
 
 ## Recuperación rápida
 

@@ -25,7 +25,60 @@ class AppointmentRepository:
 
     # --- Métodos de Citas ---
 
-    def get_all(self) -> list[dict[str, object]]:
+    def get_all(self, assigned_panel_user_id: Optional[int] = None) -> list[dict[str, object]]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            if assigned_panel_user_id is None:
+                cursor.execute(
+                    """
+                    SELECT a.*,
+                        EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
+                            AS has_signed_contract,
+                        pu.username AS assigned_username,
+                        pu.first_name AS assigned_first_name,
+                        pu.last_name AS assigned_last_name,
+                        pu.role AS assigned_role
+                    FROM appointments a
+                    LEFT JOIN panel_users pu ON pu.id = a.assigned_panel_user_id
+                    ORDER BY a.created_at DESC
+                    """
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT a.*,
+                        EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
+                            AS has_signed_contract,
+                        pu.username AS assigned_username,
+                        pu.first_name AS assigned_first_name,
+                        pu.last_name AS assigned_last_name,
+                        pu.role AS assigned_role
+                    FROM appointments a
+                    LEFT JOIN panel_users pu ON pu.id = a.assigned_panel_user_id
+                    WHERE a.assigned_panel_user_id = %s
+                    ORDER BY a.created_at DESC
+                    """,
+                    (assigned_panel_user_id,),
+                )
+            rows = cursor.fetchall()
+            for row in rows:
+                raw = row.get("has_signed_contract")
+                row["has_signed_contract"] = bool(raw) if raw is not None else False
+            return rows
+        except Exception as e:
+            err = str(e)
+            if (
+                "Unknown column 'a.assigned_panel_user_id'" in err
+                or "Unknown column 'assigned_panel_user_id'" in err
+            ):
+                return self._get_all_legacy_no_assignee()
+            raise
+        finally:
+            if conn:
+                conn.close()
+
+    def _get_all_legacy_no_assignee(self) -> list[dict[str, object]]:
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn, dictionary=True)
@@ -44,7 +97,8 @@ class AppointmentRepository:
                 row["has_signed_contract"] = bool(raw) if raw is not None else False
             return rows
         finally:
-            if conn: conn.close()
+            if conn:
+                conn.close()
 
     def create(
         self,
@@ -60,43 +114,84 @@ class AppointmentRepository:
         try:
             cursor = self._get_cursor(conn)
             service_type = resolve_service_type(data.service)
+            aid = getattr(data, "assigned_panel_user_id", None)
+            assignee_val = int(aid) if aid is not None else None
+
+            def _insert_financial_no_assignee() -> None:
+                q = """INSERT INTO appointments
+                       (customer_id, customer_name, phone, service_type, detail, appointment_date, deposit, total_amount, pending_balance, customer_credit, is_priority, status)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+                cursor.execute(
+                    q,
+                    (
+                        customer_id,
+                        data.name,
+                        data.phone,
+                        service_type,
+                        data.detail or "",
+                        data.date,
+                        data.deposit or 0,
+                        data.total_amount or 0,
+                        data.pending_balance or 0,
+                        0,
+                        1 if getattr(data, "is_priority", False) else 0,
+                        "Agendada",
+                    ),
+                )
+
+            def _insert_legacy_minimal() -> None:
+                q = """INSERT INTO appointments
+                      (customer_id, customer_name, phone, service_type, detail, appointment_date, deposit, status)
+                      VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
+                cursor.execute(
+                    q,
+                    (
+                        customer_id,
+                        data.name,
+                        data.phone,
+                        service_type,
+                        data.detail or "",
+                        data.date,
+                        data.deposit or 0,
+                        "Agendada",
+                    ),
+                )
+
             try:
-                query = """INSERT INTO appointments
-                           (customer_id, customer_name, phone, service_type, detail, appointment_date, deposit, total_amount, pending_balance, customer_credit, is_priority, status)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
-                values = (
-                    customer_id,
-                    data.name,
-                    data.phone,
-                    service_type,
-                    data.detail or "",
-                    data.date,
-                    data.deposit or 0,
-                    data.total_amount or 0,
-                    data.pending_balance or 0,
-                    0,
-                    1 if getattr(data, "is_priority", False) else 0,
-                    "Agendada",
+                q_full = """INSERT INTO appointments
+                           (customer_id, assigned_panel_user_id, customer_name, phone, service_type, detail, appointment_date, deposit, total_amount, pending_balance, customer_credit, is_priority, status)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+                cursor.execute(
+                    q_full,
+                    (
+                        customer_id,
+                        assignee_val,
+                        data.name,
+                        data.phone,
+                        service_type,
+                        data.detail or "",
+                        data.date,
+                        data.deposit or 0,
+                        data.total_amount or 0,
+                        data.pending_balance or 0,
+                        0,
+                        1 if getattr(data, "is_priority", False) else 0,
+                        "Agendada",
+                    ),
                 )
-                cursor.execute(query, values)
             except Exception as e:
-                # Compatibilidad temporal mientras se ejecuta la migración financiera.
-                if "Unknown column 'total_amount'" not in str(e):
+                err = str(e)
+                if "Unknown column 'assigned_panel_user_id'" in err:
+                    try:
+                        _insert_financial_no_assignee()
+                    except Exception as e2:
+                        if "Unknown column 'total_amount'" not in str(e2):
+                            raise
+                        _insert_legacy_minimal()
+                elif "Unknown column 'total_amount'" not in err:
                     raise
-                query_legacy = """INSERT INTO appointments
-                                  (customer_id, customer_name, phone, service_type, detail, appointment_date, deposit, status)
-                                  VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
-                values_legacy = (
-                    customer_id,
-                    data.name,
-                    data.phone,
-                    service_type,
-                    data.detail or "",
-                    data.date,
-                    data.deposit or 0,
-                    "Agendada",
-                )
-                cursor.execute(query_legacy, values_legacy)
+                else:
+                    _insert_legacy_minimal()
             new_id = cursor.lastrowid
             if own:
                 conn.commit()

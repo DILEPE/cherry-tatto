@@ -6,13 +6,20 @@ from typing import Optional
 
 import mysql.connector
 
-from app.domain.contract_kinds import SurveyQuestionScope, appointment_to_contract_kind
+from app.domain.contract_kinds import (
+    SurveyQuestionScope,
+    appointment_to_contract_kind,
+    service_type_to_assignee_panel_role,
+)
+from app.domain.service_types import resolve_service_type
 from app.domain.models import (
     AppointmentCreate,
     ContractSign,
     Survey,
     SurveyQuestion,
 )
+from app.domain.panel_user_profile import PANEL_ROLE_LABEL_ES
+from app.domain.panel_modules import ASSIGNABLE_PANEL_MODULE_KEYS
 from app.domain.panel_passwords import hash_password, verify_password
 from app.domain.survey_question_helpers import (
     QUESTION_TYPES_NEEDING_OPTIONS,
@@ -25,7 +32,15 @@ from app.schemas.customer import (
     CustomerPublic,
     CustomerUpdate,
 )
-from app.schemas.panel_user import PanelUserRegister
+from app.schemas.panel_user import (
+    PanelUserAssignable,
+    PanelUserCreate,
+    PanelUserModulesBody,
+    PanelUserPublic,
+    PanelUserRegister,
+    PanelUserSessionPublic,
+    PanelUserUpdate,
+)
 from app.schemas.report import FinancialReportRow
 from app.schemas.survey import SurveyRow
 from app.schemas.survey_questions import (
@@ -59,6 +74,25 @@ class BusinessLogicService:
         Crea cita. Si viene `customer` (dict), valida con Pydantic y hace upsert por documento.
         Si viene `customer_id`, verifica existencia. Usa transacción para cliente + cita.
         """
+        resolved_type = resolve_service_type(data.service)
+
+        def _pre_validate() -> None:
+            if data.assigned_panel_user_id is None:
+                raise ValueError("Debes asignar un tatuador o perforador a la cita.")
+            if self.panel_user_repo is None:
+                return
+            row = self.panel_user_repo.get_by_id(int(data.assigned_panel_user_id))
+            if not row or not row.get("is_active", True):
+                raise ValueError("El profesional asignado no existe o está inactivo.")
+            need = service_type_to_assignee_panel_role(resolved_type)
+            if str(row.get("role") or "") != need:
+                raise ValueError(
+                    f"Para este tipo de servicio debes elegir un profesional con rol "
+                    f"«{PANEL_ROLE_LABEL_ES.get(need, need)}»."
+                )
+
+        await asyncio.to_thread(_pre_validate)
+
         def _sync_register() -> tuple[int, Optional[int]]:
             with self.repository.db.transaction() as conn:
                 resolved_id: Optional[int] = data.customer_id
@@ -273,10 +307,12 @@ class BusinessLogicService:
 
         return await asyncio.to_thread(_run)
 
-    async def list_appointments(self) -> list[AppointmentListItem]:
+    async def list_appointments(
+        self, assigned_panel_user_id: Optional[int] = None
+    ) -> list[AppointmentListItem]:
 
         def _run() -> list[AppointmentListItem]:
-            rows = self.repository.get_all()
+            rows = self.repository.get_all(assigned_panel_user_id=assigned_panel_user_id)
             return [AppointmentListItem.model_validate(r) for r in rows]
 
         return await asyncio.to_thread(_run)
@@ -582,9 +618,177 @@ class BusinessLogicService:
                 if self.panel_user_repo.get_by_username(data.username, conn):
                     raise ValueError("USERNAME_TAKEN")
                 ph = hash_password(data.password)
-                return self.panel_user_repo.insert(data.username, ph, conn)
+                return self.panel_user_repo.insert(
+                    username=data.username,
+                    password_hash=ph,
+                    first_name=data.first_name,
+                    last_name=data.last_name,
+                    address=data.address,
+                    phone=data.phone,
+                    store=data.store,
+                    role=data.role,
+                    is_active=True,
+                    conn=conn,
+                )
 
         return await asyncio.to_thread(_run)
+
+    async def create_panel_user(self, data: PanelUserCreate) -> int:
+        if self.panel_user_repo is None:
+            raise RuntimeError("Repositorio de usuarios del panel no configurado.")
+
+        def _run() -> int:
+            with self.panel_user_repo.db.transaction() as conn:
+                if self.panel_user_repo.get_by_username(data.username, conn):
+                    raise ValueError("USERNAME_TAKEN")
+                ph = hash_password(data.password)
+                return self.panel_user_repo.insert(
+                    username=data.username,
+                    password_hash=ph,
+                    first_name=data.first_name,
+                    last_name=data.last_name,
+                    address=data.address,
+                    phone=data.phone,
+                    store=data.store,
+                    role=data.role,
+                    is_active=data.is_active,
+                    conn=conn,
+                )
+
+        return await asyncio.to_thread(_run)
+
+    async def list_panel_users(self) -> list[PanelUserPublic]:
+        if self.panel_user_repo is None:
+            return []
+
+        def _run() -> list[PanelUserPublic]:
+            rows = self.panel_user_repo.list_public_rows()
+            return [PanelUserPublic.model_validate(r) for r in rows]
+
+        return await asyncio.to_thread(_run)
+
+    async def list_panel_users_assignable_for_appointments(self) -> list[PanelUserAssignable]:
+        if self.panel_user_repo is None:
+            return []
+
+        def _run() -> list[PanelUserAssignable]:
+            rows = self.panel_user_repo.list_assignable_for_appointments()
+            return [PanelUserAssignable.model_validate(r) for r in rows]
+
+        return await asyncio.to_thread(_run)
+
+    async def get_panel_user(self, user_id: int) -> Optional[PanelUserPublic]:
+        if self.panel_user_repo is None:
+            return None
+
+        def _run() -> Optional[PanelUserPublic]:
+            row = self.panel_user_repo.get_by_id(user_id)
+            if row is None:
+                return None
+            out = {k: v for k, v in row.items() if k != "password_hash"}
+            return PanelUserPublic.model_validate(out)
+
+        return await asyncio.to_thread(_run)
+
+    async def update_panel_user(self, user_id: int, data: PanelUserUpdate) -> None:
+        if self.panel_user_repo is None:
+            raise RuntimeError("Repositorio de usuarios del panel no configurado.")
+        payload = data.model_dump(exclude_unset=True)
+        if not payload:
+            raise ValueError("EMPTY_UPDATE")
+        if "password" in payload:
+            payload["password_hash"] = hash_password(payload.pop("password"))
+
+        def _run() -> None:
+            with self.panel_user_repo.db.transaction() as conn:
+                if self.panel_user_repo.get_by_id(user_id, conn) is None:
+                    raise ValueError("NOT_FOUND")
+                self.panel_user_repo.update(user_id, payload, conn)
+                if payload.get("role") == "administrador":
+                    self.panel_user_repo.replace_module_keys(user_id, [], conn)
+
+        try:
+            await asyncio.to_thread(_run)
+        except ValueError as e:
+            if str(e) == "NOT_FOUND":
+                raise ValueError("USER_NOT_FOUND") from e
+            raise
+
+    async def login_panel_user_session(self, username: str, password: str) -> Optional[PanelUserSessionPublic]:
+        if self.panel_user_repo is None:
+            return None
+
+        def _run() -> Optional[PanelUserSessionPublic]:
+            row = self.panel_user_repo.get_by_username(username)
+            if not row or not row.get("is_active"):
+                return None
+            if not verify_password(password, str(row["password_hash"])):
+                return None
+            return PanelUserSessionPublic(
+                id=int(row["id"]),
+                username=str(row["username"]),
+                role=str(row["role"]),
+            )
+
+        return await asyncio.to_thread(_run)
+
+    async def get_panel_user_module_grants_raw(self, user_id: int) -> list[str]:
+        if self.panel_user_repo is None:
+            raise RuntimeError("Repositorio de usuarios del panel no configurado.")
+
+        def _run() -> list[str]:
+            row = self.panel_user_repo.get_by_id(user_id)
+            if row is None:
+                raise ValueError("USER_NOT_FOUND")
+            if str(row.get("role")) == "administrador":
+                return []
+            return self.panel_user_repo.list_module_keys_for_user(user_id)
+
+        try:
+            return await asyncio.to_thread(_run)
+        except ValueError as e:
+            if str(e) == "USER_NOT_FOUND":
+                raise ValueError("USER_NOT_FOUND") from e
+            raise
+
+    async def get_effective_panel_module_keys(self, user_id: int) -> list[str]:
+        if self.panel_user_repo is None:
+            raise RuntimeError("Repositorio de usuarios del panel no configurado.")
+
+        def _run() -> list[str]:
+            row = self.panel_user_repo.get_by_id(user_id)
+            if row is None:
+                raise ValueError("USER_NOT_FOUND")
+            if str(row.get("role")) == "administrador":
+                return sorted(ASSIGNABLE_PANEL_MODULE_KEYS)
+            return self.panel_user_repo.list_module_keys_for_user(user_id)
+
+        try:
+            return await asyncio.to_thread(_run)
+        except ValueError as e:
+            if str(e) == "USER_NOT_FOUND":
+                raise ValueError("USER_NOT_FOUND") from e
+            raise
+
+    async def set_panel_user_modules(self, user_id: int, data: PanelUserModulesBody) -> None:
+        if self.panel_user_repo is None:
+            raise RuntimeError("Repositorio de usuarios del panel no configurado.")
+
+        def _run() -> None:
+            with self.panel_user_repo.db.transaction() as conn:
+                row = self.panel_user_repo.get_by_id(user_id, conn)
+                if row is None:
+                    raise ValueError("USER_NOT_FOUND")
+                if str(row.get("role")) == "administrador":
+                    raise ValueError("ADMIN_MODULES_FIXED")
+                self.panel_user_repo.replace_module_keys(user_id, data.modules, conn)
+
+        try:
+            await asyncio.to_thread(_run)
+        except ValueError as e:
+            if str(e) == "USER_NOT_FOUND":
+                raise ValueError("USER_NOT_FOUND") from e
+            raise
 
     async def verify_panel_user_login(self, username: str, password: str) -> bool:
         if self.panel_user_repo is None:

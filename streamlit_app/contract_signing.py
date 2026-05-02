@@ -36,6 +36,17 @@ CONTRACT_NO_REFUND_NOTICE = (
     "En caso de modificaciones de último momento en los diseños, su valor puede aumentar."
 )
 
+
+def _appointment_artist_display_name(appointment: dict[str, Any]) -> str:
+    fn = str(appointment.get("assigned_first_name") or "").strip()
+    ln = str(appointment.get("assigned_last_name") or "").strip()
+    name = f"{fn} {ln}".strip()
+    if name:
+        return name
+    un = str(appointment.get("assigned_username") or "").strip()
+    return f"@{un}" if un else "Sin asignar"
+
+
 try:
     from PIL import Image
 except Exception:  # pragma: no cover
@@ -957,6 +968,10 @@ def render_contract_signing_view(appointment_id: int) -> None:
     if not appt:
         st.error("Cita no encontrada.")
         return
+    st.caption(
+        f"Cita **#{aid}** · Artista: **{_appointment_artist_display_name(appt)}** · "
+        f"Servicio: **{appt.get('service_type', '—')}** · Cliente: **{appt.get('customer_name', '—')}**"
+    )
     if not service_type_requires_contract(appt.get("service_type")):
         st.info(
             "Las citas de tipo **Cambio** o **Limpieza** no requieren firma de contrato digital."

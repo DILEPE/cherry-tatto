@@ -31,7 +31,15 @@ from streamlit_app.contract_read_view import render_contract_read_view
 from streamlit_app.contract_signing import render_contract_signing_view
 from streamlit_app.contracts_admin import render_contract_admin_tab
 from streamlit_app.customers_management import render_customers_management_tab
-from streamlit_app.panel_auth import panel_logout_button, render_login_gate
+from streamlit_app.panel_auth import (
+    panel_allowed_module_keys,
+    panel_auth_enabled,
+    panel_auth_users_from_database,
+    panel_is_operator_admin,
+    panel_logout_button,
+    render_login_gate,
+)
+from streamlit_app.panel_users_admin import render_panel_users_tab
 from streamlit_app.survey_questions_admin import render_survey_questions_tab
 
 LOGO_CANDIDATES = [
@@ -199,32 +207,45 @@ def main() -> None:
 
         panel_logout_button()
 
+    allowed_modules = panel_allowed_module_keys()
+    if (
+        panel_auth_enabled()
+        and panel_auth_users_from_database()
+        and not panel_is_operator_admin()
+        and len(allowed_modules) == 0
+    ):
+        st.markdown('<p class="neon-title">Panel de operaciones</p>', unsafe_allow_html=True)
+        st.warning(
+            "Tu usuario no tiene ningún módulo del panel asignado. "
+            "Pide a un **administrador** que marque los módulos en **Gestión de usuarios → Editar → Módulos permitidos**."
+        )
+        st.stop()
+
     st.markdown('<p class="neon-title">Panel de operaciones</p>', unsafe_allow_html=True)
 
-    tab_citas, tab_customers, tab_admin_contratos, tab_encuestas, tab_reporte = st.tabs(
-        [
-            "Gestión citas",
-            "Gestión de clientes",
-            "Gestión contratos",
-            "Gestión encuesta",
-            "Reporte",
-        ]
-    )
+    tab_definitions: list[tuple[str, object]] = []
+    if "citas" in allowed_modules:
+        tab_definitions.append(("Gestión citas", render_citas_tab))
+    if "clientes" in allowed_modules:
+        tab_definitions.append(("Gestión de clientes", render_customers_management_tab))
+    if "contratos" in allowed_modules:
+        tab_definitions.append(("Gestión contratos", render_contract_admin_tab))
+    if "encuestas" in allowed_modules:
+        tab_definitions.append(("Gestión encuesta", render_survey_questions_tab))
+    if panel_is_operator_admin():
+        tab_definitions.append(("Gestión de usuarios", render_panel_users_tab))
+    if "reporte" in allowed_modules:
+        tab_definitions.append(("Reporte", render_reporte_citas_tab))
 
-    with tab_citas:
-        render_citas_tab()
+    if not tab_definitions:
+        st.error("No hay módulos visibles para tu usuario.")
+        st.stop()
 
-    with tab_customers:
-        render_customers_management_tab()
-
-    with tab_admin_contratos:
-        render_contract_admin_tab()
-
-    with tab_encuestas:
-        render_survey_questions_tab()
-
-    with tab_reporte:
-        render_reporte_citas_tab()
+    tab_labels = [t[0] for t in tab_definitions]
+    dynamic_tabs = st.tabs(tab_labels)
+    for idx, (_label, render_fn) in enumerate(tab_definitions):
+        with dynamic_tabs[idx]:
+            render_fn()
 
 
 if __name__ == "__main__":
