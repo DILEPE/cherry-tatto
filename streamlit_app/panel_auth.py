@@ -114,6 +114,9 @@ def panel_invalidate_module_cache() -> None:
 def _logout_clear_all() -> None:
     st.session_state["_panel_auth_ok"] = False
     st.session_state.pop("_panel_session_full_access", None)
+    st.session_state.pop("panel_mod_radio", None)
+    st.session_state.pop("_panel_module_transition", None)
+    st.session_state.pop("_panel_just_switched_module", None)
     _clear_db_panel_identity()
 
 
@@ -172,6 +175,7 @@ def render_login_gate() -> bool:
             if ok_u and ok_p:
                 st.session_state["_panel_auth_ok"] = True
                 _set_env_operator_session()
+                st.session_state["_panel_warm_after_login"] = True
                 st.rerun()
             else:
                 st.markdown(
@@ -209,6 +213,7 @@ def render_login_gate() -> bool:
                         st.session_state["_panel_session_full_access"] = False
                         _clear_db_panel_identity()
                     st.session_state["_panel_auth_ok"] = True
+                    st.session_state["_panel_warm_after_login"] = True
                     st.rerun()
                 else:
                     msg = (

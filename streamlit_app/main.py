@@ -23,6 +23,9 @@ from dotenv import load_dotenv
 
 load_dotenv(_ROOT / ".env")
 
+from collections.abc import Callable
+import html
+
 import streamlit as st
 
 from streamlit_app import api_client
@@ -49,6 +52,7 @@ LOGO_CANDIDATES = [
 
 
 def _inject_material_neon_css() -> None:
+    """Se emite en cada rerun: Streamlit reconstruye el DOM y los estilos no persisten entre ejecuciones."""
     st.markdown(
         """
         <style>
@@ -123,6 +127,63 @@ def _inject_material_neon_css() -> None:
     )
 
 
+def _render_module_transition_curtain(module_label: str) -> None:
+    """Pantalla intermedia de un rerun para enmascarar el montaje del nuevo módulo."""
+    safe = html.escape(module_label)
+    st.markdown(
+        f"""
+        <style>
+        @keyframes panel-shimmer {{
+          0% {{ background-position: 0% 50%; }}
+          100% {{ background-position: 200% 50%; }}
+        }}
+        .panel-transition-curtain {{
+          min-height: calc(100vh - 9rem);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: linear-gradient(165deg, #0a0a0a 0%, #121018 45%, #0d0d12 100%);
+          border-radius: 16px;
+          border: 1px solid rgba(255,0,127,0.22);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
+        }}
+        .panel-transition-curtain-inner {{
+          text-align: center;
+          padding: 2rem 2.5rem;
+          color: #ececec;
+        }}
+        .panel-transition-title {{
+          font-size: 1.15rem;
+          font-weight: 700;
+          letter-spacing: 0.03em;
+          margin-bottom: 0.35rem;
+        }}
+        .panel-transition-sub {{
+          font-size: 0.92rem;
+          opacity: 0.78;
+        }}
+        .panel-transition-bar {{
+          margin: 1.25rem auto 0;
+          width: min(280px, 70vw);
+          height: 3px;
+          border-radius: 999px;
+          background: linear-gradient(90deg, transparent, #ff007f, #a79aff, transparent);
+          background-size: 200% 100%;
+          animation: panel-shimmer 1.15s ease infinite;
+        }}
+        </style>
+        <div class="panel-transition-curtain">
+          <div class="panel-transition-curtain-inner">
+            <div class="panel-transition-title">{safe}</div>
+            <div class="panel-transition-sub">Preparando la vista…</div>
+            <div class="panel-transition-bar"></div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _logo_path() -> Path | None:
     for p in LOGO_CANDIDATES:
         if p.is_file():
@@ -173,6 +234,48 @@ def main() -> None:
 
     render_login_gate()
 
+    if st.session_state.pop("_panel_warm_after_login", False):
+        with st.spinner("Cargando permisos, profesionales y citas…"):
+            _warm_mods = panel_allowed_module_keys()
+            from streamlit_app.cached_public_api import get_panel_users_assignable_cached
+
+            get_panel_users_assignable_cached()
+            from streamlit_app.citas_tab import warm_session_after_login
+
+            warm_session_after_login(_warm_mods)
+
+    allowed_modules = panel_allowed_module_keys()
+    if (
+        panel_auth_enabled()
+        and panel_auth_users_from_database()
+        and not panel_is_operator_admin()
+        and len(allowed_modules) == 0
+    ):
+        st.markdown('<p class="neon-title">Panel de operaciones</p>', unsafe_allow_html=True)
+        st.warning(
+            "Tu usuario no tiene ningún módulo del panel asignado. "
+            "Pide a un **administrador** que marque los módulos en **Gestión de usuarios → Editar → Módulos permitidos**."
+        )
+        st.stop()
+
+    module_definitions: list[tuple[str, str, Callable[[], None]]] = []
+    if "citas" in allowed_modules:
+        module_definitions.append(("citas", "Gestión citas", render_citas_tab))
+    if "clientes" in allowed_modules:
+        module_definitions.append(("clientes", "Gestión de clientes", render_customers_management_tab))
+    if "contratos" in allowed_modules:
+        module_definitions.append(("contratos", "Gestión contratos", render_contract_admin_tab))
+    if "encuestas" in allowed_modules:
+        module_definitions.append(("encuestas", "Gestión encuesta", render_survey_questions_tab))
+    if panel_is_operator_admin():
+        module_definitions.append(("usuarios_panel", "Gestión de usuarios", render_panel_users_tab))
+    if "reporte" in allowed_modules:
+        module_definitions.append(("reporte", "Reporte", render_reporte_citas_tab))
+
+    if not module_definitions:
+        st.error("No hay módulos visibles para tu usuario.")
+        st.stop()
+
     with st.sidebar:
         logo = _logo_path()
         if logo:
@@ -180,6 +283,27 @@ def main() -> None:
         else:
             st.markdown('<p class="neon-title">CHERRY INK</p>', unsafe_allow_html=True)
             st.markdown('<p class="sub-lavender">Rock City Piercing</p>', unsafe_allow_html=True)
+        st.markdown("---")
+        if len(module_definitions) == 1:
+            active_module_key = module_definitions[0][0]
+        else:
+            labels = [row[1] for row in module_definitions]
+            key_by_label = {row[1]: row[0] for row in module_definitions}
+            picked = st.radio("Módulo activo", options=labels, key="panel_mod_radio")
+            active_module_key = key_by_label[picked]
+
+        prev_mod = st.session_state.get("_panel_prev_module_key")
+        if prev_mod != active_module_key:
+            if prev_mod is not None:
+                st.session_state["_panel_module_transition"] = True
+            st.session_state["_panel_prev_module_key"] = active_module_key
+            if prev_mod is not None:
+                ap_mods = frozenset({"citas", "reporte"})
+                if active_module_key in ap_mods or prev_mod in ap_mods:
+                    st.session_state["_ap_reload"] = True
+                if active_module_key == "clientes" or prev_mod == "clientes":
+                    st.session_state["_cust_reload"] = True
+
         st.markdown("---")
         if st.button("Probar conexión", use_container_width=True):
             ok, code, data = api_client.get_appointments()
@@ -207,45 +331,21 @@ def main() -> None:
 
         panel_logout_button()
 
-    allowed_modules = panel_allowed_module_keys()
-    if (
-        panel_auth_enabled()
-        and panel_auth_users_from_database()
-        and not panel_is_operator_admin()
-        and len(allowed_modules) == 0
-    ):
-        st.markdown('<p class="neon-title">Panel de operaciones</p>', unsafe_allow_html=True)
-        st.warning(
-            "Tu usuario no tiene ningún módulo del panel asignado. "
-            "Pide a un **administrador** que marque los módulos en **Gestión de usuarios → Editar → Módulos permitidos**."
-        )
-        st.stop()
-
     st.markdown('<p class="neon-title">Panel de operaciones</p>', unsafe_allow_html=True)
 
-    tab_definitions: list[tuple[str, object]] = []
-    if "citas" in allowed_modules:
-        tab_definitions.append(("Gestión citas", render_citas_tab))
-    if "clientes" in allowed_modules:
-        tab_definitions.append(("Gestión de clientes", render_customers_management_tab))
-    if "contratos" in allowed_modules:
-        tab_definitions.append(("Gestión contratos", render_contract_admin_tab))
-    if "encuestas" in allowed_modules:
-        tab_definitions.append(("Gestión encuesta", render_survey_questions_tab))
-    if panel_is_operator_admin():
-        tab_definitions.append(("Gestión de usuarios", render_panel_users_tab))
-    if "reporte" in allowed_modules:
-        tab_definitions.append(("Reporte", render_reporte_citas_tab))
+    if st.session_state.pop("_panel_module_transition", False):
+        _transition_label = next(
+            (lb for k, lb, _ in module_definitions if k == active_module_key),
+            active_module_key,
+        )
+        _render_module_transition_curtain(_transition_label)
+        st.rerun()
 
-    if not tab_definitions:
-        st.error("No hay módulos visibles para tu usuario.")
-        st.stop()
-
-    tab_labels = [t[0] for t in tab_definitions]
-    dynamic_tabs = st.tabs(tab_labels)
-    for idx, (_label, render_fn) in enumerate(tab_definitions):
-        with dynamic_tabs[idx]:
-            render_fn()
+    for mod_key, _label, render_fn in module_definitions:
+        if mod_key == active_module_key:
+            with st.spinner("Cargando módulo…"):
+                render_fn()
+            break
 
 
 if __name__ == "__main__":
