@@ -705,10 +705,12 @@ def _row_is_priority(row: dict[str, Any]) -> bool:
 
 def _client_pill_class(row: dict[str, Any], counts_by_client: dict[str, int]) -> str:
     """
-    Prioridad de etiqueta: Reprogramada > Prioritaria > Cliente recurrente (>1 cita) > Cliente nuevo.
-    Así, prioritaria y reprogramada prevalecen sobre el criterio de antigüedad del cliente.
+    Prioridad de etiqueta: Cancelada > Reprogramada > Prioritaria >
+    Cliente recurrente (>1 cita) > Cliente nuevo.
     """
     stv = str(row.get("status") or "").strip().lower()
+    if stv == "cancelada":
+        return "cli-pill-cancelada"
     if stv == "reprogramada":
         return "cli-pill-reprogramada"
     if _row_is_priority(row):
@@ -720,11 +722,32 @@ def _client_pill_class(row: dict[str, Any], counts_by_client: dict[str, int]) ->
 
 
 _CAL_PILL_THEME: dict[str, str] = {
-    "cli-pill-reprogramada": "background:#fff7ed;color:#c2410c;border:1px solid #fdba74;",
-    "cli-pill-priority": "background:#fef2f2;color:#b91c1c;border:1px solid #f87171;",
-    "cli-pill-returning": "background:#eff6ff;color:#1d4ed8;border:1px solid #93c5fd;",
-    "cli-pill-new": "background:#fdf2f8;color:#be185d;border:1px solid #f9a8d4;",
+    "cli-pill-cancelada": "background:#ef4444;color:#fff;border:1px solid #dc2626;",
+    "cli-pill-reprogramada": "background:#f59e0b;color:#fff;border:1px solid #d97706;",
+    "cli-pill-priority": "background:#db2777;color:#fff;border:1px solid #be185d;",
+    "cli-pill-returning": "background:#2563eb;color:#fff;border:1px solid #1d4ed8;",
+    "cli-pill-new": "background:#7c3aed;color:#fff;border:1px solid #6d28d9;",
 }
+
+
+def _render_citas_color_legend() -> None:
+    """Franja horizontal: chip de color + texto (misma paleta que las pastillas del calendario)."""
+    chips: tuple[tuple[str, str], ...] = (
+        ("cli-pill-returning", "Activa cliente antiguo"),
+        ("cli-pill-new", "Activa cliente nuevo"),
+        ("cli-pill-priority", "Con prioridad"),
+        ("cli-pill-reprogramada", "Para reprogramar"),
+        ("cli-pill-cancelada", "Cancelada"),
+        ("cita-legend-swatch-disponible", "Disponible"),
+    )
+    parts: list[str] = ['<div class="cita-legend-strip" role="group" aria-label="Leyenda de colores">']
+    for cls, label in chips:
+        parts.append('<span class="cita-legend-item">')
+        parts.append(f'<span class="cita-legend-swatch {html_mod.escape(cls)}" aria-hidden="true"></span>')
+        parts.append(f'<span class="cita-legend-label">{html_mod.escape(label)}</span>')
+        parts.append("</span>")
+    parts.append("</div>")
+    st.markdown("".join(parts), unsafe_allow_html=True)
 
 
 def _customer_name_pill_html(row: dict[str, Any], counts_by_client: dict[str, int]) -> str:
@@ -1319,12 +1342,6 @@ def _render_main_calendar(
     y, m = st.session_state[ym_key]
 
     st.markdown("##### Calendario de citas")
-    st.caption(
-        "Pulsa el **número del día** (hoy o futuro) para agendar; solo eliges la **hora** y debes **verificar documento**. "
-        "Si hay **hasta cuatro** citas ese día, usa **Ver citas del día** para listarlas todas y editarlas. "
-        "Si hay **más de cuatro**, solo **+N citas más** abre ese listado (el botón «Ver citas…» no aparece). "
-        "Etiquetas: naranja = reprogramada, roja = prioritaria, azul = recurrente, fucsia = nuevo."
-    )
 
     n1, n2, n3 = st.columns([1, 3, 1])
     with n1:
@@ -1369,7 +1386,7 @@ def _render_main_calendar(
                     for r in day_rows[:max_lines]:
                         parts.append(_calendar_appt_line_html(r, counts_by_client))
                     more = len(day_rows) - max_lines
-                    body = "".join(parts) if parts else "<div style='font-size:0.72rem;opacity:0.55'>—</div>"
+                    body = "".join(parts) if parts else "<div class='cal-day-empty'>—</div>"
                     st.markdown(
                         f"<div class='cal-cell{today_cls}'><div class='cal-day-inner'>{body}</div></div>",
                         unsafe_allow_html=True,
@@ -1383,12 +1400,18 @@ def _render_main_calendar(
                         ):
                             st.session_state["_cal_overflow_day"] = (y, m, d)
                             st.rerun()
-                    elif len(day_rows) > 0:
+                    else:
+                        sin_citas = len(day_rows) == 0
                         if st.button(
                             "Ver citas del día",
                             key=f"cal_day_list_{y}_{m}_{d}",
                             use_container_width=True,
-                            help="Ver citas del día: firmar contrato, reprogramar, montos o anular",
+                            disabled=sin_citas,
+                            help=(
+                                "No hay citas programadas este día"
+                                if sin_citas
+                                else "Ver citas del día: firmar contrato, reprogramar, montos o anular"
+                            ),
                         ):
                             st.session_state["_cal_overflow_day"] = (y, m, d)
                             st.rerun()
@@ -2168,10 +2191,11 @@ def _inject_citas_shared_styles() -> None:
             border: 1px solid rgba(255, 0, 127, 0.38);
             border-radius: 10px;
             padding: 0.35rem 0.32rem 0.28rem 0.32rem;
-            min-height: 4.75rem;
+            min-height: 7.6rem;
             margin-bottom: 0.28rem;
             background: rgba(15, 23, 42, 0.55);
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 2px 8px rgba(0, 0, 0, 0.35);
+            box-sizing: border-box;
         }
         .cal-cell-today {
             border-color: rgba(255, 0, 127, 0.72);
@@ -2183,10 +2207,22 @@ def _inject_citas_shared_styles() -> None:
             background: rgba(0, 0, 0, 0.32);
             padding: 0.28rem 0.32rem 0.22rem 0.32rem;
             margin-bottom: 0.32rem;
-            min-height: 2.85rem;
+            min-height: 6.35rem;
+            min-width: 0;
             display: flex;
             flex-direction: column;
             gap: 0.18rem;
+            box-sizing: border-box;
+        }
+        .cal-day-empty {
+            flex: 1 1 auto;
+            min-height: 5.85rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.72rem;
+            opacity: 0.5;
+            letter-spacing: 0.06em;
         }
         .cal-cell-today .cal-day-inner {
             border-color: rgba(255, 0, 127, 0.45);
@@ -2205,29 +2241,36 @@ def _inject_citas_shared_styles() -> None:
             border: 1px solid transparent;
         }
         /* Streamlit aplica color claro al markdown; forzamos pills en calendario y tablas */
+        /* Pastillas nombre cliente (paleta tipo leyenda: antiguo azul, nuevo violeta, etc.) */
+        .cal-cell span.cli-pill.cli-pill-cancelada,
+        span.cli-pill.cli-pill-cancelada {
+            background: #ef4444 !important;
+            color: #ffffff !important;
+            border: 1px solid #dc2626 !important;
+        }
         .cal-cell span.cli-pill.cli-pill-reprogramada,
         span.cli-pill.cli-pill-reprogramada {
-            background: #fff7ed !important;
-            color: #c2410c !important;
-            border: 1px solid #fdba74 !important;
+            background: #f59e0b !important;
+            color: #ffffff !important;
+            border: 1px solid #d97706 !important;
         }
         .cal-cell span.cli-pill.cli-pill-priority,
         span.cli-pill.cli-pill-priority {
-            background: #fef2f2 !important;
-            color: #b91c1c !important;
-            border: 1px solid #f87171 !important;
+            background: #db2777 !important;
+            color: #ffffff !important;
+            border: 1px solid #be185d !important;
         }
         .cal-cell span.cli-pill.cli-pill-returning,
         span.cli-pill.cli-pill-returning {
-            background: #eff6ff !important;
-            color: #1d4ed8 !important;
-            border: 1px solid #93c5fd !important;
+            background: #2563eb !important;
+            color: #ffffff !important;
+            border: 1px solid #1d4ed8 !important;
         }
         .cal-cell span.cli-pill.cli-pill-new,
         span.cli-pill.cli-pill-new {
-            background: #fdf2f8 !important;
-            color: #be185d !important;
-            border: 1px solid #f9a8d4 !important;
+            background: #7c3aed !important;
+            color: #ffffff !important;
+            border: 1px solid #6d28d9 !important;
         }
         .cal-cell span.cli-pill {
             border-radius: 999px !important;
@@ -2256,6 +2299,64 @@ def _inject_citas_shared_styles() -> None:
         .svc-flag-cambio { background: #fef9c3; color: #854d0e; border-color: #fde047; }
         .svc-flag-other { background: #f3f4f6; color: #374151; border-color: #d1d5db; }
         .svc-flag-unknown { background: #f9fafb; color: #9ca3af; border-color: #e5e7eb; }
+        .cita-legend-strip {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.65rem 1.15rem;
+            padding: 0.6rem 0.9rem;
+            background: rgba(15, 23, 42, 0.72);
+            border: 1px solid rgba(255, 0, 127, 0.38);
+            border-radius: 10px;
+            margin: 0.15rem 0 0.35rem;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 2px 8px rgba(0, 0, 0, 0.22);
+            box-sizing: border-box;
+        }
+        .cita-legend-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.38rem;
+        }
+        .cita-legend-swatch {
+            display: inline-block;
+            width: 0.82rem;
+            height: 0.82rem;
+            border-radius: 4px;
+            flex-shrink: 0;
+            box-sizing: border-box;
+            border: 1px solid;
+            vertical-align: middle;
+        }
+        .cita-legend-swatch.cli-pill-returning {
+            background: #2563eb;
+            border-color: #1d4ed8;
+        }
+        .cita-legend-swatch.cli-pill-new {
+            background: #7c3aed;
+            border-color: #6d28d9;
+        }
+        .cita-legend-swatch.cli-pill-priority {
+            background: #db2777;
+            border-color: #be185d;
+        }
+        .cita-legend-swatch.cli-pill-reprogramada {
+            background: #f59e0b;
+            border-color: #d97706;
+        }
+        .cita-legend-swatch.cli-pill-cancelada {
+            background: #ef4444;
+            border-color: #dc2626;
+        }
+        .cita-legend-swatch.cita-legend-swatch-disponible {
+            background: #22c55e;
+            border-color: #16a34a;
+        }
+        .cita-legend-label {
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: #e2e8f0;
+            white-space: nowrap;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -2300,9 +2401,6 @@ def _render_procedure_value_bar_chart(filtered_items: list[dict[str, Any]]) -> N
     categories = [k for k, _ in ordered]
     values = [float(v) for _, v in ordered]
     st.markdown("##### Valor por procedimiento")
-    st.caption(
-        "Suma del **total trabajo** por tipo de servicio en las citas del filtro (Plotly, mismo estilo que encuestas)."
-    )
     report_charts.render_vertical_bars(
         st,
         categories=categories,
@@ -2397,11 +2495,6 @@ def _survey_number_bar_chart_2d(pairs: list[tuple[float, int]], *, x_title: str,
 
 
 def _render_survey_question_stats_report() -> None:
-    st.caption(
-        "Todas las gráficas usan **Plotly**. En **tortas**, cada sector muestra el **porcentaje** y la leyenda **Convenciones** (derecha) el detalle con **n**. "
-        "Instalación: `pip install plotly`. La pregunta del **valor de tu procedimiento** va en **barras**; "
-        "el resto en **torta**. Configura en **Gestión encuesta**."
-    )
     ok, code, raw = get_survey_question_stats_summary_cached()
     if not ok:
         det = _api_error(raw)
@@ -2464,9 +2557,6 @@ def _render_survey_question_stats_report() -> None:
 
                 pairs = _pairs_from_number_breakdown(dict(nb))
                 if _survey_question_is_procedure_value_question(label) and pairs:
-                    st.caption(
-                        "Pregunta sobre **valor del procedimiento**: barras Plotly (mismo estilo que el reporte financiero)."
-                    )
                     _survey_number_bar_chart_2d(
                         pairs,
                         x_title="Valor informado (tu procedimiento)",
@@ -2511,7 +2601,6 @@ def _render_reporte_financiero_citas_body(
     status_values: list[str],
 ) -> None:
     """Filtros, métricas, export Excel y tabla paginada (solo finanzas)."""
-    st.caption("Filtra el listado y los totales; el Excel usa el mismo criterio.")
     st.markdown("##### Filtros")
     f1, f2, f3, f4, f5 = st.columns([1.3, 1.0, 1.0, 0.9, 0.9])
     with f1:
@@ -2701,12 +2790,6 @@ def render_reporte_citas_tab() -> None:
         _dialog_recibos_cita()
 
     st.markdown("##### Reporte")
-    st.caption(
-        "**Finanzas**: montos, **barras Plotly** por procedimiento, export Excel y tabla. "
-        "**Encuestas**: **Plotly** (torta o barras). "
-        "Calendario en **Gestión citas**. "
-        "El filtro **Profesional** de **Gestión citas** aplica al cargar citas desde la API (vendedor/admin)."
-    )
     # st.tabs ejecuta cada pestaña en cada rerun; el radio solo dibuja una rama.
     rep_sec = st.radio(
         "Sección",
@@ -2742,10 +2825,12 @@ def render_citas_tab() -> None:
     status_values = ["Agendada", "Reprogramada", "Finalizada", "Cancelada"]
 
     st.markdown("##### Gestión citas — calendario")
-    st.caption(
-        "Agenda y consulta rápida por día. Mismos criterios que en **Reporte** (nombre, servicio, estado), "
-        "sin rango de fechas; la tabla, totales y Excel siguen en **Reporte**."
-    )
+
+    with st.expander(
+        "Leyenda de colores — citas",
+        expanded=True,
+    ):
+        _render_citas_color_legend()
 
     st.markdown("##### Filtros del calendario")
     cf1, cf2, cf3 = st.columns([1.3, 1.0, 1.0])

@@ -662,7 +662,6 @@ def _dialog_contracts_cliente(cliente_id: int, nombre: str) -> None:
 
 def render_customers_management_tab() -> None:
     st.subheader("Gestión de clientes")
-    st.caption("Alta, consulta, edición y baja lógica. Por fila usa **Acciones** (mismo esquema que en citas).")
 
     if "_cust_page" not in st.session_state:
         st.session_state["_cust_page"] = 0

@@ -6,7 +6,8 @@ Define en `.env` la lista separada por comas, **exactamente** como en la base:
 
   SERVICE_TYPE_ENUM_VALUES=Tatuaje,Piercing,Cambio,Limpieza
 
-Si no existe la variable, se usan literales por defecto (inglés legacy).
+Si no existe la variable, se usan los mismos literales que documenta el README
+(alineados con MySQL cuando la columna es ENUM o VARCHAR con esas etiquetas).
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ def configured_service_types() -> Tuple[str, ...]:
     raw = os.getenv("SERVICE_TYPE_ENUM_VALUES", "").strip()
     if raw:
         return tuple(x.strip() for x in raw.split(",") if x.strip())
-    return ("tattoo", "piercing", "other")
+    return ("Tatuaje", "Piercing", "Cambio", "Limpieza")
 
 
 def resolve_service_type(user_text: str) -> str:

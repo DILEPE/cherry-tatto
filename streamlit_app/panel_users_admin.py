@@ -381,10 +381,6 @@ def render_panel_users_tab() -> None:
         return
 
     st.subheader("Gestión de usuarios del panel")
-    st.caption(
-        "Alta, consulta y edición de operadores (tienda Cherry Tattoo / Rock City, roles y acceso al panel). "
-        "Mismo criterio de **Acciones** por fila que en clientes y citas. Requiere **015**, **016** y **017** en MySQL."
-    )
     with st.expander("Administración de acceso a módulos", expanded=False):
         st.markdown(
             "- El rol **administrador** ve **todas** las pestañas, incluida esta de usuarios.\n"
