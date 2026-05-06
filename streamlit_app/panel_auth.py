@@ -188,7 +188,6 @@ def render_login_gate() -> bool:
 
     # --- Modo base de datos ---
     st.markdown('<p class="neon-title" style="margin-top:1rem;">Acceso al panel</p>', unsafe_allow_html=True)
-    st.caption("Usuarios guardados en la base de datos. La API debe estar en marcha (`API_BASE_URL`).")
 
     tab_in, tab_reg = st.tabs(["Iniciar sesión", "Crear cuenta"])
 
@@ -229,10 +228,6 @@ def render_login_gate() -> bool:
                     )
 
     with tab_reg:
-        st.caption(
-            "Usuario: 3–80 caracteres (minúsculas, números, `.`, `-`, `_`). "
-            "Contraseña: mínimo 8 caracteres, máximo 72 (límite de bcrypt)."
-        )
         _nc1, col, _nc2 = st.columns([1, 1.2, 1])
         with col:
             u_r = st.text_input("Usuario", key="_panel_reg_user", autocomplete="username")

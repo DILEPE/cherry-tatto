@@ -184,10 +184,6 @@ def _dialog_edit_template(template_id: int) -> None:
 
 def render_contract_admin_tab() -> None:
     st.subheader("Gestión de contratos")
-    st.caption(
-        "Plantillas por tipo de trabajo (**tatuaje** o **piercing**). Solo puede haber **una versión activa** "
-        "por cada tipo. En el listado, **Acciones** por fila (mismo esquema que en citas)."
-    )
 
     if "_ctadm_reload" not in st.session_state:
         st.session_state["_ctadm_reload"] = True
