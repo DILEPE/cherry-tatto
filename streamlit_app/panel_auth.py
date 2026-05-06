@@ -165,11 +165,14 @@ def render_login_gate() -> bool:
 
         _nc1, col, _nc2 = st.columns([1, 1.2, 1])
         with col:
-            u_input = st.text_input("Usuario", key="_panel_login_user", autocomplete="username")
-            p_input = st.text_input("Contraseña", type="password", key="_panel_login_pass", autocomplete="current-password")
-            go = st.button("Entrar", use_container_width=True, type="primary")
+            with st.form("panel_env_login_form", clear_on_submit=False):
+                st.text_input("Usuario", key="_panel_login_user", autocomplete="username")
+                st.text_input("Contraseña", type="password", key="_panel_login_pass", autocomplete="current-password")
+                go = st.form_submit_button("Entrar", use_container_width=True, type="primary")
 
         if go:
+            u_input = str(st.session_state.get("_panel_login_user") or "")
+            p_input = str(st.session_state.get("_panel_login_pass") or "")
             ok_u = _safe_str_eq(u_input.strip(), user_env)
             ok_p = _safe_str_eq(p_input, pass_env)
             if ok_u and ok_p:
@@ -194,12 +197,15 @@ def render_login_gate() -> bool:
     with tab_in:
         _nc1, col, _nc2 = st.columns([1, 1.2, 1])
         with col:
-            u_in = st.text_input("Usuario", key="_panel_db_login_user", autocomplete="username")
-            p_in = st.text_input("Contraseña", type="password", key="_panel_db_login_pass", autocomplete="current-password")
-            go_in = st.button("Entrar", use_container_width=True, type="primary", key="_panel_db_login_btn")
+            with st.form("panel_db_login_form", clear_on_submit=False):
+                st.text_input("Usuario", key="_panel_db_login_user", autocomplete="username")
+                st.text_input("Contraseña", type="password", key="_panel_db_login_pass", autocomplete="current-password")
+                go_in = st.form_submit_button("Entrar", use_container_width=True, type="primary")
 
         if go_in:
-            u_norm = u_in.strip().lower()
+            u_raw = str(st.session_state.get("_panel_db_login_user") or "").strip()
+            p_in = str(st.session_state.get("_panel_db_login_pass") or "")
+            u_norm = u_raw.lower()
             if not u_norm or not p_in:
                 st.warning("Indica **usuario** y **contraseña**.")
             else:
