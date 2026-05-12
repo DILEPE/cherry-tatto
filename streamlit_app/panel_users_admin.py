@@ -1,8 +1,7 @@
 """Streamlit: gestión de usuarios del panel (mismo esquema visual que clientes y citas)."""
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import streamlit as st
 
@@ -34,6 +33,29 @@ def _detail(payload: Any) -> str:
             return "; ".join(parts) if parts else str(payload)
         return str(det)
     return str(payload)
+
+
+_PU_ACTION_INFO_KEY = "_pu_action_info"
+_PU_ACTION_WARN_KEY = "_pu_action_warn"
+
+
+def _queue_pu_success(msg: str) -> None:
+    """Confirmación en el siguiente rerun (tras cerrar el diálogo)."""
+    st.session_state[_PU_ACTION_INFO_KEY] = msg
+
+
+def _queue_pu_warning(msg: str) -> None:
+    """Aviso complementario (p. ej. fallo al guardar módulos tras crear/editar usuario)."""
+    st.session_state[_PU_ACTION_WARN_KEY] = msg
+
+
+def _render_pu_feedback() -> None:
+    warn = st.session_state.pop(_PU_ACTION_WARN_KEY, None)
+    if warn:
+        st.toast(warn, icon="⚠️", duration="long")
+    msg = st.session_state.pop(_PU_ACTION_INFO_KEY, None)
+    if msg:
+        st.toast(msg, icon="✅", duration="long")
 
 
 def _fetch_panel_users() -> None:
@@ -95,16 +117,31 @@ def _reset_pu_create_keys() -> None:
         st.session_state.pop(k, None)
 
 
-def _render_panel_user_row_actions(uid: int, etiqueta: str) -> None:
-    def _go_view() -> None:
-        st.session_state["_pu_dlg"] = "view"
-        st.session_state["_pu_dlg_id"] = uid
-
+def _render_panel_user_row_actions(uid: int, etiqueta: str, *, is_active: bool) -> None:
     def _go_edit() -> None:
         st.session_state["_pu_dlg"] = "edit"
         st.session_state["_pu_dlg_id"] = uid
         st.session_state.pop("_pu_dlg_edit", None)
         st.session_state.pop("_pu_dlg_edit_id", None)
+
+    me_raw = st.session_state.get("_panel_user_id")
+    is_me = me_raw is not None and int(me_raw) == int(uid)
+
+    def _apply_active(new_active: bool) -> None:
+        with st.spinner("Actualizando estado…"):
+            ok, code, raw = api_client.patch_panel_user(uid, {"is_active": new_active})
+        if ok:
+            if is_me:
+                panel_invalidate_module_cache()
+                if not new_active:
+                    _queue_pu_warning(
+                        "Has desactivado tu propio usuario: cuando salgas del panel no podrás iniciar sesión hasta que otro administrador te reactive."
+                    )
+            _queue_pu_success("Usuario desactivado." if not new_active else "Usuario activado.")
+            st.session_state["_pu_reload"] = True
+            st.rerun()
+        else:
+            st.toast(f"No se pudo cambiar el estado (HTTP {code}): {_detail(raw)}", icon="❌", duration="long")
 
     pop = getattr(st, "popover", None)
     if pop:
@@ -113,28 +150,27 @@ def _render_panel_user_row_actions(uid: int, etiqueta: str) -> None:
                 st.caption(f"Usuario #{uid}")
             if etiqueta:
                 st.caption(etiqueta[:80] + ("…" if len(etiqueta) > 80 else ""))
-            if st.button("Ver", key=f"pu_v_{uid}", use_container_width=True):
-                _go_view()
+            if not is_active:
+                if st.button("Activar", key=f"pu_act_{uid}", use_container_width=True):
+                    _apply_active(True)
+            else:
+                if st.button("Desactivar", key=f"pu_deact_{uid}", use_container_width=True):
+                    _apply_active(False)
             if st.button("Editar", key=f"pu_e_{uid}", use_container_width=True):
                 _go_edit()
         return
 
-    a1, a2 = st.columns(2)
-    with a1:
-        if st.button("Ver", key=f"pu_fb_v_{uid}", use_container_width=True):
-            _go_view()
-    with a2:
+    row_act, row_ed = st.columns(2)
+    with row_act:
+        if not is_active:
+            if st.button("Activar", key=f"pu_fb_act_{uid}", use_container_width=True):
+                _apply_active(True)
+        else:
+            if st.button("Desactivar", key=f"pu_fb_deact_{uid}", use_container_width=True):
+                _apply_active(False)
+    with row_ed:
         if st.button("Editar", key=f"pu_fb_e_{uid}", use_container_width=True):
             _go_edit()
-
-
-def _dt_short(v: Any) -> str:
-    if v is None:
-        return "—"
-    if isinstance(v, datetime):
-        return v.strftime("%Y-%m-%d %H:%M")
-    s = str(v)
-    return s[:16] if len(s) >= 16 else s
 
 
 @st.dialog("Registrar usuario del panel", width="large", dismissible=False)
@@ -201,19 +237,22 @@ def _dialog_crear_usuario_panel() -> None:
                 body["address"] = ad
             if ph:
                 body["phone"] = ph
-            ok, code, raw = api_client.post_panel_user_create(body)
+            with st.spinner("Registrando usuario…"):
+                ok, code, raw = api_client.post_panel_user_create(body)
+                if ok:
+                    new_id: Any = None
+                    if isinstance(raw, dict):
+                        new_id = raw.get("id")
+                    ok_m, c_m, r_m = True, 0, None
+                    if w_role != "administrador" and new_id is not None:
+                        ok_m, c_m, r_m = api_client.put_panel_user_modules(int(new_id), list(w_mods))
             if ok:
-                new_id: Any = None
-                if isinstance(raw, dict):
-                    new_id = raw.get("id")
-                if w_role != "administrador" and new_id is not None:
-                    ok_m, c_m, r_m = api_client.put_panel_user_modules(int(new_id), list(w_mods))
-                    if not ok_m:
-                        st.warning(
-                            "Usuario creado, pero no se pudieron guardar los módulos "
-                            f"(HTTP {c_m}): {_detail(r_m)}"
-                        )
-                st.success("Usuario registrado correctamente.")
+                if w_role != "administrador" and new_id is not None and not ok_m:
+                    _queue_pu_warning(
+                        "Usuario creado, pero no se pudieron guardar los módulos "
+                        f"(HTTP {c_m}): {_detail(r_m)}"
+                    )
+                _queue_pu_success("Usuario registrado correctamente.")
                 st.session_state["_pu_reload"] = True
                 _reset_pu_create_keys()
                 _close_pu_dialogs()
@@ -229,37 +268,11 @@ def _dialog_crear_usuario_panel() -> None:
             st.rerun()
 
 
-@st.dialog("Detalle del usuario", width="large")
-def _dialog_ver_usuario_panel(user_id: int) -> None:
-    ok, code, data = api_client.get_panel_user(user_id)
-    if not ok or not isinstance(data, dict):
-        st.error(f"No se pudo cargar (HTTP {code}): {_detail(data)}")
-    else:
-        nombre = f"{data.get('first_name', '')} {data.get('last_name', '')}".strip() or "—"
-        tienda = PANEL_STORE_LABEL_ES.get(str(data.get("store")), str(data.get("store", "")))
-        rol = PANEL_ROLE_LABEL_ES.get(str(data.get("role")), str(data.get("role", "")))
-        st.markdown(
-            f"**ID:** {data.get('id')}  \n"
-            f"**Nombre:** {nombre}  \n"
-            f"**Usuario:** {data.get('username')}  \n"
-            f"**Dirección:** {data.get('address') or '—'}  \n"
-            f"**Celular:** {data.get('phone') or '—'}  \n"
-            f"**Tienda:** {tienda}  \n"
-            f"**Rol:** {rol}  \n"
-            f"**Activo:** {'Sí' if data.get('is_active') else 'No'}  \n"
-            f"**Creado:** {_dt_short(data.get('created_at'))} · **Actualizado:** {_dt_short(data.get('updated_at'))}"
-        )
-        with st.expander("JSON (depuración)", expanded=False):
-            st.json(data)
-    if st.button("Cerrar", use_container_width=True, key="dlg_pu_view_close"):
-        _close_pu_dialogs()
-        st.rerun()
-
-
 @st.dialog("Editar usuario del panel", width="large", dismissible=False)
 def _dialog_editar_usuario_panel(user_id: int) -> None:
     if "_pu_dlg_edit" not in st.session_state or st.session_state.get("_pu_dlg_edit_id") != user_id:
-        ok, code, data = api_client.get_panel_user(user_id)
+        with st.spinner("Cargando usuario…"):
+            ok, code, data = api_client.get_panel_user(user_id)
         if not ok or not isinstance(data, dict):
             st.error(f"No se pudo cargar (HTTP {code}): {_detail(data)}")
             if st.button("Cerrar", key="dlg_pu_ed_err"):
@@ -345,19 +358,21 @@ def _dialog_editar_usuario_panel(user_id: int) -> None:
                 }
                 if e_pass:
                     patch["password"] = e_pass
-                ok, code, raw = api_client.patch_panel_user(user_id, patch)
-                if ok:
-                    if str(e_role) != "administrador":
+                with st.spinner("Guardando cambios…"):
+                    ok, code, raw = api_client.patch_panel_user(user_id, patch)
+                    ok_m, c_m, r_m = True, 0, None
+                    if ok and str(e_role) != "administrador":
                         ok_m, c_m, r_m = api_client.put_panel_user_modules(user_id, list(e_mods))
-                        if not ok_m:
-                            st.warning(
-                                "Datos guardados, pero no se actualizaron los módulos "
-                                f"(HTTP {c_m}): {_detail(r_m)}"
-                            )
+                if ok:
+                    if str(e_role) != "administrador" and not ok_m:
+                        _queue_pu_warning(
+                            "Datos guardados, pero no se actualizaron los módulos "
+                            f"(HTTP {c_m}): {_detail(r_m)}"
+                        )
                     sid = st.session_state.get("_panel_user_id")
                     if sid is not None and int(sid) == int(user_id):
                         panel_invalidate_module_cache()
-                    st.success("Usuario actualizado.")
+                    _queue_pu_success("Usuario actualizado.")
                     st.session_state["_pu_reload"] = True
                     st.session_state.pop("_pu_dlg_edit", None)
                     st.session_state.pop("_pu_dlg_edit_id", None)
@@ -383,7 +398,8 @@ def render_panel_users_tab() -> None:
     st.subheader("Gestión de usuarios del panel")
     with st.expander("Administración de acceso a módulos", expanded=False):
         st.markdown(
-            "- El rol **administrador** ve **todas** las pestañas, incluida esta de usuarios.\n"
+            "- El rol **administrador** ve **todas** las pestañas, incluida esta de usuarios, y puede "
+            "**activar y desactivar** cuentas desde **Acciones** en cada fila (un usuario inactivo no puede iniciar sesión).\n"
             "- **Vendedor**, **perforador** y **tatuador** solo ven las pestañas que marques en **Editar** "
             "(o al **Crear**) en **Módulos permitidos**.\n"
             "- Si un usuario no administrador no tiene módulos, verá un aviso al entrar al panel."
@@ -412,6 +428,8 @@ def render_panel_users_tab() -> None:
     if st.session_state.get("_pu_reload"):
         _fetch_panel_users()
         st.session_state["_pu_reload"] = False
+
+    _render_pu_feedback()
 
     err = st.session_state.get("_pu_last_error")
     if err:
@@ -454,7 +472,7 @@ def render_panel_users_tab() -> None:
         with c6:
             st.write(activo)
         with c7:
-            _render_panel_user_row_actions(uid, nombre)
+            _render_panel_user_row_actions(uid, nombre, is_active=bool(it.get("is_active")))
 
     st.divider()
 
@@ -466,7 +484,5 @@ def render_panel_users_tab() -> None:
 
     if dlg == "create":
         _dialog_crear_usuario_panel()
-    elif dlg == "view" and dlg_id:
-        _dialog_ver_usuario_panel(int(dlg_id))
     elif dlg == "edit" and dlg_id:
         _dialog_editar_usuario_panel(int(dlg_id))

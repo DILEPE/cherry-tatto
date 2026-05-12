@@ -35,6 +35,8 @@ DB_USER = os.getenv("DB_USER")
 DB_PASS = os.getenv("DB_PASSWORD")
 DB_NAME = os.getenv("DB_NAME", "inkmanager_db")
 N8N_URL = os.getenv("N8N_WEBHOOK_URL")
+# Webhook dedicado para recibos PDF (event payment_receipt_pdf). Si no está definido, usa N8N_WEBHOOK_URL.
+N8N_RECEIPT_WEBHOOK_URL = os.getenv("N8N_RECEIPT_WEBHOOK_URL")
 # Opcional — GET /health/n8n: sondeo al endpoint de status (toma prioridad si está definido).
 # Ej.: N8N_STATUS_URL=http://localhost:5678/webhook-test/cherry-tatto/status
 APP_PORT = int(os.getenv("PORT", 5000))
@@ -55,7 +57,10 @@ repo = AppointmentRepository(db_mgr)
 customer_repo = CustomerRepository(db_mgr)
 panel_user_repo = PanelUserRepository(db_mgr)
 
-notifier = NotificationService(webhook_url=N8N_URL)
+notifier = NotificationService(
+    webhook_url=N8N_URL,
+    receipt_webhook_url=N8N_RECEIPT_WEBHOOK_URL,
+)
 
 # 4. Inicializar Servicio de Dominio
 business_service = BusinessLogicService(repo, customer_repo, notifier, panel_user_repo)
