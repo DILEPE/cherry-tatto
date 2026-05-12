@@ -84,6 +84,20 @@ class TemplateController(Controller):
                 status="success",
                 message=f"Plantilla {template_id} eliminada exitosamente",
             )
+        except ValueError as e:
+            code = str(e)
+            if code == "TEMPLATE_IN_USE":
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "No se puede eliminar esta plantilla porque hay contratos firmados "
+                        "asociados a ella. Desactívala (quitar «Activa») o crea una nueva versión "
+                        "en lugar de borrarla."
+                    ),
+                ) from e
+            if code == "TEMPLATE_NOT_FOUND":
+                raise HTTPException(detail="Plantilla no encontrada", status_code=404) from e
+            raise HTTPException(detail=str(e), status_code=400) from e
         except Exception as e:
             raise HTTPException(
                 detail=f"Error al eliminar plantilla: {str(e)}", status_code=500

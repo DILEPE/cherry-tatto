@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import calendar
 import html as html_mod
+import re
 import unicodedata
 from datetime import date, datetime, time
 from io import BytesIO
@@ -35,6 +36,55 @@ def _api_error(payload: Any) -> str:
     if isinstance(payload, dict):
         return str(payload.get("detail", payload))
     return str(payload)
+
+
+_AP_ACTION_INFO_KEY = "_ap_action_info"
+_AP_TOAST_FETCH_ERR_KEY = "_ap_toast_fetch_err"
+_AP_TOAST_FIN_SAVE_ERR_KEY = "_ap_toast_fin_save_err"
+
+
+def _queue_appointment_action_success(msg: str) -> None:
+    """Confirmación visible en la siguiente ejecución (pestaña Citas o Reporte)."""
+    st.session_state[_AP_ACTION_INFO_KEY] = msg
+
+
+def _render_appointment_action_feedback() -> None:
+    msg = st.session_state.pop(_AP_ACTION_INFO_KEY, None)
+    if msg:
+        st.toast(msg, icon="✅", duration="long")
+
+
+def _render_appointments_fetch_error_toast() -> None:
+    """Un toast por mensaje de fallo al cargar citas (evita repetir en cada rerun)."""
+    err = st.session_state.get("_ap_err")
+    if not err:
+        st.session_state.pop(_AP_TOAST_FETCH_ERR_KEY, None)
+        return
+    if st.session_state.get(_AP_TOAST_FETCH_ERR_KEY) != err:
+        st.session_state[_AP_TOAST_FETCH_ERR_KEY] = err
+        st.toast(str(err), icon="❌", duration="long")
+
+
+def _toast_financial_save_error_if_any() -> None:
+    save_err = st.session_state.get("_ap_fin_save_error")
+    if not save_err:
+        st.session_state.pop(_AP_TOAST_FIN_SAVE_ERR_KEY, None)
+        return
+    if st.session_state.get(_AP_TOAST_FIN_SAVE_ERR_KEY) != save_err:
+        st.session_state[_AP_TOAST_FIN_SAVE_ERR_KEY] = save_err
+        st.toast(str(save_err), icon="❌", duration="long")
+
+
+def _format_dt_for_user_message(dt_str: str) -> str:
+    """Presentación corta para mensajes (YYYY-MM-DD HH:MM a DD/MM/YYYY HH:MM)."""
+    raw = (dt_str or "").strip().replace("T", " ")[:16]
+    if len(raw) < 16:
+        return raw or "—"
+    try:
+        dt = datetime.strptime(raw, "%Y-%m-%d %H:%M")
+        return dt.strftime("%d/%m/%Y %H:%M")
+    except ValueError:
+        return raw
 
 
 def _may_see_all_appointments() -> bool:
@@ -510,24 +560,43 @@ _BOOKING_WORK_KIND_META: Dict[str, Dict[str, Any]] = {
 
 _MIN_BOOKING_DURATION_SLOTS = 1
 _MAX_BOOKING_DURATION_SLOTS = 16
+# Sufijo en `detail` al crear desde este panel (Streamlit) para saber cuántas franjas de 30 min ocupó la cita.
+_AGENDA_SLOTS_DETAIL_PATTERN = re.compile(r"\s*\[agenda_slots:(\d+)\]\s*$", re.IGNORECASE)
+
+
+def _append_agenda_slots_marker(detail: Optional[str], slots: int) -> str:
+    """Añade marcador al final del detalle para calcular ocupación real en agenda."""
+    n = max(_MIN_BOOKING_DURATION_SLOTS, min(_MAX_BOOKING_DURATION_SLOTS, int(slots)))
+    base = (detail or "").strip()
+    return (f"{base} [agenda_slots:{n}]").strip() if base else f"[agenda_slots:{n}]"
 
 
 def _booking_duration_slots_from_session() -> int:
     """Franjas de 30 min al agendar (control único; no depende del tipo de trabajo)."""
     raw = st.session_state.get("ap_duration_slots")
     if raw is None:
-        return 2
+        return 1
     try:
         n = int(raw)
     except (TypeError, ValueError):
-        return 2
+        return 1
     return max(_MIN_BOOKING_DURATION_SLOTS, min(_MAX_BOOKING_DURATION_SLOTS, n))
 
 
 def _duration_slots_for_existing_appointment(row: dict[str, Any]) -> int:
-    """Franjas de 30 min ocupadas por citas ya guardadas (heurística por servicio y detalle)."""
+    """Franjas de 30 min ocupadas por una cita: prioridad al marcador [agenda_slots:N] en detail; si no, heurística."""
+    det_full = str(row.get("detail") or "")
+    m = _AGENDA_SLOTS_DETAIL_PATTERN.search(det_full)
+    if m:
+        try:
+            return max(
+                _MIN_BOOKING_DURATION_SLOTS,
+                min(_MAX_BOOKING_DURATION_SLOTS, int(m.group(1))),
+            )
+        except ValueError:
+            pass
     svc = str(row.get("service_type") or row.get("service") or "").strip().lower()
-    det = str(row.get("detail") or "").strip().lower()
+    det = det_full.strip().lower()
     combined = f"{svc} {det}"
     if "limpieza" in det:
         return 1
@@ -897,7 +966,7 @@ def _init_appt_form_state_once() -> None:
         "ap_dep": 0.0,
         "ap_total": 0.0,
         "ap_priority": False,
-        "ap_duration_slots": 2,
+        "ap_duration_slots": 1,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1244,6 +1313,7 @@ def _dialog_agendar_cita() -> None:
                 return
             detail_raw = str(st.session_state.get("ap_det") or "")
             service, detail_for_api = _service_and_detail_for_work_kind(wk_submit, detail_raw)
+            detail_for_api = _append_agenda_slots_marker(detail_for_api, need_slots_submit)
             full_name = f"{(fn or '').strip()} {(ln or '').strip()}".strip()
             dt_str = _combine_appointment_datetime(picked, slot_str)
             email_s = (st.session_state.get("ap_email") or "").strip()
@@ -1309,18 +1379,23 @@ def _dialog_agendar_cita() -> None:
                 st.error("Verifica el documento antes de crear la cita.")
                 return
 
-            ok_a, code_a, data_a = api_client.post_appointment(appt_payload)
+            with st.spinner("Guardando cita…"):
+                ok_a, code_a, data_a = api_client.post_appointment(appt_payload)
             if ok_a:
                 st.session_state["_ap_reload"] = True
-                st.success(
-                    "Cita creada correctamente. Se generó el recibo inicial (PDF); "
-                    "puedes descargarlo desde **Recibos** en el menú de la cita."
+                _queue_appointment_action_success(
+                    "**Cita creada.** Se generó el recibo inicial (PDF); puedes descargarlo desde "
+                    "**Recibos** en el menú de la cita."
                 )
                 _reset_appointment_form_state()
                 st.session_state.pop("_ap_dlg", None)
                 st.rerun()
             else:
-                st.error(f"Error HTTP {code_a}: {_api_error(data_a)}")
+                st.toast(
+                    f"Error HTTP {code_a}: {_api_error(data_a)}",
+                    icon="❌",
+                    duration="long",
+                )
     with c2:
         if st.button("Cancelar", use_container_width=True, key="btn_appt_cancel"):
             _reset_appointment_form_state()
@@ -1838,19 +1913,27 @@ def _dialog_reprogramar_cita() -> None:
             use_container_width=True,
             key="ap_reprogram_save_btn",
         ):
-            ok, code, data = api_client.patch_appointment_reschedule(
-                appt_id,
-                dt_reschedule,
-                (new_detail or "").strip() or None,
-            )
+            with st.spinner("Aplicando reprogramación…"):
+                ok, code, data = api_client.patch_appointment_reschedule(
+                    appt_id,
+                    dt_reschedule,
+                    (new_detail or "").strip() or None,
+                )
             if ok:
-                st.success("Cita reprogramada correctamente.")
+                pretty = _format_dt_for_user_message(dt_reschedule)
+                _queue_appointment_action_success(
+                    f"**Cita reprogramada** · #{appt_id} · nueva fecha y hora: **{pretty}**."
+                )
                 st.session_state["_ap_reload"] = True
                 st.session_state.pop("_ap_reprogram_item", None)
                 _cleanup_reprogram_dialog_state()
                 st.rerun()
             else:
-                st.error(f"Error HTTP {code}: {_api_error(data)}")
+                st.toast(
+                    f"Error HTTP {code}: {_api_error(data)}",
+                    icon="❌",
+                    duration="long",
+                )
     with c2:
         if st.button("Cancelar", use_container_width=True, key="ap_reprogram_close_btn"):
             st.session_state.pop("_ap_reprogram_item", None)
@@ -1904,13 +1987,21 @@ def _dialog_cancelar_cita() -> None:
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Sí, anular", type="primary", use_container_width=True, key="ap_cancel_confirm_btn"):
-            ok, code, data = api_client.patch_appointment_status(appt_id, "Cancelada", cancel_abono)
+            with st.spinner("Anulando cita…"):
+                ok, code, data = api_client.patch_appointment_status(appt_id, "Cancelada", cancel_abono)
             if ok:
+                _queue_appointment_action_success(
+                    f"**Cita anulada** · #{appt_id} · estado **Cancelada**."
+                )
                 st.session_state["_ap_reload"] = True
                 st.session_state.pop("_ap_cancel_item", None)
                 st.rerun()
             else:
-                st.error(f"Error HTTP {code}: {_api_error(data)}")
+                st.toast(
+                    f"Error HTTP {code}: {_api_error(data)}",
+                    icon="❌",
+                    duration="long",
+                )
     with c2:
         if st.button("No, volver", use_container_width=True, key="ap_cancel_back_btn"):
             st.session_state.pop("_ap_cancel_item", None)
@@ -1997,8 +2088,7 @@ def _dialog_ajustar_montos() -> None:
     )
 
     save_err = st.session_state.get("_ap_fin_save_error")
-    if save_err:
-        st.error(save_err)
+    _toast_financial_save_error_if_any()
 
     c1, c2 = st.columns(2)
     with c1:
@@ -2065,9 +2155,13 @@ def _dialog_ajustar_montos() -> None:
         st.session_state.pop(f"{_AP_FIN_PAYMENTS_CACHE_PREFIX}{appt_id}", None)
         _purge_appointment_receipt_caches()
         if ex > 0:
-            st.success("Montos y abonos actualizados. Hay un nuevo recibo PDF en **Recibos**.")
+            _queue_appointment_action_success(
+                "**Montos y abonos actualizados.** Hay un nuevo recibo PDF en **Recibos**."
+            )
         else:
-            st.success("Montos y abonos actualizados.")
+            _queue_appointment_action_success(
+                "**Montos actualizados** (valor total del trabajo y saldos)."
+            )
         st.session_state["_ap_reload"] = True
         st.session_state.pop("_ap_fin_item", None)
         st.session_state.pop("ap_fin_total", None)
@@ -2767,8 +2861,8 @@ def render_reporte_citas_tab() -> None:
     _inject_citas_shared_styles()
     _sync_appointments_from_api()
 
-    if st.session_state.get("_ap_err"):
-        st.error(st.session_state["_ap_err"])
+    _render_appointments_fetch_error_toast()
+    _render_appointment_action_feedback()
 
     items = list(st.session_state.get("_ap_list") or [])
     svc_values = sorted(
@@ -2811,8 +2905,8 @@ def render_citas_tab() -> None:
     _inject_citas_shared_styles()
     _sync_appointments_from_api()
 
-    if st.session_state.get("_ap_err"):
-        st.error(st.session_state["_ap_err"])
+    _render_appointments_fetch_error_toast()
+    _render_appointment_action_feedback()
 
     items = list(st.session_state.get("_ap_list") or [])
     svc_values = sorted(

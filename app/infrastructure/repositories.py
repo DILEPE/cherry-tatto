@@ -836,10 +836,25 @@ class AppointmentRepository:
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn)
+            cursor.execute(
+                "SELECT COUNT(*) FROM contracts WHERE template_id = %s",
+                (template_id,),
+            )
+            row = cursor.fetchone()
+            used = int(row[0]) if row else 0
+            if used > 0:
+                raise ValueError("TEMPLATE_IN_USE")
             cursor.execute("DELETE FROM contract_templates WHERE id = %s", (template_id,))
+            if cursor.rowcount == 0:
+                raise ValueError("TEMPLATE_NOT_FOUND")
             conn.commit()
+        except Exception:
+            if conn:
+                conn.rollback()
+            raise
         finally:
-            if conn: conn.close()
+            if conn:
+                conn.close()
 
     def get_detailed_report(self, start_date: str, end_date: str) -> list[dict[str, object]]:
         """Citas en rango de fechas con campos útiles para reporte financiero."""

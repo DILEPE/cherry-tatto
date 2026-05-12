@@ -16,8 +16,22 @@ def _detail(payload: Any) -> str:
     return str(payload)
 
 
+_CTADM_ACTION_INFO_KEY = "_ctadm_action_info"
+
+
+def _queue_ctadm_success(msg: str) -> None:
+    """Toast en el siguiente rerun (diálogo cerrado o acción fuera del modal)."""
+    st.session_state[_CTADM_ACTION_INFO_KEY] = msg
+
+
+def _render_ctadm_feedback() -> None:
+    msg = st.session_state.pop(_CTADM_ACTION_INFO_KEY, None)
+    if msg:
+        st.toast(msg, icon="✅", duration="long")
+
+
 def _close_dialogs() -> None:
-    for k in ("_ctadm_dlg", "_ctadm_dlg_id"):
+    for k in ("_ctadm_dlg", "_ctadm_dlg_id", "_ctadm_edit_payload", "_ctadm_edit_id"):
         st.session_state.pop(k, None)
 
 
@@ -34,6 +48,8 @@ def _render_template_row_actions(item: Dict[str, Any]) -> None:
 
     def _dispatch_edit() -> None:
         st.session_state.pop(f"ctadm_edit_quill_{tid}", None)
+        st.session_state.pop("_ctadm_edit_payload", None)
+        st.session_state.pop("_ctadm_edit_id", None)
         st.session_state["_ctadm_dlg"] = "edit"
         st.session_state["_ctadm_dlg_id"] = tid
         st.rerun()
@@ -50,10 +66,10 @@ def _render_template_row_actions(item: Dict[str, Any]) -> None:
                 ok_d, code_d, data_d = api_client.delete_template(tid)
                 if ok_d:
                     st.session_state["_ctadm_reload"] = True
-                    st.success("Versión eliminada.")
+                    _queue_ctadm_success("Versión eliminada.")
                     st.rerun()
                 else:
-                    st.error(f"HTTP {code_d}: {_detail(data_d)}")
+                    st.toast(f"No se pudo eliminar (HTTP {code_d}): {_detail(data_d)}", icon="❌", duration="long")
         return
 
     ln1, ln2 = st.columns(2)
@@ -65,10 +81,10 @@ def _render_template_row_actions(item: Dict[str, Any]) -> None:
             ok_d, code_d, data_d = api_client.delete_template(tid)
             if ok_d:
                 st.session_state["_ctadm_reload"] = True
-                st.success("Versión eliminada.")
+                _queue_ctadm_success("Versión eliminada.")
                 st.rerun()
             else:
-                st.error(f"HTTP {code_d}: {_detail(data_d)}")
+                st.toast(f"No se pudo eliminar (HTTP {code_d}): {_detail(data_d)}", icon="❌", duration="long")
 
 
 def _load_templates(*, only_active: bool) -> None:
@@ -112,8 +128,8 @@ def _dialog_create_template() -> None:
             if ok:
                 st.session_state.pop("ctadm_new_quill", None)
                 st.session_state["_ctadm_reload"] = True
+                _queue_ctadm_success("Versión creada.")
                 _close_dialogs()
-                st.success("Versión creada.")
                 st.rerun()
             else:
                 st.error(f"HTTP {code}: {_detail(data)}")
@@ -126,13 +142,22 @@ def _dialog_create_template() -> None:
 
 @st.dialog("Editar versión de contrato", width="large", dismissible=False)
 def _dialog_edit_template(template_id: int) -> None:
-    ok, code, data = api_client.get_template(template_id)
-    if not ok or not isinstance(data, dict):
-        st.error(f"No se pudo cargar la plantilla (HTTP {code}): {_detail(data)}")
-        if st.button("Cerrar", use_container_width=True, key="ctadm_btn_close_edit_err"):
-            _close_dialogs()
-            st.rerun()
-        return
+    if (
+        "_ctadm_edit_payload" not in st.session_state
+        or int(st.session_state.get("_ctadm_edit_id") or 0) != template_id
+    ):
+        with st.spinner("Cargando contrato…"):
+            ok, code, data = api_client.get_template(template_id)
+        if not ok or not isinstance(data, dict):
+            st.error(f"No se pudo cargar la plantilla (HTTP {code}): {_detail(data)}")
+            if st.button("Cerrar", use_container_width=True, key="ctadm_btn_close_edit_err"):
+                _close_dialogs()
+                st.rerun()
+            return
+        st.session_state["_ctadm_edit_payload"] = data
+        st.session_state["_ctadm_edit_id"] = template_id
+
+    data = st.session_state["_ctadm_edit_payload"]
 
     name = st.text_input("Nombre *", value=data.get("name", ""), key=f"ctadm_edit_name_{template_id}")
     cur_k = str(data.get("contract_kind") or "tattoo")
@@ -170,8 +195,8 @@ def _dialog_edit_template(template_id: int) -> None:
             if ok_u:
                 st.session_state.pop(quill_key, None)
                 st.session_state["_ctadm_reload"] = True
+                _queue_ctadm_success("Versión actualizada.")
                 _close_dialogs()
-                st.success("Versión actualizada.")
                 st.rerun()
             else:
                 st.error(f"HTTP {code_u}: {_detail(data_u)}")
@@ -204,8 +229,11 @@ def render_contract_admin_tab() -> None:
             st.session_state["_ctadm_reload"] = True
 
     if st.session_state.get("_ctadm_reload"):
-        _load_templates(only_active=bool(st.session_state.get("_ctadm_only_active")))
+        with st.spinner("Cargando plantillas…"):
+            _load_templates(only_active=bool(st.session_state.get("_ctadm_only_active")))
         st.session_state["_ctadm_reload"] = False
+
+    _render_ctadm_feedback()
 
     if st.session_state.get("_ctadm_error"):
         st.error(st.session_state["_ctadm_error"])
