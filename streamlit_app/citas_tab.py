@@ -100,6 +100,47 @@ def _may_see_all_appointments() -> bool:
     return role in ("administrador", "vendedor")
 
 
+def _panel_is_technician_role() -> bool:
+    """Tatuador o perforador: citas activas propias desde hoy; no agenda ni montos ni reprogramar."""
+    role = str(st.session_state.get("_panel_user_role") or "")
+    return role in ("tatuador", "perforador")
+
+
+def _appointment_row_active_for_technician(row: dict[str, Any]) -> bool:
+    stv = str(row.get("status") or "").strip().lower()
+    return stv in ("agendada", "reprogramada")
+
+
+def _appointment_for_technician_visible_date(row: dict[str, Any], *, ref_day: date) -> bool:
+    """Solo citas con fecha de agenda >= día de referencia (típicamente hoy)."""
+    ad = _parse_date(row.get("appointment_date", row.get("date")))
+    return ad >= ref_day
+
+
+def _filter_appointments_for_session_role(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Técnicos: estados activos y fecha de cita desde hoy en adelante."""
+    if not _panel_is_technician_role():
+        return items
+    today = date.today()
+    return [
+        r
+        for r in items
+        if _appointment_row_active_for_technician(r)
+        and _appointment_for_technician_visible_date(r, ref_day=today)
+    ]
+
+
+def _technician_clear_disallowed_dialog_states() -> None:
+    """Evita abrir agendar / montos / reprogramar / recibos / anular si el rol es solo técnico."""
+    if not _panel_is_technician_role():
+        return
+    st.session_state.pop("_ap_dlg", None)
+    st.session_state.pop("_ap_fin_item", None)
+    st.session_state.pop("_ap_reprogram_item", None)
+    st.session_state.pop("_ap_cancel_item", None)
+    st.session_state.pop("_ap_receipts_item", None)
+
+
 def _contract_firma_blocked_por_saldo(r: Dict[str, Any]) -> bool:
     """True si hay valor total en la cita y aún queda saldo pendiente (no se puede firmar)."""
     ok, _ = appointment_must_be_fully_paid_for_contract(
@@ -243,10 +284,17 @@ def _render_professional_calendar_filter() -> None:
     from app.domain.panel_user_profile import PANEL_ROLE_LABEL_ES
 
     if not _may_see_all_appointments():
-        st.caption(
-            "Solo ves citas asignadas a **tu usuario** del panel ("
-            f"{PANEL_ROLE_LABEL_ES.get(str(st.session_state.get('_panel_user_role') or ''), 'operador')})."
-        )
+        if _panel_is_technician_role():
+            st.caption(
+                "Solo ves citas **activas** (agendada / reprogramada) **asignadas a ti**, "
+                "**desde la fecha de hoy en adelante** (las pasadas no aparecen). "
+                f"Rol: **{PANEL_ROLE_LABEL_ES.get(str(st.session_state.get('_panel_user_role') or ''), 'operador')}**."
+            )
+        else:
+            st.caption(
+                "Solo ves citas asignadas a **tu usuario** del panel ("
+                f"{PANEL_ROLE_LABEL_ES.get(str(st.session_state.get('_panel_user_role') or ''), 'operador')})."
+            )
         st.session_state["_ap_filter_artist_id"] = 0
         return
     labels, id_by_label = _artist_filter_labels_and_map()
@@ -258,7 +306,8 @@ def _render_professional_calendar_filter() -> None:
         options=labels,
         key=sb_key,
         help="Filtra qué citas se cargan desde la API. "
-        "Tatuadores y perforadores solo ven las asignadas a ellos.",
+        "Administrador y vendedor ven la agenda completa con este filtro; "
+        "tatuadores y perforadores solo cargan sus citas activas asignadas.",
     )
     st.session_state["_ap_filter_artist_id"] = id_by_label.get(str(choice), 0)
 
@@ -851,7 +900,7 @@ def _service_type_flag_html(row: dict[str, Any]) -> str:
 
 
 def _calendar_overflow_row_html(row: dict[str, Any], counts_by_client: dict[str, int]) -> str:
-    """Línea para el diálogo de citas extra: hora + tipo de servicio + nombre con pill de cliente."""
+    """Línea para el diálogo de citas extra: hora + tipo de servicio + nombre con pill de cliente + total."""
     hm = _appt_time_hm(row.get("appointment_date", row.get("date")))
     st_cl = str(row.get("status") or "").strip().lower()
     dim = "opacity:0.55;" if st_cl == "cancelada" else ""
@@ -861,11 +910,25 @@ def _calendar_overflow_row_html(row: dict[str, Any], counts_by_client: dict[str,
     staff_el = ""
     if staff_s != "Sin asignar":
         staff_el = f"<span style='opacity:0.95;font-weight:600'> · Artista: {html_mod.escape(staff_s)}</span>"
+    total_amt, _, _ = _financial_row_values(row)
+    total_box = (
+        "<span style='flex-shrink:0;display:inline-block;text-align:right'>"
+        "<span style='display:inline-block;background:#ffffff;color:#111827;padding:0.32rem 0.75rem;"
+        "border-radius:8px;font-weight:700;font-size:0.8rem;line-height:1.3;white-space:nowrap;"
+        "box-shadow:0 1px 4px rgba(0,0,0,0.12);border:1px solid #e8e8ea'>"
+        "<span style='opacity:0.72;font-weight:600;font-size:0.72rem'>Total servicio</span> · "
+        f"{html_mod.escape(_format_cop(total_amt))}</span></span>"
+    )
+    left_cluster = (
+        "<span style='display:flex;flex-wrap:wrap;align-items:center;gap:0.35rem;flex:1 1 auto;min-width:0'>"
+        f"<span style='font-weight:600'>{html_mod.escape(hm)}</span><span>·</span>"
+        f"{svc_flag}<span>·</span>{pill}{staff_el}</span>"
+    )
     return (
         f"<div style='font-size:0.86rem;line-height:1.5;{dim}margin:0.4rem 0;padding-bottom:0.35rem;"
-        f"border-bottom:1px solid rgba(148,163,184,0.35);display:flex;flex-wrap:wrap;align-items:center;gap:0.35rem'>"
-        f"<span style='font-weight:600'>{html_mod.escape(hm)}</span><span>·</span>"
-        f"{svc_flag}<span>·</span>{pill}{staff_el}</div>"
+        "border-bottom:1px solid rgba(148,163,184,0.35);display:flex;flex-wrap:nowrap;"
+        "align-items:center;gap:0.65rem;width:100%;box-sizing:border-box'>"
+        f"{left_cluster}{total_box}</div>"
     )
 
 
@@ -1492,12 +1555,18 @@ def _render_main_calendar(
                             st.session_state["_cal_overflow_day"] = (y, m, d)
                             st.rerun()
                     is_past = picked_cell < date.today()
+                    allow_book = not _panel_is_technician_role()
+                    book_help = (
+                        "Los tatuadores y perforadores no pueden agendar desde el calendario"
+                        if not allow_book
+                        else ("No se pueden agendar citas en fechas pasadas" if is_past else "Agendar cita en este día")
+                    )
                     if st.button(
                         str(d),
                         key=f"cal_main_day_{y}_{m}_{d}",
                         use_container_width=True,
-                        disabled=is_past,
-                        help="No se pueden agendar citas en fechas pasadas" if is_past else None,
+                        disabled=is_past or not allow_book,
+                        help=book_help,
                     ):
                         st.session_state.pop("_cal_overflow_day", None)
                         _pop_booking_document_session()
@@ -1524,10 +1593,16 @@ def _dialog_calendar_day_appointments(
             st.rerun()
         return
     st.markdown(f"**{day_date.strftime('%d/%m/%Y')}** · **{len(day_rows)}** cita(s)")
-    st.caption(
-        "Mismas etiquetas de cliente que en el calendario. **Firmar contrato** abre la vista de firma; "
-        "Reprogramar, Montos o Recibos cierran este panel y abren el formulario correspondiente."
-    )
+    if _panel_is_technician_role():
+        st.caption(
+            "Como **tatuador / perforador** solo ves citas **desde hoy** con estado activo; aquí solo puedes usar **Firmar contrato**. "
+            "El agendamiento, montos y reprogramación los gestiona administración o ventas."
+        )
+    else:
+        st.caption(
+            "Mismas etiquetas de cliente que en el calendario. **Firmar contrato** abre la vista de firma; "
+            "Reprogramar, Montos o Recibos cierran este panel y abren el formulario correspondiente."
+        )
     for idx, r in enumerate(day_rows):
         st.markdown(_calendar_overflow_row_html(r, hist_counts), unsafe_allow_html=True)
         appt_id = int(r.get("id", 0) or 0)
@@ -1543,8 +1618,7 @@ def _dialog_calendar_day_appointments(
         repro_disabled = _reprogram_disabled_for_row(r)
         montos_disabled = appt_id <= 0 or status not in {"Agendada", "Reprogramada"}
         anular_disabled = appt_id <= 0 or status in {"Cancelada", "Finalizada"}
-        b0, b1, b2, b3, b4 = st.columns(5)
-        with b0:
+        if _panel_is_technician_role():
             if st.button(
                 "Firmar contrato",
                 disabled=firmar_disabled,
@@ -1553,50 +1627,61 @@ def _dialog_calendar_day_appointments(
             ):
                 st.session_state.pop("_cal_overflow_day", None)
                 open_contract_signing(appt_id)
-        with b1:
-            if st.button(
-                "Reprogramar",
-                key=f"cal_dlg_repr_{appt_id}_{y}_{m}_{d}_{idx}",
-                disabled=repro_disabled,
-                use_container_width=True,
-                help="Solo citas agendadas/reprogramadas sin contrato firmado",
-            ):
-                st.session_state.pop("_cal_overflow_day", None)
-                st.session_state["_ap_reprogram_item"] = r
-                st.rerun()
-        with b2:
-            if st.button(
-                "Montos",
-                key=f"cal_dlg_fin_{appt_id}_{y}_{m}_{d}_{idx}",
-                disabled=montos_disabled,
-                use_container_width=True,
-                help="Valor total, pendiente y abonos",
-            ):
-                st.session_state.pop("_cal_overflow_day", None)
-                st.session_state["_ap_fin_item"] = r
-                st.rerun()
-        with b3:
-            rec_disabled = appt_id <= 0
-            if st.button(
-                "Recibos",
-                key=f"cal_dlg_rec_{appt_id}_{y}_{m}_{d}_{idx}",
-                disabled=rec_disabled,
-                use_container_width=True,
-                help="Ver y descargar recibos PDF de esta cita",
-            ):
-                st.session_state.pop("_cal_overflow_day", None)
-                st.session_state["_ap_receipts_item"] = r
-                st.rerun()
-        with b4:
-            if st.button(
-                "Anular",
-                key=f"cal_dlg_can_{appt_id}_{y}_{m}_{d}_{idx}",
-                disabled=anular_disabled,
-                use_container_width=True,
-            ):
-                st.session_state.pop("_cal_overflow_day", None)
-                st.session_state["_ap_cancel_item"] = r
-                st.rerun()
+        else:
+            b0, b1, b2, b3, b4 = st.columns(5)
+            with b0:
+                if st.button(
+                    "Firmar contrato",
+                    disabled=firmar_disabled,
+                    use_container_width=True,
+                    key=f"cal_dlg_firmar_{appt_id}_{y}_{m}_{d}_{idx}",
+                ):
+                    st.session_state.pop("_cal_overflow_day", None)
+                    open_contract_signing(appt_id)
+            with b1:
+                if st.button(
+                    "Reprogramar",
+                    key=f"cal_dlg_repr_{appt_id}_{y}_{m}_{d}_{idx}",
+                    disabled=repro_disabled,
+                    use_container_width=True,
+                    help="Solo citas agendadas/reprogramadas sin contrato firmado",
+                ):
+                    st.session_state.pop("_cal_overflow_day", None)
+                    st.session_state["_ap_reprogram_item"] = r
+                    st.rerun()
+            with b2:
+                if st.button(
+                    "Montos",
+                    key=f"cal_dlg_fin_{appt_id}_{y}_{m}_{d}_{idx}",
+                    disabled=montos_disabled,
+                    use_container_width=True,
+                    help="Valor total, pendiente y abonos",
+                ):
+                    st.session_state.pop("_cal_overflow_day", None)
+                    st.session_state["_ap_fin_item"] = r
+                    st.rerun()
+            with b3:
+                rec_disabled = appt_id <= 0
+                if st.button(
+                    "Recibos",
+                    key=f"cal_dlg_rec_{appt_id}_{y}_{m}_{d}_{idx}",
+                    disabled=rec_disabled,
+                    use_container_width=True,
+                    help="Ver y descargar recibos PDF de esta cita",
+                ):
+                    st.session_state.pop("_cal_overflow_day", None)
+                    st.session_state["_ap_receipts_item"] = r
+                    st.rerun()
+            with b4:
+                if st.button(
+                    "Anular",
+                    key=f"cal_dlg_can_{appt_id}_{y}_{m}_{d}_{idx}",
+                    disabled=anular_disabled,
+                    use_container_width=True,
+                ):
+                    st.session_state.pop("_cal_overflow_day", None)
+                    st.session_state["_ap_cancel_item"] = r
+                    st.rerun()
         if idx < len(day_rows) - 1:
             st.divider()
     if st.button("Cerrar", key="cal_dlg_close", use_container_width=True):
@@ -1639,6 +1724,7 @@ def _fetch_appointments() -> None:
     qid = _appointments_query_assigned_user_id()
     ok, code, data = api_client.get_appointments(assigned_panel_user_id=qid)
     if ok and isinstance(data, list):
+        data = _filter_appointments_for_session_role(data)
         st.session_state["_ap_list"] = data
         st.session_state["_ap_err"] = None
         _purge_appointment_payment_caches()
@@ -1661,8 +1747,9 @@ def _status_pill_html(status: str) -> str:
 
 def _render_cita_row_actions(r: Dict[str, Any], *, show_firma: bool = True) -> None:
     """
-    Menú de acciones por fila. `show_firma=False` omite el enlace de firma (p. ej. en pestaña Reporte;
-    la firma va en el diálogo «Citas del día» del calendario).
+    Menú de acciones por fila. `show_firma=False` omite la firma en vista administrativa (p. ej. Reporte).
+
+    Tatuadores y perforadores solo ven **Firmar contrato** (ignoran `show_firma`).
     """
     appt_id = int(r.get("id", 0) or 0)
     status = str(r.get("status") or "Agendada")
@@ -1677,6 +1764,29 @@ def _render_cita_row_actions(r: Dict[str, Any], *, show_firma: bool = True) -> N
     repro_disabled = _reprogram_disabled_for_row(r)
     montos_disabled = appt_id <= 0 or status not in {"Agendada", "Reprogramada"}
     anular_disabled = appt_id <= 0 or status in {"Cancelada", "Finalizada"}
+
+    if _panel_is_technician_role():
+        pop = getattr(st, "popover", None)
+        if pop:
+            with pop("Firma contrato", use_container_width=True):
+                if appt_id > 0:
+                    st.caption(f"Cita #{appt_id}")
+                if st.button(
+                    "Firmar contrato",
+                    disabled=firmar_disabled,
+                    use_container_width=True,
+                    key=f"pop_firmar_{appt_id}",
+                ):
+                    open_contract_signing(appt_id)
+            return
+        if st.button(
+            "Firmar contrato",
+            disabled=firmar_disabled,
+            use_container_width=True,
+            key=f"fb_tech_only_{appt_id}",
+        ):
+            open_contract_signing(appt_id)
+        return
 
     pop = getattr(st, "popover", None)
     if pop:
@@ -2825,6 +2935,7 @@ def _invoke_citas_tab_dialogs(
     hist_counts: dict[str, int],
 ) -> None:
     """Invoca diálogos al inicio del flujo para que el overlay no quede al final del DOM."""
+    _technician_clear_disallowed_dialog_states()
     if (
         st.session_state.get("_ap_fin_item")
         or st.session_state.get("_ap_reprogram_item")
@@ -2862,6 +2973,8 @@ def render_reporte_citas_tab() -> None:
     _init_appt_tab_session_state()
     _inject_citas_shared_styles()
     _sync_appointments_from_api()
+
+    _technician_clear_disallowed_dialog_states()
 
     _render_appointments_fetch_error_toast()
     _render_appointment_action_feedback()

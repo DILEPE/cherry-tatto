@@ -82,6 +82,33 @@ def _detail(payload: Any) -> str:
     return str(payload)
 
 
+def _appointment_payment_ready_for_signature(appt: dict[str, Any]) -> tuple[bool, str | None]:
+    """Total del trabajo definido (> 0) y abonado al completo; misma regla para cualquier perfil del panel."""
+    return appointment_must_be_fully_paid_for_contract(
+        total_amount=appt.get("total_amount"),
+        deposit=appt.get("deposit"),
+        pending_balance=appt.get("pending_balance"),
+    )
+
+
+def _advance_to_contract_signature_step_after_payment_check(appointment_id: int) -> None:
+    """GET fresco de la cita y avance a etapa 3 solo si el pago permite firmar."""
+    ok_a, code_a, fresh = api_client.get_appointment(int(appointment_id))
+    if not ok_a or not isinstance(fresh, dict):
+        st.error(f"No se pudo verificar la cita (HTTP {code_a}): {_detail(fresh)}")
+        return
+    ok_pay, pay_err = _appointment_payment_ready_for_signature(fresh)
+    if not ok_pay:
+        st.error(pay_err or "Completa el abono antes de firmar el contrato.")
+        st.info(
+            "Abre **Gestión de citas**, localiza esta cita y usa **Montos** hasta dejar **saldo pendiente** en cero "
+            "y un **valor total** definido."
+        )
+        return
+    st.session_state["ctsig_step"] = 3
+    st.rerun()
+
+
 def _date_to_api(val: Any) -> Optional[str]:
     if val is None:
         return None
@@ -545,11 +572,7 @@ def _render_step1_personal(customer_id: int, customer: dict[str, Any], appointme
             }
             ok, code, data = api_client.put_customer(customer_id, payload)
             if ok:
-                ok_pay, pay_err = appointment_must_be_fully_paid_for_contract(
-                    total_amount=appointment.get("total_amount"),
-                    deposit=appointment.get("deposit"),
-                    pending_balance=appointment.get("pending_balance"),
-                )
+                ok_pay, pay_err = _appointment_payment_ready_for_signature(appointment)
                 if not ok_pay:
                     st.error(pay_err or "Completa el abono antes de firmar el contrato.")
                     return
@@ -571,11 +594,7 @@ def _render_step3_sign_contract(
     appointment: dict[str, Any],
 ) -> None:
     st.markdown("#### Etapa 3 — Firma del contrato")
-    ok_pay, pay_err = appointment_must_be_fully_paid_for_contract(
-        total_amount=appointment.get("total_amount"),
-        deposit=appointment.get("deposit"),
-        pending_balance=appointment.get("pending_balance"),
-    )
+    ok_pay, pay_err = _appointment_payment_ready_for_signature(appointment)
     if not ok_pay:
         st.error(pay_err or "Completa el abono antes de firmar el contrato.")
         st.info(
@@ -788,11 +807,9 @@ def _render_step3_sign_contract(
 
         with nav3:
             if st.button("Guardar contrato firmado", type="primary", use_container_width=True, key="ctsig_save"):
-                ok_pay2, pay_err2 = appointment_must_be_fully_paid_for_contract(
-                    total_amount=appointment.get("total_amount"),
-                    deposit=appointment.get("deposit"),
-                    pending_balance=appointment.get("pending_balance"),
-                )
+                ok_rf, code_rf, appt_chk = api_client.get_appointment(int(appointment_id))
+                appt_for_pay = appt_chk if ok_rf and isinstance(appt_chk, dict) else appointment
+                ok_pay2, pay_err2 = _appointment_payment_ready_for_signature(appt_for_pay)
                 if not ok_pay2:
                     st.error(pay_err2 or "Saldo pendiente: no se puede firmar.")
                     return
@@ -1000,8 +1017,7 @@ def _render_step2_questionnaire(appointment_id: int, appt: dict[str, Any]) -> No
                 use_container_width=True,
                 key="ctsig_s3_skip_to_sign",
             ):
-                st.session_state["ctsig_step"] = 3
-                st.rerun()
+                _advance_to_contract_signature_step_after_payment_check(appointment_id)
         with b2:
             if st.button("Volver al panel principal", use_container_width=True, key="ctsig_s3_done_existing"):
                 _panel_principal_from_step3()
@@ -1031,8 +1047,7 @@ def _render_step2_questionnaire(appointment_id: int, appt: dict[str, Any]) -> No
                 use_container_width=True,
                 key="ctsig_s3_empty_go_sign",
             ):
-                st.session_state["ctsig_step"] = 3
-                st.rerun()
+                _advance_to_contract_signature_step_after_payment_check(appointment_id)
         with b2:
             if st.button("Volver al panel principal", use_container_width=True, key="ctsig_s3_empty"):
                 _panel_principal_from_step3()
@@ -1164,10 +1179,23 @@ def _render_step2_questionnaire(appointment_id: int, appt: dict[str, Any]) -> No
                 }
                 ok_p, code_p, data_p = api_client.post_survey(payload)
                 if ok_p:
-                    st.session_state["_ctsig_pending_toast"] = "Encuesta completada y guardada correctamente."
-                    st.success("Cuestionario enviado. Continúa con la firma del contrato (etapa 3).")
-                    st.session_state["ctsig_step"] = 3
-                    st.rerun()
+                    ok_a, code_a, fresh_appt = api_client.get_appointment(int(appointment_id))
+                    if not ok_a or not isinstance(fresh_appt, dict):
+                        st.error(f"No se pudo verificar pagos de la cita (HTTP {code_a}): {_detail(fresh_appt)}")
+                    else:
+                        ok_pay_go, pay_err_go = _appointment_payment_ready_for_signature(fresh_appt)
+                        if not ok_pay_go:
+                            st.error(pay_err_go or "Completa el abono antes de firmar el contrato.")
+                            st.info(
+                                "El cuestionario quedó guardado. Registra **Montos** en la cita y vuelve aquí para continuar a la firma."
+                            )
+                        else:
+                            st.session_state["_ctsig_pending_toast"] = (
+                                "Encuesta completada y guardada correctamente."
+                            )
+                            st.success("Cuestionario enviado. Continúa con la firma del contrato (etapa 3).")
+                            st.session_state["ctsig_step"] = 3
+                            st.rerun()
                 else:
                     st.error(f"No se pudo guardar el cuestionario (HTTP {code_p}): {_detail(data_p)}")
 
