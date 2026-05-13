@@ -8,6 +8,7 @@ Si `streamlit` no se reconoce como comando, usa siempre la forma `python -m stre
 (o instala dependencias: pip install -r requirements.txt dentro del venv activado).
 
 Logo: coloca `branding.png` en `streamlit_app/assets/` o en `assets/` del proyecto.
+Marca de agua opcional (fondo tipo relieve): `rock_city_watermark.png` en las mismas rutas.
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ from dotenv import load_dotenv
 load_dotenv(_ROOT / ".env")
 
 from collections.abc import Callable
+import base64
 import html
 
 import streamlit as st
@@ -51,42 +53,98 @@ LOGO_CANDIDATES = [
     Path(__file__).resolve().parent.parent / "assets" / "branding.png",
 ]
 
+_WATERMARK_CANDIDATES = [
+    Path(__file__).resolve().parent / "assets" / "rock_city_watermark.png",
+    Path(__file__).resolve().parent.parent / "assets" / "rock_city_watermark.png",
+]
+# (mtime_ns, css_fragment) para regenerar el data URI si se reemplaza el PNG en disco.
+_WATERMARK_STYLE_CACHE: tuple[float, str] | None = None
+
+
+def _inject_background_watermark_css() -> str:
+    """CSS del logo Rock City como marca de agua en relieve (data URI). Vacío si no hay archivo."""
+    global _WATERMARK_STYLE_CACHE
+    wm_path = next((p for p in _WATERMARK_CANDIDATES if p.is_file()), None)
+    if wm_path is None:
+        return ""
+    try:
+        mtime = wm_path.stat().st_mtime
+    except OSError:
+        return ""
+    if _WATERMARK_STYLE_CACHE is not None and _WATERMARK_STYLE_CACHE[0] == mtime:
+        return _WATERMARK_STYLE_CACHE[1]
+    b64 = base64.standard_b64encode(wm_path.read_bytes()).decode("ascii")
+    uri = f"url(data:image/png;base64,{b64})"
+    css = f"""
+          [data-testid="stAppViewContainer"] {{
+            position: relative;
+          }}
+          [data-testid="stAppViewContainer"]::before {{
+            content: "";
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            pointer-events: none;
+            background-image: {uri};
+            background-repeat: no-repeat;
+            background-position: center center;
+            background-size: clamp(420px, 88vmin, min(96vw, 1280px));
+            opacity: 0.09;
+            filter:
+              drop-shadow(2px 2px 1px rgba(255,255,255,0.16))
+              drop-shadow(-1.5px -1.5px 1px rgba(0,0,0,0.45))
+              brightness(1.06)
+              contrast(1.08);
+            mix-blend-mode: soft-light;
+          }}
+          [data-testid="stMain"],
+          section.main {{
+            position: relative;
+            z-index: 1 !important;
+          }}
+    """
+    _WATERMARK_STYLE_CACHE = (mtime, css)
+    return css
+
 
 def _inject_material_neon_css() -> None:
     """Se emite en cada rerun: Streamlit reconstruye el DOM y los estilos no persisten entre ejecuciones."""
+    wm = _inject_background_watermark_css()
     st.markdown(
-        """
+        f"""
         <style>
           @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-          html, body, [class*="css"]  { font-family: 'Inter', 'Segoe UI', sans-serif !important; }
-          [data-testid="stAppViewContainer"] {
-            background: radial-gradient(ellipse 120% 80% at 50% -20%, rgba(255,0,127,0.12), transparent 55%),
-                        radial-gradient(ellipse 80% 50% at 100% 50%, rgba(167,154,255,0.08), transparent 45%),
-                        #000000;
-          }
-          [data-testid="stHeader"] { background: rgba(0,0,0,0.85) !important; }
-          [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #121212 0%, #0d0d0d 100%) !important;
-            border-right: 1px solid rgba(255,255,255,0.08);
-          }
-          div[data-baseweb="tab-highlight"] { background-color: #FF007F !important; box-shadow: 0 0 12px rgba(255,0,127,0.45); }
-          [data-baseweb="tab"] { color: #e0e0e0 !important; font-weight: 600; }
-          [data-baseweb="tab"]:hover { color: #FF007F !important; }
-          [data-testid="stExpander"] {
-            background: #1E1E1E !important;
-            border: 1px solid rgba(255,255,255,0.12) !important;
+          html, body, [class*="css"]  {{ font-family: 'Inter', 'Segoe UI', sans-serif !important; }}
+          [data-testid="stAppViewContainer"] {{
+            background: radial-gradient(ellipse 120% 80% at 50% -20%, rgba(255,0,127,0.075), transparent 55%),
+                        radial-gradient(ellipse 80% 50% at 100% 50%, rgba(167,154,255,0.05), transparent 45%),
+                        linear-gradient(180deg, #43434e 0%, #3c3c48 42%, #363640 100%);
+          }}
+          [data-testid="stHeader"] {{ background: rgba(54,54,62,0.94) !important; z-index: 11 !important; }}
+          [data-testid="stSidebar"] {{
+            background: linear-gradient(180deg, #383842 0%, #303038 100%) !important;
+            border-right: 1px solid rgba(255,255,255,0.11);
+            position: relative;
+            z-index: 10 !important;
+          }}
+          div[data-baseweb="tab-highlight"] {{ background-color: #FF007F !important; box-shadow: 0 0 12px rgba(255,0,127,0.45); }}
+          [data-baseweb="tab"] {{ color: #e0e0e0 !important; font-weight: 600; }}
+          [data-baseweb="tab"]:hover {{ color: #FF007F !important; }}
+          [data-testid="stExpander"] {{
+            background: #484854 !important;
+            border: 1px solid rgba(255,255,255,0.15) !important;
             border-radius: 12px !important;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.45);
-          }
-          .neon-title {
+            box-shadow: 0 2px 8px rgba(0,0,0,0.38);
+          }}
+          .neon-title {{
             color: #fff;
             font-weight: 700;
             font-size: 1.35rem;
             letter-spacing: 0.02em;
             text-shadow: 0 0 18px rgba(255,0,127,0.35);
-          }
-          .sub-lavender { color: #A79AFF; font-weight: 600; font-size: 0.95rem; }
-          .m-error {
+          }}
+          .sub-lavender {{ color: #A79AFF; font-weight: 600; font-size: 0.95rem; }}
+          .m-error {{
             background: rgba(207,102,121,0.15);
             border: 1px solid #CF6679;
             color: #FFB4A9;
@@ -94,34 +152,35 @@ def _inject_material_neon_css() -> None:
             padding: 0.75rem 1rem;
             margin: 0.5rem 0 1rem 0;
             font-size: 0.9rem;
-          }
-          .m-success {
+          }}
+          .m-success {{
             background: rgba(105,240,174,0.12);
             border: 1px solid #69F0AE;
             color: #B9F6CA;
             border-radius: 8px;
             padding: 0.75rem 1rem;
             margin: 0.5rem 0 1rem 0;
-          }
-          div.stButton > button:first-child {
+          }}
+          div.stButton > button:first-child {{
             border-radius: 999px !important;
             font-weight: 600 !important;
             border: 1px solid rgba(255,0,127,0.55) !important;
             box-shadow: 0 0 16px rgba(255,0,127,0.25) !important;
-          }
-          div.stButton > button[kind="secondary"] {
+          }}
+          div.stButton > button[kind="secondary"] {{
             border-color: rgba(167,154,255,0.5) !important;
             box-shadow: 0 0 12px rgba(167,154,255,0.2) !important;
-          }
-          hr { border-color: rgba(255,255,255,0.1) !important; }
+          }}
+          hr {{ border-color: rgba(255,255,255,0.1) !important; }}
           [data-testid="stTextInput"] input,
           [data-testid="stNumberInput"] input,
           [data-testid="stTextArea"] textarea,
-          [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
-            background-color: #2e2e2e !important;
+          [data-testid="stSelectbox"] div[data-baseweb="select"] > div {{
+            background-color: #50505c !important;
             color: #f2f2f2 !important;
             border-color: rgba(255,255,255,0.22) !important;
-          }
+          }}
+          {wm}
         </style>
         """,
         unsafe_allow_html=True,
@@ -143,7 +202,7 @@ def _render_module_transition_curtain(module_label: str) -> None:
           display: flex;
           align-items: center;
           justify-content: center;
-          background: linear-gradient(165deg, #0a0a0a 0%, #121018 45%, #0d0d12 100%);
+          background: linear-gradient(165deg, #42424e 0%, #3c3c46 45%, #363640 100%);
           border-radius: 16px;
           border: 1px solid rgba(255,0,127,0.22);
           box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);

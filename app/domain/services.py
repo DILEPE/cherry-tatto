@@ -243,8 +243,10 @@ class BusinessLogicService:
             deposit=getattr(appointment, "deposit", None),
             pending_balance=getattr(appointment, "pending_balance", None),
         )
-        if not ok_pay and pay_err:
-            raise ValueError(pay_err)
+        if not ok_pay:
+            raise ValueError(
+                pay_err or "La cita no cumple las condiciones de pago para firmar el contrato."
+            )
 
         self.repository.create_contract(data)
         self.repository.update_status(data.appointment_id, "Finalizada")
