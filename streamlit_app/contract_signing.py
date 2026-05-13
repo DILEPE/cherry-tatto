@@ -1,4 +1,8 @@
-"""Vista URL dedicada para firma de contrato desde una cita (3 etapas: datos, firma, cuestionario)."""
+"""Flujo de firma de contrato en el panel (3 etapas: datos, cuestionario, firma).
+
+Se abre vía query params del mismo Streamlit (`?view=contract_sign&appointment_id=...`) con sesión del panel;
+usar `panel_navigation.open_contract_signing` en lugar de enlaces externos para no perder la sesión.
+"""
 from __future__ import annotations
 
 import base64
@@ -17,10 +21,10 @@ from app.domain.contract_kinds import KIND_LABEL_ES, appointment_to_contract_kin
 from app.domain.contract_signing_guard import appointment_must_be_fully_paid_for_contract
 from app.domain.survey_question_helpers import QUESTION_TYPES_NEEDING_OPTIONS
 from streamlit_app import api_client
+from streamlit_app.panel_navigation import leave_contract_view_to_panel
 from streamlit_app.customer_sync import social_media_api_to_form_text, social_media_form_text_to_api
 from streamlit_app.validation import (
     mobile_phone_co_10_error,
-    optional_mobile_phone_co_10_error,
     social_media_text_error,
 )
 from streamlit_app.customers_management import (
@@ -36,6 +40,19 @@ CONTRACT_NO_REFUND_NOTICE = (
     "Por favor, tenga en cuenta que no hay devolución de dinero por citas apartadas, tampoco por abonos. "
     "En caso de modificaciones de último momento en los diseños, su valor puede aumentar."
 )
+
+
+def _toast_ok(message: str, *, icon: str = "✅") -> None:
+    try:
+        st.toast(message, icon=icon)
+    except Exception:
+        pass
+
+
+_CTSIG_Q_UNSET = ""
+
+def _fmt_survey_no_selection(x: str) -> str:
+    return "— Selecciona —" if x == _CTSIG_Q_UNSET else str(x)
 
 
 def _appointment_artist_display_name(appointment: dict[str, Any]) -> str:
@@ -235,23 +252,111 @@ def _signature_pad_b64(
     return "data:image/png;base64," + base64.b64encode(raw).decode("utf-8")
 
 
+def _signature_payload_acceptable(value: Optional[str]) -> bool:
+    """True si hay firma dibujada (data URL PNG/JPEG) o texto suficiente del fallback del lienzo."""
+    if value is None:
+        return False
+    v = str(value).strip()
+    if len(v) < 80:
+        return False
+    if v.startswith("data:image/"):
+        parts = v.split(",", 1)
+        return len(parts) == 2 and len(parts[1].strip()) >= 40
+    return len(v) >= 4
+
+
+def _tutor_document_acceptable(value: Optional[str]) -> bool:
+    if value is None:
+        return False
+    v = str(value).strip()
+    return len(v) >= 80 and v.startswith("data:image/")
+
+
 def _steps_progress(step: int) -> None:
-    titles = ("Datos personales", "Firma del contrato", "Cuestionario")
+    titles = ("Datos personales", "Cuestionario", "Firma del contrato")
     st.caption(f"Paso **{step}/3** — {titles[step - 1]}")
+
+
+_CTSIG_CACHE_KEYS = ("ctsig_tpl_bundle", "ctsig_survey_q_kind", "ctsig_survey_q_list")
+
+
+def _ctsig_clear_contract_caches() -> None:
+    for k in _CTSIG_CACHE_KEYS:
+        st.session_state.pop(k, None)
+
+
+def _exit_contract_signing_to_panel() -> None:
+    """Vuelve al panel preservando la sesión (solo se limpian params y estado del asistente de firma)."""
+    st.session_state.pop("_ctsig_pending_toast", None)
+    st.session_state.pop("ctsig_step", None)
+    st.session_state.pop("ctsig_aid", None)
+    _ctsig_clear_contract_caches()
+    leave_contract_view_to_panel()
+
+
+def _load_contract_template_bundle(kind: str) -> tuple[bool, str | None, dict[str, Any] | None, int]:
+    """Plantilla activa y contenido HTML; cache en sesión para no repetir GET en cada rerun."""
+    bundle = st.session_state.get("ctsig_tpl_bundle")
+    if isinstance(bundle, dict) and bundle.get("kind") == kind:
+        tf = bundle.get("tpl_full")
+        tid = bundle.get("selected_tid")
+        if isinstance(tf, dict) and isinstance(tid, int) and tid > 0:
+            return True, None, tf, tid
+    ok_t, code_t, templates = api_client.get_templates(True, contract_kind=kind)
+    if not ok_t or not isinstance(templates, list):
+        return False, f"No se pudo cargar plantillas (HTTP {code_t}).", None, 0
+    if not templates:
+        return (
+            False,
+            (
+                f"No hay plantilla de contrato **activa** para **{KIND_LABEL_ES[kind]}**. "
+                "Crea y activa una en **Gestión de contratos**."
+            ),
+            None,
+            0,
+        )
+    if len(templates) > 1:
+        st.warning(
+            "Hay más de una plantilla activa para este tipo de trabajo; se usa la primera. "
+            "Deje solo una activa en administración."
+        )
+    tpl0 = templates[0]
+    selected_tid = int(tpl0.get("id") or 0)
+    ok_tpl, code_tpl, tpl_full = api_client.get_template(selected_tid)
+    if not ok_tpl or not isinstance(tpl_full, dict):
+        return False, f"No se pudo abrir la plantilla (HTTP {code_tpl}): {_detail(tpl_full)}", None, 0
+    st.session_state["ctsig_tpl_bundle"] = {"kind": kind, "tpl_full": tpl_full, "selected_tid": selected_tid}
+    return True, None, tpl_full, selected_tid
+
+
+def _survey_questions_cached(contract_kind: str) -> tuple[bool, int, Any]:
+    ck = st.session_state.get("ctsig_survey_q_kind")
+    qs = st.session_state.get("ctsig_survey_q_list")
+    if ck == contract_kind and isinstance(qs, list):
+        return True, 200, qs
+    ok_q, code_q, questions = api_client.get_survey_questions(
+        include_inactive=False,
+        contract_kind=contract_kind,
+    )
+    if ok_q and isinstance(questions, list):
+        st.session_state["ctsig_survey_q_kind"] = contract_kind
+        st.session_state["ctsig_survey_q_list"] = questions
+    return ok_q, code_q, questions
 
 
 def _render_step1_personal(customer_id: int, customer: dict[str, Any], appointment: dict[str, Any]) -> None:
     st.markdown("#### Etapa 1 — Completar datos del cliente")
     st.caption(
-        "Alineado con **Gestión de clientes**: revisa y completa lo que falte. "
-        "Si la fecha de nacimiento indica **menor de edad**, deberás completar **datos del tutor en la etapa 2** antes de firmar."
+        "Para **firmar el contrato**, todos los campos marcados con * son obligatorios en esta pantalla "
+        "(solo validación en el panel; la API de clientes no cambia). "
+        "Si la fecha de nacimiento indica **menor de edad**, completarás datos del tutor en la **etapa 3 (firma)**."
     )
     min_date_100, max_date_today = _date_range_100y()
     ed = customer
     if _parse_date(ed.get("birth_date")) == CUSTOMER_BIRTH_PENDING:
         st.info(
             "Cliente registrado solo con agendamiento: **aún no hay fecha de nacimiento real**. "
-            "Indica la fecha correcta aquí para detectar menor de edad y el tutor en la etapa 2."
+            "Indica la fecha correcta aquí para detectar menor de edad y el tutor en la etapa de firma."
         )
 
     a, b = st.columns(2)
@@ -268,7 +373,7 @@ def _render_step1_personal(customer_id: int, customer: dict[str, Any], appointme
         )
         if _is_minor_by_birth_date(bd):
             st.warning(
-                "**Menor de edad:** en la **etapa 2 (Firma)** deberás completar los datos del tutor o representante "
+                "**Menor de edad:** en la **etapa 3 (Firma)** deberás completar los datos del tutor o representante "
                 "y la documentación requerida antes de guardar el contrato."
             )
         edt = st.selectbox(
@@ -281,9 +386,10 @@ def _render_step1_personal(customer_id: int, customer: dict[str, Any], appointme
         st.text_input("Número de documento *", value=str(ed.get("document_number") or ""), key="ctsig_s1_dn")
         eddi_raw = ed.get("document_issue_date")
         st.checkbox(
-            "Registrar fecha de expedición del documento del cliente",
+            "Registrar fecha de expedición del documento del cliente *",
             value=bool(eddi_raw),
             key="ctsig_s1_has_ddi",
+            help="Para firmar el contrato desde el panel es obligatorio indicar la expedición del documento.",
         )
         st.date_input(
             "Fecha de expedición del documento del cliente",
@@ -302,20 +408,20 @@ def _render_step1_personal(customer_id: int, customer: dict[str, Any], appointme
             help="10 dígitos (puedes escribir espacios o +57; se validan solo los dígitos).",
         )
         st.text_input(
-            "Nacionalidad (recomendado)",
+            "Nacionalidad *",
             value=str(ed.get("nationality") or ""),
             key="ctsig_s1_nat",
         )
         st.text_input(
-            "Profesión (recomendado)",
+            "Profesión *",
             value=str(ed.get("profession") or ""),
             key="ctsig_s1_prof",
         )
 
-    with st.expander("Contacto y redes", expanded=False):
-        st.text_input("Dirección", value=str(ed.get("address") or ""), key="ctsig_s1_addr")
+    with st.expander("Contacto y redes (obligatorio para firma)", expanded=True):
+        st.text_input("Dirección *", value=str(ed.get("address") or ""), key="ctsig_s1_addr")
         st.text_area(
-            "Redes sociales (recomendado)",
+            "Redes sociales *",
             value=social_media_api_to_form_text(ed.get("social_media")),
             height=70,
             key="ctsig_s1_sm",
@@ -323,23 +429,23 @@ def _render_step1_personal(customer_id: int, customer: dict[str, Any], appointme
             help=f"Texto plano, máximo {SOCIAL_MEDIA_MAX_LEN} caracteres (@, enlaces, etc.). No es JSON.",
         )
 
-    with st.expander("Contacto de emergencia", expanded=False):
-        st.text_input("Nombre contacto emergencia", value=str(ed.get("emergency_contact_name") or ""), key="ctsig_s1_ecn")
+    with st.expander("Contacto de emergencia (obligatorio para firma)", expanded=True):
+        st.text_input("Nombre contacto emergencia *", value=str(ed.get("emergency_contact_name") or ""), key="ctsig_s1_ecn")
         st.text_input(
-            "Celular contacto emergencia",
+            "Celular contacto emergencia *",
             value=str(ed.get("emergency_contact_phone") or ""),
             key="ctsig_s1_ecp",
-            help="Si lo completas, deben ser 10 dígitos.",
+            help="10 dígitos (obligatorio para firmar desde esta vista).",
         )
 
     st.info(
         "**Tutor / representante:** no se registran en esta etapa. "
-        "Si aplica menor de edad, la **etapa 2** solicitará nombre, documento y capturas del tutor además de las firmas."
+        "Si aplica menor de edad, la **etapa 3 (firma)** solicitará nombre, documento y capturas del tutor además de las firmas."
     )
 
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("Guardar y continuar a la firma", type="primary", use_container_width=True, key="ctsig_s1_next"):
+        if st.button("Guardar y continuar al cuestionario", type="primary", use_container_width=True, key="ctsig_s1_next"):
             fn = (st.session_state.get("ctsig_s1_fn") or "").strip()
             ln = (st.session_state.get("ctsig_s1_ln") or "").strip()
             if len(fn) < 1 or len(ln) < 1:
@@ -360,13 +466,19 @@ def _render_step1_personal(customer_id: int, customer: dict[str, Any], appointme
                 st.error("Número de documento inválido.")
                 return
             has_ddi = bool(st.session_state.get("ctsig_s1_has_ddi"))
+            if not has_ddi:
+                st.error(
+                    "Para firmar el contrato debes marcar **Registrar fecha de expedición del documento** "
+                    "e indicar la fecha correcta."
+                )
+                return
             ddi_v = st.session_state.get("ctsig_s1_ddi")
             if not isinstance(ddi_v, date):
                 ddi_v = _parse_date(ddi_v)
             doc_err = _validate_document_rules(
                 birth_date=bd_v,
                 document_type=dt,
-                has_document_issue_date=has_ddi,
+                has_document_issue_date=True,
                 document_issue_date=ddi_v,
             )
             if doc_err:
@@ -381,33 +493,36 @@ def _render_step1_personal(customer_id: int, customer: dict[str, Any], appointme
             if ph_err:
                 st.error(ph_err)
                 return
-            ecp = (st.session_state.get("ctsig_s1_ecp") or "").strip()
-            ecp_err = optional_mobile_phone_co_10_error(ecp)
-            if ecp_err:
-                st.error(f"Contacto de emergencia: {ecp_err}")
+            nat = (st.session_state.get("ctsig_s1_nat") or "").strip()
+            if len(nat) < 2:
+                st.error("La **nacionalidad** es obligatoria para firmar el contrato.")
+                return
+            prof = (st.session_state.get("ctsig_s1_prof") or "").strip()
+            if len(prof) < 2:
+                st.error("La **profesión** es obligatoria para firmar el contrato.")
+                return
+            addr = (st.session_state.get("ctsig_s1_addr") or "").strip()
+            if len(addr) < 5:
+                st.error("La **dirección** es obligatoria para firmar el contrato (al menos 5 caracteres).")
                 return
             sm_raw = st.session_state.get("ctsig_s1_sm") or ""
             sm_err = social_media_text_error(str(sm_raw))
             if sm_err:
                 st.error(sm_err)
                 return
-
-            nat = (st.session_state.get("ctsig_s1_nat") or "").strip()
-            prof = (st.session_state.get("ctsig_s1_prof") or "").strip()
             sm_for_api = social_media_form_text_to_api(str(sm_raw))
-            soft_missing: list[str] = []
-            if not nat:
-                soft_missing.append("nacionalidad")
-            if not prof:
-                soft_missing.append("profesión")
             if not sm_for_api:
-                soft_missing.append("redes sociales (texto)")
-            if soft_missing:
-                st.warning(
-                    "**Datos recomendados pendientes:** "
-                    + ", ".join(soft_missing)
-                    + ". Puedes continuar; conviene completarlos para el expediente."
-                )
+                st.error("Indica **redes sociales** (texto breve: usuario @, red o enlace).")
+                return
+            ecn = (st.session_state.get("ctsig_s1_ecn") or "").strip()
+            if len(ecn) < 3:
+                st.error("El **nombre del contacto de emergencia** es obligatorio.")
+                return
+            ecp = (st.session_state.get("ctsig_s1_ecp") or "").strip()
+            ecp_err = mobile_phone_co_10_error(ecp)
+            if ecp_err:
+                st.error(f"Celular de emergencia: {ecp_err}")
+                return
 
             base = _put_payload_from_customer(customer)
             payload = {
@@ -439,23 +554,23 @@ def _render_step1_personal(customer_id: int, customer: dict[str, Any], appointme
                     st.error(pay_err or "Completa el abono antes de firmar el contrato.")
                     return
                 st.session_state["ctsig_step"] = 2
-                st.success("Datos guardados. Continúa en la etapa 2.")
+                st.session_state["_ctsig_pending_toast"] = "Datos del cliente actualizados correctamente."
+                st.success("Datos guardados. Continúa en la etapa 2 (cuestionario).")
                 st.rerun()
             else:
                 st.error(f"No se pudo guardar el cliente (HTTP {code}): {_detail(data)}")
     with c2:
         if st.button("Cancelar y volver al panel", use_container_width=True, key="ctsig_s1_cancel"):
-            st.query_params.clear()
-            st.rerun()
+            _exit_contract_signing_to_panel()
 
 
-def _render_step2_sign(
+def _render_step3_sign_contract(
     appointment_id: int,
     customer_id: int,
     customer: dict[str, Any],
     appointment: dict[str, Any],
 ) -> None:
-    st.markdown("#### Etapa 2 — Firma del contrato")
+    st.markdown("#### Etapa 3 — Firma del contrato")
     ok_pay, pay_err = appointment_must_be_fully_paid_for_contract(
         total_amount=appointment.get("total_amount"),
         deposit=appointment.get("deposit"),
@@ -475,75 +590,14 @@ def _render_step2_sign(
     if is_minor != bool(customer.get("is_minor")):
         is_minor = bool(customer.get("is_minor"))
 
-    if is_minor:
-        st.markdown("##### Datos del tutor o representante (obligatorios para menores)")
-        st.caption(
-            "Completa todos los campos. Se guardarán en el expediente al firmar. "
-            "La **firma del tutor**, **fotos del documento** y la **declaración al pie del contrato** son obligatorias."
-        )
-        g1, g2 = st.columns(2)
-        with g1:
-            st.text_input(
-                "Nombre completo del tutor o representante *",
-                value=str(customer.get("guardian_name") or ""),
-                key="ctsig_s2_gn",
-                help="Nombre del padre, madre o tutor legal.",
-            )
-            st.selectbox(
-                "Tipo de documento del tutor *",
-                ["CC", "TI", "CE", "PAS"],
-                index=_doc_type_index(customer.get("guardian_document_type")),
-                format_func=lambda x: {"CC": "CC — Cédula", "TI": "TI — Tarjeta identidad", "CE": "CE — Extranjería", "PAS": "PAS — Pasaporte"}[x],
-                key="ctsig_s2_gdt",
-            )
-            st.text_input(
-                "Número de documento del tutor *",
-                value=str(customer.get("guardian_document_number") or ""),
-                key="ctsig_s2_gdn",
-            )
-        with g2:
-            min_date_100, max_date_today = _date_range_100y()
-            gdi_raw = customer.get("guardian_document_issue_date")
-            st.date_input(
-                "Fecha de expedición del documento del tutor *",
-                value=_clamp_date(_parse_date(gdi_raw), min_date_100, max_date_today) if gdi_raw else date(2000, 1, 1),
-                min_value=min_date_100,
-                max_value=max_date_today,
-                key="ctsig_s2_gdi",
-                format="DD/MM/YYYY",
-            )
-        st.divider()
-
     kind = appointment_to_contract_kind(appointment)
-
-    ok_t, code_t, templates = api_client.get_templates(True, contract_kind=kind)
-    if not ok_t or not isinstance(templates, list):
-        st.error(f"No se pudo cargar plantillas (HTTP {code_t}).")
-        return
-    if not templates:
-        st.error(
-            f"No hay plantilla de contrato **activa** para **{KIND_LABEL_ES[kind]}**. "
-            "Crea y activa una en **Gestión de contratos**."
-        )
-        return
-    if len(templates) > 1:
-        st.warning(
-            "Hay más de una plantilla activa para este tipo de trabajo; se usa la primera. "
-            "Deje solo una activa en administración."
-        )
-
-    tpl = templates[0]
-    selected_tid = int(tpl.get("id") or 0)
-    ok_tpl, code_tpl, tpl_full = api_client.get_template(selected_tid)
-    if not ok_tpl or not isinstance(tpl_full, dict):
-        st.error(f"No se pudo abrir la plantilla (HTTP {code_tpl}): {_detail(tpl_full)}")
+    tpl_ok, tpl_err, tpl_full, selected_tid = _load_contract_template_bundle(kind)
+    if not tpl_ok or tpl_full is None or selected_tid <= 0:
+        st.error(tpl_err or "Plantilla no disponible.")
         return
 
     base_contract = _render_contract_text(str(tpl_full.get("content", "")), customer)
     fecha_firma_es = date.today().strftime("%d/%m/%Y")
-    tutor_name_preview = ""
-    if is_minor:
-        tutor_name_preview = (st.session_state.get("ctsig_s2_gn") or customer.get("guardian_name") or "").strip()
     tpl_escaped = html_mod.escape(str(tpl_full.get("name", "") or ""))
     ver_escaped = html_mod.escape(str(tpl_full.get("version", "") or ""))
     fn_cli = html_mod.escape(
@@ -604,216 +658,357 @@ def _render_step2_sign(
         f'<div class="soft-contract-body">{base_contract}</div>',
         unsafe_allow_html=True,
     )
-    if is_minor:
-        st.markdown(
-            _minor_guardian_declaration_panel_html(
-                customer, appointment, tutor_name=tutor_name_preview
-            ),
-            unsafe_allow_html=True,
-        )
     st.warning(CONTRACT_NO_REFUND_NOTICE)
     if is_minor:
         st.info("Menor de edad: firma del cliente, del tutor, fotos del documento del tutor y firma del profesional.")
 
-    st.markdown("##### Firmas")
-    st.caption("Completa cada recuadro en la cuadrícula; el diseño se adapta al ancho disponible.")
-    _sig_w, _sig_h = 340, 170
-    sig_cols = st.columns(3) if is_minor else st.columns(2)
-    with sig_cols[0]:
-        client_signature = _signature_pad_b64(
-            "Firma del cliente", "ctsig_client", canvas_width=_sig_w, canvas_height=_sig_h
-        )
-    tutor_signature = None
-    tutor_doc_front = None
-    tutor_doc_back = None
-    if is_minor:
-        with sig_cols[1]:
-            tutor_signature = _signature_pad_b64(
-                "Firma del tutor o representante *",
-                "ctsig_tutor",
-                canvas_width=_sig_w,
-                canvas_height=_sig_h,
+    @st.fragment
+    def _fragment_firmas_y_guardado() -> None:
+        tutor_name_preview = ""
+        if is_minor:
+            st.markdown("##### Datos del tutor o representante (obligatorios para menores)")
+            st.caption(
+                "Completa todos los campos. Se guardarán en el expediente al firmar. "
+                "La **firma del tutor**, **fotos del documento** y la **declaración al pie del contrato** son obligatorias."
             )
-        with sig_cols[2]:
-            artist_signature = _signature_pad_b64(
-                "Firma del tatuador/perforador",
-                "ctsig_artist",
-                canvas_width=_sig_w,
-                canvas_height=_sig_h,
-            )
-    else:
-        with sig_cols[1]:
-            artist_signature = _signature_pad_b64(
-                "Firma del tatuador/perforador",
-                "ctsig_artist",
-                canvas_width=_sig_w,
-                canvas_height=_sig_h,
+            g1, g2 = st.columns(2)
+            with g1:
+                st.text_input(
+                    "Nombre completo del tutor o representante *",
+                    value=str(customer.get("guardian_name") or ""),
+                    key="ctsig_s2_gn",
+                    help="Nombre del padre, madre o tutor legal.",
+                )
+                st.selectbox(
+                    "Tipo de documento del tutor *",
+                    ["CC", "TI", "CE", "PAS"],
+                    index=_doc_type_index(customer.get("guardian_document_type")),
+                    format_func=lambda x: {"CC": "CC — Cédula", "TI": "TI — Tarjeta identidad", "CE": "CE — Extranjería", "PAS": "PAS — Pasaporte"}[x],
+                    key="ctsig_s2_gdt",
+                )
+                st.text_input(
+                    "Número de documento del tutor *",
+                    value=str(customer.get("guardian_document_number") or ""),
+                    key="ctsig_s2_gdn",
+                )
+            with g2:
+                min_date_100, max_date_today = _date_range_100y()
+                gdi_raw = customer.get("guardian_document_issue_date")
+                st.date_input(
+                    "Fecha de expedición del documento del tutor *",
+                    value=_clamp_date(_parse_date(gdi_raw), min_date_100, max_date_today) if gdi_raw else date(2000, 1, 1),
+                    min_value=min_date_100,
+                    max_value=max_date_today,
+                    key="ctsig_s2_gdi",
+                    format="DD/MM/YYYY",
+                )
+            st.divider()
+            tutor_name_preview = (st.session_state.get("ctsig_s2_gn") or customer.get("guardian_name") or "").strip()
+            st.markdown(
+                _minor_guardian_declaration_panel_html(
+                    customer, appointment, tutor_name=tutor_name_preview
+                ),
+                unsafe_allow_html=True,
             )
 
-    if is_minor:
-        st.markdown("##### Documento del tutor (fotos)")
-        st.caption("Pulsa **Activar cámara** en cada lado; luego captura la foto del documento.")
-        fk = f"ctsig_cam_front_on_{appointment_id}"
-        bk = f"ctsig_cam_back_on_{appointment_id}"
-        if fk not in st.session_state:
-            st.session_state[fk] = False
-        if bk not in st.session_state:
-            st.session_state[bk] = False
-        cam1, cam2 = st.columns(2)
-        with cam1:
-            if st.button("Activar cámara — anverso", key=f"ctsig_btn_camf_{appointment_id}", use_container_width=True):
-                st.session_state[fk] = True
-            if st.session_state[fk]:
-                tutor_doc_front = _image_file_to_base64(
-                    st.camera_input(
-                        "Captura el anverso del documento del tutor",
-                        key=f"ctsig_tutor_front_{appointment_id}",
-                    )
-                )
-        with cam2:
-            if st.button("Activar cámara — reverso", key=f"ctsig_btn_camb_{appointment_id}", use_container_width=True):
-                st.session_state[bk] = True
-            if st.session_state[bk]:
-                tutor_doc_back = _image_file_to_base64(
-                    st.camera_input(
-                        "Captura el reverso del documento del tutor",
-                        key=f"ctsig_tutor_back_{appointment_id}",
-                    )
-                )
-    else:
+        st.markdown("##### Firmas")
+        st.caption("Completa cada recuadro en la cuadrícula; el diseño se adapta al ancho disponible.")
+        _sig_w, _sig_h = 340, 170
+        sig_cols = st.columns(3) if is_minor else st.columns(2)
+        with sig_cols[0]:
+            client_signature = _signature_pad_b64(
+                "Firma del cliente", "ctsig_client", canvas_width=_sig_w, canvas_height=_sig_h
+            )
+        tutor_signature = None
         tutor_doc_front = None
         tutor_doc_back = None
-
-    nav1, nav2, nav3 = st.columns(3)
-    with nav1:
-        if st.button("← Volver a datos personales", use_container_width=True, key="ctsig_s2_back"):
-            st.session_state["ctsig_step"] = 1
-            st.rerun()
-
-    with nav3:
-        if st.button("Guardar contrato firmado", type="primary", use_container_width=True, key="ctsig_save"):
-            ok_pay2, pay_err2 = appointment_must_be_fully_paid_for_contract(
-                total_amount=appointment.get("total_amount"),
-                deposit=appointment.get("deposit"),
-                pending_balance=appointment.get("pending_balance"),
-            )
-            if not ok_pay2:
-                st.error(pay_err2 or "Saldo pendiente: no se puede firmar.")
-                return
-            if not client_signature:
-                st.error("La firma del cliente es obligatoria.")
-                return
-            if not artist_signature:
-                st.error("La firma del tatuador/perforador es obligatoria.")
-                return
-
-            cust_snapshot = dict(customer)
-            if is_minor:
-                gn = (st.session_state.get("ctsig_s2_gn") or "").strip()
-                gdt = str(st.session_state.get("ctsig_s2_gdt") or "CC")
-                gdn = (st.session_state.get("ctsig_s2_gdn") or "").strip()
-                gdi_d = st.session_state.get("ctsig_s2_gdi")
-                if not isinstance(gdi_d, date):
-                    gdi_d = _parse_date(gdi_d)
-                if len(gn) < 3:
-                    st.error("El nombre del tutor o representante debe tener al menos 3 caracteres.")
-                    return
-                if not gdn or len(gdn) < 5:
-                    st.error("El número de documento del tutor es obligatorio (mín. 5 caracteres).")
-                    return
-                if gdt == "TI":
-                    st.error("El tipo de documento del tutor no puede ser TI.")
-                    return
-                today = date.today()
-                tutor_years = today.year - gdi_d.year - ((today.month, today.day) < (gdi_d.month, gdi_d.day))
-                if tutor_years < 18:
-                    st.error("La expedición del documento del tutor debe tener al menos 18 años de antigüedad respecto a hoy.")
-                    return
-                if not tutor_signature:
-                    st.error("La firma del tutor o representante es obligatoria para menores.")
-                    return
-                if not tutor_doc_front or not tutor_doc_back:
-                    st.error("Debes activar la cámara y capturar el anverso y el reverso del documento del tutor.")
-                    return
-
-                put_base = _put_payload_from_customer(cust_snapshot)
-                put_payload = {
-                    **put_base,
-                    "is_minor": True,
-                    "guardian_name": gn,
-                    "guardian_document_type": gdt,
-                    "guardian_document_number": gdn,
-                    "guardian_document_issue_date": gdi_d.isoformat(),
-                }
-                ok_u, code_u, data_u = api_client.put_customer(customer_id, put_payload)
-                if not ok_u:
-                    st.error(f"No se pudieron guardar datos del tutor (HTTP {code_u}): {_detail(data_u)}")
-                    return
-                ok_rf, _, cust_rf = api_client.get_customer(customer_id)
-                if ok_rf and isinstance(cust_rf, dict):
-                    cust_snapshot = cust_rf
-
-            contract_body = _render_contract_text(str(tpl_full.get("content", "")), cust_snapshot)
-            if is_minor:
-                gn_saved = (cust_snapshot.get("guardian_name") or "").strip()
-                contract_body += _minor_guardian_declaration_panel_html(
-                    cust_snapshot, appointment, tutor_name=gn_saved
+        if is_minor:
+            with sig_cols[1]:
+                tutor_signature = _signature_pad_b64(
+                    "Firma del tutor o representante *",
+                    "ctsig_tutor",
+                    canvas_width=_sig_w,
+                    canvas_height=_sig_h,
+                )
+            with sig_cols[2]:
+                artist_signature = _signature_pad_b64(
+                    "Firma del tatuador/perforador",
+                    "ctsig_artist",
+                    canvas_width=_sig_w,
+                    canvas_height=_sig_h,
+                )
+        else:
+            with sig_cols[1]:
+                artist_signature = _signature_pad_b64(
+                    "Firma del tatuador/perforador",
+                    "ctsig_artist",
+                    canvas_width=_sig_w,
+                    canvas_height=_sig_h,
                 )
 
-            payload = {
-                "appointment_id": int(appointment_id),
-                "is_minor": is_minor,
-                "health_data": {"source": "contract_signing_view", "template_id": selected_tid},
-                "signature": client_signature,
-                "tutor_signature": tutor_signature,
-                "artist_signature": artist_signature,
-                "tutor_document_front": tutor_doc_front,
-                "tutor_document_back": tutor_doc_back,
-                "contract_text": contract_body,
-                "template_id": selected_tid,
-            }
-            ok_s, code_s, data_s = api_client.post_contract(payload)
-            if ok_s:
-                st.session_state["ctsig_step"] = 3
-                st.success("Contrato firmado y guardado. Continúa con el cuestionario (etapa 3).")
+        if is_minor:
+            st.markdown("##### Documento del tutor (fotos)")
+            st.caption("Pulsa **Activar cámara** en cada lado; luego captura la foto del documento.")
+            fk = f"ctsig_cam_front_on_{appointment_id}"
+            bk = f"ctsig_cam_back_on_{appointment_id}"
+            if fk not in st.session_state:
+                st.session_state[fk] = False
+            if bk not in st.session_state:
+                st.session_state[bk] = False
+            cam1, cam2 = st.columns(2)
+            with cam1:
+                if st.button("Activar cámara — anverso", key=f"ctsig_btn_camf_{appointment_id}", use_container_width=True):
+                    st.session_state[fk] = True
+                if st.session_state[fk]:
+                    tutor_doc_front = _image_file_to_base64(
+                        st.camera_input(
+                            "Captura el anverso del documento del tutor",
+                            key=f"ctsig_tutor_front_{appointment_id}",
+                        )
+                    )
+            with cam2:
+                if st.button("Activar cámara — reverso", key=f"ctsig_btn_camb_{appointment_id}", use_container_width=True):
+                    st.session_state[bk] = True
+                if st.session_state[bk]:
+                    tutor_doc_back = _image_file_to_base64(
+                        st.camera_input(
+                            "Captura el reverso del documento del tutor",
+                            key=f"ctsig_tutor_back_{appointment_id}",
+                        )
+                    )
+        else:
+            tutor_doc_front = None
+            tutor_doc_back = None
+
+        nav1, _nav2, nav3 = st.columns(3)
+        with nav1:
+            if st.button("← Volver al cuestionario", use_container_width=True, key="ctsig_s2_back"):
+                st.session_state["ctsig_step"] = 2
                 st.rerun()
-            else:
-                st.error(f"No se pudo guardar el contrato (HTTP {code_s}): {_detail(data_s)}")
+
+        with nav3:
+            if st.button("Guardar contrato firmado", type="primary", use_container_width=True, key="ctsig_save"):
+                ok_pay2, pay_err2 = appointment_must_be_fully_paid_for_contract(
+                    total_amount=appointment.get("total_amount"),
+                    deposit=appointment.get("deposit"),
+                    pending_balance=appointment.get("pending_balance"),
+                )
+                if not ok_pay2:
+                    st.error(pay_err2 or "Saldo pendiente: no se puede firmar.")
+                    return
+
+                firmas_pendientes: list[str] = []
+                if not _signature_payload_acceptable(client_signature):
+                    firmas_pendientes.append("**Firma del cliente** — dibuja en el primer recuadro.")
+                if not _signature_payload_acceptable(artist_signature):
+                    firmas_pendientes.append("**Firma del profesional** — dibuja en el recuadro del tatuador/perforador.")
+                if is_minor:
+                    if not _signature_payload_acceptable(tutor_signature):
+                        firmas_pendientes.append("**Firma del tutor** — obligatoria para menores.")
+                    if not _tutor_document_acceptable(tutor_doc_front):
+                        firmas_pendientes.append("**Foto anverso** del documento del tutor.")
+                    if not _tutor_document_acceptable(tutor_doc_back):
+                        firmas_pendientes.append("**Foto reverso** del documento del tutor.")
+                if firmas_pendientes:
+                    st.warning("No se puede guardar el contrato sin las firmas y documentación obligatorias.")
+                    st.error(
+                        "Completa lo siguiente y vuelve a pulsar **Guardar**:\n\n"
+                        + "\n".join(f"- {x}" for x in firmas_pendientes)
+                    )
+                    try:
+                        st.toast("Faltan firmas o fotos obligatorias.", icon="⚠️")
+                    except Exception:
+                        pass
+                    return
+
+                cust_snapshot = dict(customer)
+                if is_minor:
+                    gn = (st.session_state.get("ctsig_s2_gn") or "").strip()
+                    gdt = str(st.session_state.get("ctsig_s2_gdt") or "CC")
+                    gdn = (st.session_state.get("ctsig_s2_gdn") or "").strip()
+                    gdi_d = st.session_state.get("ctsig_s2_gdi")
+                    if not isinstance(gdi_d, date):
+                        gdi_d = _parse_date(gdi_d)
+                    if len(gn) < 3:
+                        st.error("El nombre del tutor o representante debe tener al menos 3 caracteres.")
+                        return
+                    if not gdn or len(gdn) < 5:
+                        st.error("El número de documento del tutor es obligatorio (mín. 5 caracteres).")
+                        return
+                    if gdt == "TI":
+                        st.error("El tipo de documento del tutor no puede ser TI.")
+                        return
+                    today = date.today()
+                    tutor_years = today.year - gdi_d.year - ((today.month, today.day) < (gdi_d.month, gdi_d.day))
+                    if tutor_years < 18:
+                        st.error(
+                            "La expedición del documento del tutor debe tener al menos 18 años de antigüedad respecto a hoy."
+                        )
+                        return
+
+                    put_base = _put_payload_from_customer(cust_snapshot)
+                    put_payload = {
+                        **put_base,
+                        "is_minor": True,
+                        "guardian_name": gn,
+                        "guardian_document_type": gdt,
+                        "guardian_document_number": gdn,
+                        "guardian_document_issue_date": gdi_d.isoformat(),
+                    }
+                    ok_u, code_u, data_u = api_client.put_customer(customer_id, put_payload)
+                    if not ok_u:
+                        st.error(f"No se pudieron guardar datos del tutor (HTTP {code_u}): {_detail(data_u)}")
+                        return
+                    ok_rf, _, cust_rf = api_client.get_customer(customer_id)
+                    if ok_rf and isinstance(cust_rf, dict):
+                        cust_snapshot = cust_rf
+
+                contract_body = _render_contract_text(str(tpl_full.get("content", "")), cust_snapshot)
+                if is_minor:
+                    gn_saved = (cust_snapshot.get("guardian_name") or "").strip()
+                    contract_body += _minor_guardian_declaration_panel_html(
+                        cust_snapshot, appointment, tutor_name=gn_saved
+                    )
+
+                payload = {
+                    "appointment_id": int(appointment_id),
+                    "is_minor": is_minor,
+                    "health_data": {"source": "contract_signing_view", "template_id": selected_tid},
+                    "signature": client_signature,
+                    "tutor_signature": tutor_signature,
+                    "artist_signature": artist_signature,
+                    "tutor_document_front": tutor_doc_front,
+                    "tutor_document_back": tutor_doc_back,
+                    "contract_text": contract_body,
+                    "template_id": selected_tid,
+                }
+                ok_s, code_s, data_s = api_client.post_contract(payload)
+                if ok_s:
+                    st.session_state["_panel_pending_toast"] = "Contrato firmado y registrado correctamente."
+                    _panel_principal_from_step3()
+                else:
+                    st.error(f"No se pudo guardar el contrato (HTTP {code_s}): {_detail(data_s)}")
+
+    _fragment_firmas_y_guardado()
 
 
 def _panel_principal_from_step3() -> None:
-    st.query_params.clear()
-    st.session_state.pop("ctsig_step", None)
-    st.session_state.pop("ctsig_aid", None)
-    st.rerun()
+    _exit_contract_signing_to_panel()
 
 
-def _render_step3_questionnaire(appointment_id: int, appt: dict[str, Any]) -> None:
-    st.markdown("#### Etapa 3 — Cuestionario")
-    st.success("Contrato registrado correctamente.")
-    st.caption(f"Cita #{appointment_id}")
-
-    ok_s, code_s, surveys = api_client.get_surveys()
-    if ok_s and isinstance(surveys, list):
-        existing = next(
-            (
-                s
-                for s in surveys
-                if int(s.get("appointment_id", 0) or 0) == int(appointment_id)
-            ),
-            None,
+def _render_contract_survey_question(q: dict[str, Any]) -> None:
+    """Etiqueta (altura mínima para alinear columnas) + widget; sin divisor."""
+    lbl = str(q.get("label") or "Pregunta")
+    st.markdown(
+        f'<div class="ctsig-survey-q-label">{html_mod.escape(lbl)}</div>',
+        unsafe_allow_html=True,
+    )
+    qid = int(q["id"])
+    qt = str(q.get("question_type") or "text_short")
+    raw_o = q.get("options")
+    opts = [str(x).strip() for x in raw_o] if isinstance(raw_o, list) else []
+    opts = [x for x in opts if x]
+    sk = f"ctsig3_{qid}"
+    if qt == "rating_1_5":
+        st.selectbox(
+            "Valor",
+            options=["", "1", "2", "3", "4", "5"],
+            format_func=_fmt_survey_no_selection,
+            key=f"{sk}_r",
+            label_visibility="collapsed",
         )
-        if existing is not None:
-            st.info("El cuestionario para esta cita **ya fue enviado**.")
-            if st.button("Volver al panel principal", type="primary", use_container_width=True, key="ctsig_s3_done_existing"):
+    elif qt == "yes_no":
+        st.selectbox(
+            "Respuesta",
+            options=["", "Sí", "No"],
+            format_func=_fmt_survey_no_selection,
+            key=f"{sk}_yn",
+            label_visibility="collapsed",
+        )
+    elif qt == "textarea":
+        st.text_area(
+            "Tu respuesta", max_chars=5000, height=160, key=f"{sk}_t", label_visibility="collapsed"
+        )
+    elif qt == "text_short":
+        st.text_input("Tu respuesta", max_chars=500, key=f"{sk}_t", label_visibility="collapsed")
+    elif qt == "text":
+        st.text_area(
+            "Tu respuesta", max_chars=5000, height=120, key=f"{sk}_t", label_visibility="collapsed"
+        )
+    elif qt == "number":
+        st.number_input(
+            "Valor numérico",
+            min_value=None,
+            value=None,
+            step=0.0001,
+            format="%.4f",
+            placeholder="Indica un número",
+            key=f"{sk}_n",
+            label_visibility="collapsed",
+        )
+    elif qt == "radio":
+        if len(opts) < 2:
+            st.error("Esta pregunta no tiene opciones configuradas; avisa al administrador.")
+        else:
+            st.selectbox(
+                "Elige una opción",
+                options=[_CTSIG_Q_UNSET, *opts],
+                format_func=_fmt_survey_no_selection,
+                key=f"{sk}_radio",
+                label_visibility="collapsed",
+            )
+    elif qt == "select":
+        if len(opts) < 2:
+            st.error("Esta pregunta no tiene opciones configuradas; avisa al administrador.")
+        else:
+            st.selectbox(
+                "Elige una opción",
+                options=[_CTSIG_Q_UNSET, *opts],
+                format_func=_fmt_survey_no_selection,
+                key=f"{sk}_sel",
+                label_visibility="collapsed",
+            )
+    elif qt == "checkbox":
+        if len(opts) < 2:
+            st.error("Esta pregunta no tiene opciones configuradas; avisa al administrador.")
+        else:
+            st.multiselect(
+                "Marca una o varias opciones",
+                options=opts,
+                key=f"{sk}_cb",
+                label_visibility="collapsed",
+            )
+    else:
+        st.text_input("Tu respuesta", max_chars=500, key=f"{sk}_t", label_visibility="collapsed")
+
+
+def _render_step2_questionnaire(appointment_id: int, appt: dict[str, Any]) -> None:
+    st.markdown("#### Etapa 2 — Cuestionario")
+    st.caption(
+        "Completa el formulario antes de la firma. "
+        f"Cita #{appointment_id}"
+    )
+
+    ok_s, code_s, lookup = api_client.get_survey_for_appointment(appointment_id)
+    if ok_s and isinstance(lookup, dict) and lookup.get("found"):
+        st.info("El cuestionario para esta cita **ya fue enviado**. Puedes continuar a la firma del contrato.")
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button(
+                "Continuar a firma del contrato",
+                type="primary",
+                use_container_width=True,
+                key="ctsig_s3_skip_to_sign",
+            ):
+                st.session_state["ctsig_step"] = 3
+                st.rerun()
+        with b2:
+            if st.button("Volver al panel principal", use_container_width=True, key="ctsig_s3_done_existing"):
                 _panel_principal_from_step3()
-            return
+        return
 
     kind = appointment_to_contract_kind(appt)
-    ok_q, code_q, questions = api_client.get_survey_questions(
-        include_inactive=False,
-        contract_kind=kind,
-    )
+    ok_q, code_q, questions = _survey_questions_cached(kind)
     if not ok_q or not isinstance(questions, list):
         st.error(f"No se pudieron cargar las preguntas (HTTP {code_q}): {_detail(questions)}")
         if st.button("Volver al panel principal", use_container_width=True, key="ctsig_s3_errq"):
@@ -826,75 +1021,68 @@ def _render_step3_questionnaire(appointment_id: int, appt: dict[str, Any]) -> No
     )
     if not qs:
         st.info(
-            "No hay preguntas activas en el sistema. Cuando el administrador las configure en "
-            "**Gestión de preguntas**, aparecerán aquí en orden."
+            "No hay preguntas activas en el sistema. Puedes pasar directamente a la firma del contrato."
         )
-        if st.button("Volver al panel principal", type="primary", use_container_width=True, key="ctsig_s3_empty"):
-            _panel_principal_from_step3()
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button(
+                "Continuar a firma del contrato",
+                type="primary",
+                use_container_width=True,
+                key="ctsig_s3_empty_go_sign",
+            ):
+                st.session_state["ctsig_step"] = 3
+                st.rerun()
+        with b2:
+            if st.button("Volver al panel principal", use_container_width=True, key="ctsig_s3_empty"):
+                _panel_principal_from_step3()
         return
 
     st.markdown("Completa el siguiente formulario.")
 
+    st.markdown(
+        """<style>
+        .ctsig-survey-q-label {
+            min-height: 5.5rem;
+            max-height: 9rem;
+            overflow-y: auto;
+            margin: 0 0 0.35rem 0;
+            padding: 0.15rem 0.25rem 0.35rem 0;
+            line-height: 1.45;
+            font-weight: 600;
+            font-size: 0.95rem;
+            text-align: left;
+            border-bottom: 1px solid rgba(250, 250, 250, 0.08);
+            box-sizing: border-box;
+        }
+        </style>""",
+        unsafe_allow_html=True,
+    )
+
     with st.form("ctsig_s3_survey"):
-        col_left, col_right = st.columns(2)
-        for i, q in enumerate(qs):
-            col = col_left if i % 2 == 0 else col_right
-            with col:
-                qid = int(q["id"])
-                qt = str(q.get("question_type") or "text_short")
-                lbl = str(q.get("label") or "Pregunta")
-                raw_o = q.get("options")
-                opts = [str(x).strip() for x in raw_o] if isinstance(raw_o, list) else []
-                opts = [x for x in opts if x]
-                st.markdown(f"**{lbl}**")
-                sk = f"ctsig3_{qid}"
-                if qt == "rating_1_5":
-                    st.select_slider(
-                        "Valor",
-                        options=[1, 2, 3, 4, 5],
-                        value=3,
-                        key=f"{sk}_r",
-                        label_visibility="collapsed",
-                    )
-                elif qt == "yes_no":
-                    st.radio("Respuesta", options=["Sí", "No"], horizontal=True, key=f"{sk}_yn")
-                elif qt == "textarea":
-                    st.text_area(
-                        "Tu respuesta", max_chars=5000, height=160, key=f"{sk}_t", label_visibility="collapsed"
-                    )
-                elif qt == "text_short":
-                    st.text_input("Tu respuesta", max_chars=500, key=f"{sk}_t")
-                elif qt == "text":
-                    st.text_area(
-                        "Tu respuesta", max_chars=5000, height=120, key=f"{sk}_t", label_visibility="collapsed"
-                    )
-                elif qt == "number":
-                    st.number_input("Valor numérico", value=0.0, format="%.4f", key=f"{sk}_n")
-                elif qt == "radio":
-                    if len(opts) < 2:
-                        st.error("Esta pregunta no tiene opciones configuradas; avisa al administrador.")
-                    else:
-                        st.radio("Elige una opción", options=opts, key=f"{sk}_radio")
-                elif qt == "select":
-                    if len(opts) < 2:
-                        st.error("Esta pregunta no tiene opciones configuradas; avisa al administrador.")
-                    else:
-                        st.selectbox("Elige una opción", options=opts, key=f"{sk}_sel")
-                elif qt == "checkbox":
-                    if len(opts) < 2:
-                        st.error("Esta pregunta no tiene opciones configuradas; avisa al administrador.")
-                    else:
-                        st.multiselect("Marca una o varias opciones", options=opts, key=f"{sk}_cb")
-                else:
-                    st.text_input("Tu respuesta", max_chars=500, key=f"{sk}_t")
+        for row_start in range(0, len(qs), 2):
+            col_left, col_right = st.columns(2, gap="large")
+            with col_left:
+                _render_contract_survey_question(qs[row_start])
+            with col_right:
+                if row_start + 1 < len(qs):
+                    _render_contract_survey_question(qs[row_start + 1])
+            st.divider()
 
-                st.divider()
-
-        would_rec = st.checkbox("¿Recomendaría nuestros servicios?", value=True, key="ctsig_s3_would_rec")
+        st.selectbox(
+            "¿Recomendaría nuestros servicios?",
+            options=[_CTSIG_Q_UNSET, "Sí", "No"],
+            format_func=_fmt_survey_no_selection,
+            key="ctsig_s3_would_rec",
+        )
         submitted = st.form_submit_button("Enviar cuestionario", type="primary", use_container_width=True)
 
         if submitted:
             errors: list[str] = []
+            wr_raw = str(st.session_state.get("ctsig_s3_would_rec") or "").strip()
+            if wr_raw == "" or wr_raw == _CTSIG_Q_UNSET:
+                errors.append("Indica si **recomendaría nuestros servicios**.")
+            would_rec = wr_raw == "Sí"
             items: list[dict[str, Any]] = []
             for q in qs:
                 qid = int(q["id"])
@@ -905,14 +1093,23 @@ def _render_step3_questionnaire(appointment_id: int, appt: dict[str, Any]) -> No
                 opts = [x for x in opts if x]
                 sk = f"ctsig3_{qid}"
                 if qt == "rating_1_5":
-                    r = int(st.session_state.get(f"{sk}_r", 3))
-                    items.append({"question_id": qid, "rating": r})
+                    raw_r = str(st.session_state.get(f"{sk}_r") or "").strip()
+                    if raw_r == "" or raw_r == _CTSIG_Q_UNSET:
+                        errors.append(f"Selecciona una calificación (1–5) en «{lbl}».")
+                    else:
+                        items.append({"question_id": qid, "rating": int(raw_r)})
                 elif qt == "yes_no":
-                    yn = st.session_state.get(f"{sk}_yn", "Sí")
-                    items.append({"question_id": qid, "yes_no": yn == "Sí"})
+                    yn = str(st.session_state.get(f"{sk}_yn") or "").strip()
+                    if yn == "" or yn == _CTSIG_Q_UNSET:
+                        errors.append(f"Responde **sí o no** en «{lbl}».")
+                    else:
+                        items.append({"question_id": qid, "yes_no": yn == "Sí"})
                 elif qt in ("text", "textarea", "text_short"):
                     t = str(st.session_state.get(f"{sk}_t") or "").strip()
-                    items.append({"question_id": qid, "text": t or ""})
+                    if not t:
+                        errors.append(f"Completa «{lbl}».")
+                    else:
+                        items.append({"question_id": qid, "text": t})
                 elif qt == "number":
                     n_raw = st.session_state.get(f"{sk}_n")
                     if n_raw is None:
@@ -928,13 +1125,13 @@ def _render_step3_questionnaire(appointment_id: int, appt: dict[str, Any]) -> No
                         continue
                     if qt == "radio":
                         choice = st.session_state.get(f"{sk}_radio")
-                        if choice is None or str(choice).strip() == "":
+                        if choice is None or str(choice).strip() == "" or choice == _CTSIG_Q_UNSET:
                             errors.append(f"Elige una opción en «{lbl}».")
                         else:
                             items.append({"question_id": qid, "text": str(choice).strip()})
                     elif qt == "select":
                         choice = st.session_state.get(f"{sk}_sel")
-                        if choice is None or str(choice).strip() == "":
+                        if choice is None or str(choice).strip() == "" or choice == _CTSIG_Q_UNSET:
                             errors.append(f"Elige una opción en «{lbl}».")
                         else:
                             items.append({"question_id": qid, "text": str(choice).strip()})
@@ -945,10 +1142,16 @@ def _render_step3_questionnaire(appointment_id: int, appt: dict[str, Any]) -> No
                         if not isinstance(choice_list, list):
                             choice_list = []
                         cleaned = [str(x).strip() for x in choice_list if str(x).strip()]
-                        items.append({"question_id": qid, "choices": cleaned})
+                        if not cleaned:
+                            errors.append(f"Marca **al menos una opción** en «{lbl}».")
+                        else:
+                            items.append({"question_id": qid, "choices": cleaned})
                 else:
                     t = str(st.session_state.get(f"{sk}_t") or "").strip()
-                    items.append({"question_id": qid, "text": t or ""})
+                    if not t:
+                        errors.append(f"Completa «{lbl}».")
+                    else:
+                        items.append({"question_id": qid, "text": t})
 
             if errors:
                 for e in errors:
@@ -961,13 +1164,21 @@ def _render_step3_questionnaire(appointment_id: int, appt: dict[str, Any]) -> No
                 }
                 ok_p, code_p, data_p = api_client.post_survey(payload)
                 if ok_p:
-                    st.success("Cuestionario enviado. Gracias.")
+                    st.session_state["_ctsig_pending_toast"] = "Encuesta completada y guardada correctamente."
+                    st.success("Cuestionario enviado. Continúa con la firma del contrato (etapa 3).")
+                    st.session_state["ctsig_step"] = 3
                     st.rerun()
                 else:
                     st.error(f"No se pudo guardar el cuestionario (HTTP {code_p}): {_detail(data_p)}")
 
-    if st.button("Volver al panel principal", use_container_width=True, key="ctsig_s3_done"):
-        _panel_principal_from_step3()
+    nav_q1, nav_q2 = st.columns(2)
+    with nav_q1:
+        if st.button("← Volver a datos personales", use_container_width=True, key="ctsig_q_back"):
+            st.session_state["ctsig_step"] = 1
+            st.rerun()
+    with nav_q2:
+        if st.button("Volver al panel principal", use_container_width=True, key="ctsig_s3_done"):
+            _panel_principal_from_step3()
 
 
 def render_contract_signing_view(appointment_id: int) -> None:
@@ -975,6 +1186,8 @@ def render_contract_signing_view(appointment_id: int) -> None:
     if st.session_state.get("ctsig_aid") != aid:
         st.session_state["ctsig_aid"] = aid
         st.session_state["ctsig_step"] = 1
+        st.session_state.pop("_ctsig_pending_toast", None)
+        _ctsig_clear_contract_caches()
 
     step = int(st.session_state.get("ctsig_step", 1))
     if step not in (1, 2, 3):
@@ -985,20 +1198,19 @@ def render_contract_signing_view(appointment_id: int) -> None:
     _steps_progress(step)
 
     if st.button("Volver al panel principal", key="ctsig_back"):
-        st.query_params.clear()
-        st.session_state.pop("ctsig_step", None)
-        st.session_state.pop("ctsig_aid", None)
-        st.rerun()
+        _exit_contract_signing_to_panel()
 
-    ok_a, code_a, appts = api_client.get_appointments()
-    if not ok_a or not isinstance(appts, list):
-        st.error(f"No se pudo cargar citas (HTTP {code_a}): {_detail(appts)}")
+    ok_a, code_a, appt = api_client.get_appointment(aid)
+    if not ok_a or not isinstance(appt, dict):
+        st.error(f"No se pudo cargar la cita (HTTP {code_a}): {_detail(appt)}")
         return
 
-    appt = next((a for a in appts if int(a.get("id", 0)) == aid), None)
-    if not appt:
+    if int(appt.get("id", 0) or 0) != aid:
         st.error("Cita no encontrada.")
         return
+    pending_flow = st.session_state.pop("_ctsig_pending_toast", None)
+    if pending_flow:
+        _toast_ok(str(pending_flow))
     st.caption(
         f"Cita **#{aid}** · Artista: **{_appointment_artist_display_name(appt)}** · "
         f"Servicio: **{appt.get('service_type', '—')}** · Cliente: **{appt.get('customer_name', '—')}**"
@@ -1009,10 +1221,7 @@ def render_contract_signing_view(appointment_id: int) -> None:
         )
         st.caption(f"Servicio registrado: `{appt.get('service_type', '—')}`")
         if st.button("Volver al panel principal", type="primary", key="ctsig_no_contract_back"):
-            st.query_params.clear()
-            st.session_state.pop("ctsig_step", None)
-            st.session_state.pop("ctsig_aid", None)
-            st.rerun()
+            _exit_contract_signing_to_panel()
         return
     customer_id_raw = appt.get("customer_id")
     if not customer_id_raw:
@@ -1029,10 +1238,6 @@ def render_contract_signing_view(appointment_id: int) -> None:
         _render_step1_personal(customer_id, customer, appt)
         return
     if step == 2:
-        ok_c2, code_c2, customer2 = api_client.get_customer(customer_id)
-        if not ok_c2 or not isinstance(customer2, dict):
-            st.error(f"No se pudo recargar cliente (HTTP {code_c2}).")
-            return
-        _render_step2_sign(aid, customer_id, customer2, appt)
+        _render_step2_questionnaire(aid, appt)
         return
-    _render_step3_questionnaire(aid, appt)
+    _render_step3_sign_contract(aid, customer_id, customer, appt)

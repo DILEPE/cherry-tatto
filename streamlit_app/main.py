@@ -35,6 +35,7 @@ from streamlit_app.contract_signing import render_contract_signing_view
 from streamlit_app.contracts_admin import render_contract_admin_tab
 from streamlit_app.customers_management import render_customers_management_tab
 from streamlit_app.panel_auth import (
+    ensure_panel_session_initialized,
     panel_allowed_module_keys,
     panel_auth_enabled,
     panel_auth_users_from_database,
@@ -205,9 +206,29 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
     _inject_material_neon_css()
+    ensure_panel_session_initialized()
 
-    # URL dedicada para firma de contratos:
-    # ?view=contract_sign&appointment_id=<id>
+    render_login_gate()
+
+    pending_panel_toast = st.session_state.pop("_panel_pending_toast", None)
+    if pending_panel_toast:
+        try:
+            st.toast(str(pending_panel_toast), icon="✅")
+        except Exception:
+            pass
+
+    if st.session_state.pop("_panel_warm_after_login", False):
+        with st.spinner("Cargando permisos, profesionales y citas…"):
+            _warm_mods = panel_allowed_module_keys()
+            from streamlit_app.cached_public_api import get_panel_users_assignable_cached
+
+            get_panel_users_assignable_cached()
+            from streamlit_app.citas_tab import warm_session_after_login
+
+            warm_session_after_login(_warm_mods)
+
+    # Rutas internas del mismo panel (query_params), no enlaces públicos anónimos:
+    # requieren sesión del panel (gate anterior). Navegar con botones (panel_navigation), no link_button.
     view = st.query_params.get("view")
     if view == "contract_sign":
         appt_id_raw = st.query_params.get("appointment_id")
@@ -231,18 +252,6 @@ def main() -> None:
         else:
             render_contract_read_view(contract_id)
         return
-
-    render_login_gate()
-
-    if st.session_state.pop("_panel_warm_after_login", False):
-        with st.spinner("Cargando permisos, profesionales y citas…"):
-            _warm_mods = panel_allowed_module_keys()
-            from streamlit_app.cached_public_api import get_panel_users_assignable_cached
-
-            get_panel_users_assignable_cached()
-            from streamlit_app.citas_tab import warm_session_after_login
-
-            warm_session_after_login(_warm_mods)
 
     allowed_modules = panel_allowed_module_keys()
     if (

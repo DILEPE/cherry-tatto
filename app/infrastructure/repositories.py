@@ -78,6 +78,57 @@ class AppointmentRepository:
             if conn:
                 conn.close()
 
+    def get_appointment_list_row(self, appointment_id: int) -> Optional[dict[str, object]]:
+        """Una fila con el mismo shape que `get_all` (join con panel_users si existe la columna)."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            try:
+                cursor.execute(
+                    """
+                    SELECT a.*,
+                        EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
+                            AS has_signed_contract,
+                        pu.username AS assigned_username,
+                        pu.first_name AS assigned_first_name,
+                        pu.last_name AS assigned_last_name,
+                        pu.role AS assigned_role
+                    FROM appointments a
+                    LEFT JOIN panel_users pu ON pu.id = a.assigned_panel_user_id
+                    WHERE a.id = %s
+                    LIMIT 1
+                    """,
+                    (appointment_id,),
+                )
+            except Exception as e:
+                err = str(e)
+                if (
+                    "Unknown column 'a.assigned_panel_user_id'" in err
+                    or "Unknown column 'assigned_panel_user_id'" in err
+                ):
+                    cursor.execute(
+                        """
+                        SELECT a.*,
+                            EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
+                                AS has_signed_contract
+                        FROM appointments a
+                        WHERE a.id = %s
+                        LIMIT 1
+                        """,
+                        (appointment_id,),
+                    )
+                else:
+                    raise
+            row = cursor.fetchone()
+            if not row:
+                return None
+            raw = row.get("has_signed_contract")
+            row["has_signed_contract"] = bool(raw) if raw is not None else False
+            return row
+        finally:
+            if conn:
+                conn.close()
+
     def _get_all_legacy_no_assignee(self) -> list[dict[str, object]]:
         conn = self.db.get_connection()
         try:
@@ -214,6 +265,7 @@ class AppointmentRepository:
                     name=res['customer_name'],
                     phone=res['phone'],
                     service=res['service_type'],
+                    service_type=res['service_type'],
                     date=str(res['appointment_date']),
                     status=res.get('status'),
                     deposit=float(res.get('deposit') or 0),

@@ -4,7 +4,8 @@ Autenticación del panel Streamlit.
 - Modo **env** (`PANEL_AUTH_USERS_SOURCE=env` o sin definir): usuario/contraseña en `.env`.
 - Modo **database**: usuarios en MySQL (`panel_users`), registro e inicio de sesión vía API.
 
-Las vistas públicas (`?view=contract_sign` y `?view=contract_read`) no pasan por este gate.
+Las rutas `?view=contract_sign` y `?view=contract_read` son vistas del mismo panel; tras iniciar sesión
+se resuelven en `main()` y también exigen esta autenticación (no son enlaces anónimos).
 """
 from __future__ import annotations
 
@@ -123,6 +124,14 @@ def _logout_clear_all() -> None:
 def _init_session() -> None:
     if "_panel_auth_ok" not in st.session_state:
         st.session_state["_panel_auth_ok"] = False
+
+
+def ensure_panel_session_initialized() -> None:
+    """
+    Garantiza que existan las claves por defecto del panel sin borrar un login ya válido.
+    Debe llamarse al inicio de `main()` antes de `render_login_gate()`.
+    """
+    _init_session()
 
 
 def _http_detail(payload: Any) -> str:

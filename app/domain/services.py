@@ -424,6 +424,16 @@ class BusinessLogicService:
 
         return await asyncio.to_thread(_run)
 
+    async def get_appointment_detail(self, appointment_id: int) -> AppointmentListItem:
+
+        def _run() -> AppointmentListItem:
+            row = self.repository.get_appointment_list_row(appointment_id)
+            if row is None:
+                raise ValueError("Cita no encontrada")
+            return AppointmentListItem.model_validate(row)
+
+        return await asyncio.to_thread(_run)
+
     async def update_appointment_status(
         self,
         appointment_id: int,
