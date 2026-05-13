@@ -10,6 +10,7 @@ from typing import Any
 import streamlit as st
 
 from streamlit_app import api_client
+from streamlit_app.panel_navigation import leave_contract_view_to_panel
 
 
 def _detail(payload: Any) -> str:
@@ -43,8 +44,7 @@ def render_contract_read_view(contract_id: int) -> None:
     st.subheader("Contrato firmado")
     st.caption(f"Contrato #{contract_id}")
     if st.button("Volver al panel", key="ctrv_back"):
-        st.query_params.clear()
-        st.rerun()
+        leave_contract_view_to_panel()
 
     ok, code, data = api_client.get_contract(contract_id)
     if not ok or not isinstance(data, dict):

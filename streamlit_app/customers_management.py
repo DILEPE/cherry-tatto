@@ -9,6 +9,7 @@ import streamlit as st
 
 from app.schemas.customer import CUSTOMER_BIRTH_PENDING, SOCIAL_MEDIA_MAX_LEN
 from streamlit_app import api_client
+from streamlit_app.panel_navigation import open_contract_read
 from streamlit_app.customer_sync import social_media_api_to_form_text, social_media_form_text_to_api
 from streamlit_app.validation import (
     mobile_phone_co_10_error,
@@ -642,12 +643,13 @@ def _dialog_contracts_cliente(cliente_id: int, nombre: str) -> None:
             c4.write(str(row.get("appointment_date", "")))
             with c5:
                 cid = int(row.get("id", 0) or 0)
-                st.link_button(
+                if st.button(
                     "Contenido",
-                    url=f"?view=contract_read&contract_id={cid}",
                     use_container_width=True,
                     disabled=cid <= 0,
-                )
+                    key=f"cust_dlg_contract_read_{cid}_{row.get('appointment_id')}",
+                ):
+                    open_contract_read(cid)
     if st.button("Cerrar", use_container_width=True, key="dlg_contracts_close"):
         _close_dialogs()
         st.rerun()

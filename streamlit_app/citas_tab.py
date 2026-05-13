@@ -24,6 +24,7 @@ from app.domain.contract_signing_guard import appointment_must_be_fully_paid_for
 from app.domain.survey_question_helpers import question_type_label_es, question_type_supports_distribution_chart
 from app.schemas.customer import CUSTOMER_BIRTH_PENDING, CustomerCreate
 from streamlit_app import api_client, report_charts
+from streamlit_app.panel_navigation import open_contract_signing
 from streamlit_app.cached_public_api import (
     get_panel_users_assignable_cached,
     get_survey_question_stats_summary_cached,
@@ -1544,13 +1545,14 @@ def _dialog_calendar_day_appointments(
         anular_disabled = appt_id <= 0 or status in {"Cancelada", "Finalizada"}
         b0, b1, b2, b3, b4 = st.columns(5)
         with b0:
-            st.link_button(
+            if st.button(
                 "Firmar contrato",
-                url=f"?view=contract_sign&appointment_id={appt_id}",
                 disabled=firmar_disabled,
                 use_container_width=True,
                 key=f"cal_dlg_firmar_{appt_id}_{y}_{m}_{d}_{idx}",
-            )
+            ):
+                st.session_state.pop("_cal_overflow_day", None)
+                open_contract_signing(appt_id)
         with b1:
             if st.button(
                 "Reprogramar",
@@ -1683,13 +1685,13 @@ def _render_cita_row_actions(r: Dict[str, Any], *, show_firma: bool = True) -> N
                 st.caption(f"Cita #{appt_id}")
                 st.caption(f"Artista: **{_assigned_artist_display_name(r)}**")
             if show_firma:
-                st.link_button(
+                if st.button(
                     "Firmar contrato",
-                    url=f"?view=contract_sign&appointment_id={appt_id}",
                     disabled=firmar_disabled,
                     use_container_width=True,
                     key=f"pop_firmar_{appt_id}",
-                )
+                ):
+                    open_contract_signing(appt_id)
             if st.button(
                 "Reprogramar cita",
                 disabled=repro_disabled,
@@ -1733,13 +1735,13 @@ def _render_cita_row_actions(r: Dict[str, Any], *, show_firma: bool = True) -> N
     if show_firma:
         ln1, ln2 = st.columns(2)
         with ln1:
-            st.link_button(
+            if st.button(
                 "Firmar",
-                url=f"?view=contract_sign&appointment_id={appt_id}",
                 disabled=firmar_disabled,
                 use_container_width=True,
                 key=f"fb_compact_{appt_id}",
-            )
+            ):
+                open_contract_signing(appt_id)
         with ln2:
             if st.button("Mover", disabled=repro_disabled, use_container_width=True, key=f"fb_repr_{appt_id}"):
                 st.session_state["_ap_reprogram_item"] = r

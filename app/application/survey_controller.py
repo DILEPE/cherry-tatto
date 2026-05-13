@@ -5,7 +5,7 @@ from litestar.datastructures import State
 from litestar.exceptions import HTTPException
 
 from app.schemas.common import ApiSuccessResponse
-from app.schemas.survey import SurveyCreate, SurveyRow, survey_create_to_domain
+from app.schemas.survey import SurveyAppointmentLookup, SurveyCreate, SurveyRow, survey_create_to_domain
 
 
 class SurveyController(Controller):
@@ -24,6 +24,19 @@ class SurveyController(Controller):
             )
         except Exception as e:
             raise HTTPException(detail=f"Error: {str(e)}", status_code=500) from e
+
+    @get("/by-appointment/{appointment_id:int}")
+    async def survey_for_appointment(
+        self,
+        appointment_id: int,
+        state: State,
+    ) -> SurveyAppointmentLookup:
+        """Indica si la cita ya tiene encuesta registrada (sin listar todas las encuestas)."""
+        try:
+            survey = await state.service.get_survey_by_appointment(appointment_id)
+            return SurveyAppointmentLookup(found=survey is not None, survey=survey)
+        except Exception as e:
+            raise HTTPException(detail=f"Error al consultar encuesta: {str(e)}", status_code=500) from e
 
     @get("/")
     async def list_surveys(self, state: State) -> list[SurveyRow]:

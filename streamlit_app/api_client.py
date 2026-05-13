@@ -42,6 +42,11 @@ def get_appointments(assigned_panel_user_id: Optional[int] = None) -> Tuple[bool
     return _request("GET", "/api/appointments", params=params)
 
 
+def get_appointment(appointment_id: int) -> Tuple[bool, int, Any]:
+    """Detalle de una cita (mismo formato que cada elemento del listado)."""
+    return _request("GET", f"/api/appointments/{int(appointment_id)}")
+
+
 def post_appointment(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
     return _request("POST", "/api/appointments", json_body=payload)
 
@@ -231,6 +236,11 @@ def post_survey(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
 
 def get_surveys() -> Tuple[bool, int, Any]:
     return _request("GET", "/api/surveys/")
+
+
+def get_survey_for_appointment(appointment_id: int) -> Tuple[bool, int, Any]:
+    """Consulta si existe encuesta para la cita (evita listar todas las encuestas)."""
+    return _request("GET", f"/api/surveys/by-appointment/{int(appointment_id)}")
 
 
 def get_survey_questions(

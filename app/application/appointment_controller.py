@@ -45,6 +45,16 @@ class AppointmentController(Controller):
         except Exception as e:
             raise HTTPException(detail=f"Error al obtener citas: {str(e)}", status_code=500)
 
+    @get("/{appointment_id:int}")
+    async def get_one(self, appointment_id: int, state: State) -> AppointmentListItem:
+        """Detalle de una cita (mismo formato que el listado)."""
+        try:
+            return await state.service.get_appointment_detail(appointment_id)
+        except ValueError as e:
+            raise HTTPException(detail=str(e), status_code=404) from e
+        except Exception as e:
+            raise HTTPException(detail=f"Error al obtener cita: {str(e)}", status_code=500) from e
+
     @post(status_code=status_codes.HTTP_201_CREATED)
     async def create(self, data: AppointmentCreateRequest, state: State) -> AppointmentCreatedResponse:
         """

@@ -94,8 +94,8 @@ API_BASE_URL=http://127.0.0.1:5000
 SERVICE_TYPE_ENUM_VALUES=Tatuaje,Piercing,Cambio,Limpieza
 
 # Login del panel Streamlit (opcional). Valores reconocidos para activar: 1, true, yes, on
-# (sin distinguir mayúsculas). Las firmas y lectura de contrato por URL (?view=contract_sign / contract_read)
-# siguen siendo públicas y no pasan por este login.
+# (sin distinguir mayúsculas). Las rutas ?view=contract_sign y ?view=contract_read son navegación interna
+# del mismo Streamlit; con PANEL_AUTH_ENABLED activo exigen la misma sesión del panel que el resto de la app.
 # PANEL_AUTH_ENABLED=1
 # PANEL_LOGIN_USER=operador
 # PANEL_LOGIN_PASSWORD=elige-una-contraseña-segura
