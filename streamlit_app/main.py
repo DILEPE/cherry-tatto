@@ -121,11 +121,28 @@ def _inject_material_neon_css() -> None:
                         linear-gradient(180deg, #43434e 0%, #3c3c48 42%, #363640 100%);
           }}
           [data-testid="stHeader"] {{ background: rgba(54,54,62,0.94) !important; z-index: 11 !important; }}
-          [data-testid="stSidebar"] {{
+          /* Streamlit ≥1.50: scroll en stSidebarUserContent; overflow en el section exterior rompe el layout. */
+          [data-testid="stSidebar"],
+          section.stSidebar {{
             background: linear-gradient(180deg, #383842 0%, #303038 100%) !important;
             border-right: 1px solid rgba(255,255,255,0.11);
-            position: relative;
-            z-index: 10 !important;
+            overflow: visible !important;
+          }}
+          [data-testid="stSidebarContent"] {{
+            display: flex !important;
+            flex-direction: column !important;
+            min-height: 0 !important;
+            height: 100% !important;
+            max-height: 100vh !important;
+            overflow: hidden !important;
+          }}
+          [data-testid="stSidebarUserContent"] {{
+            flex: 1 1 auto !important;
+            min-height: 0 !important;
+            overflow-y: auto !important;
+            overflow-x: hidden !important;
+            overscroll-behavior: contain;
+            -webkit-overflow-scrolling: touch;
           }}
           div[data-baseweb="tab-highlight"] {{ background-color: #FF007F !important; box-shadow: 0 0 12px rgba(255,0,127,0.45); }}
           [data-baseweb="tab"] {{ color: #e0e0e0 !important; font-weight: 600; }}

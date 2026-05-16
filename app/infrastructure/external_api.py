@@ -22,10 +22,12 @@ class NotificationService:
     """Servicio para comunicarse con webhooks de n8n.
 
     Los recibos PDF (`payment_receipt_pdf`) pueden ir a un webhook dedicado
-    (`receipt_webhook_url`); el resto de eventos usan `webhook_url`.
+    (`receipt_webhook_url`); los consentimientos por procedimiento (`contract_consent_pdf`)
+    pueden usar `contract_consent_webhook_url` (si no, mismo criterio que el recibo).
+    El resto de eventos usan `webhook_url`.
 
-    Los recibos se envían como **multipart/form-data**: archivo binario en el campo **`data`**
-    + campos de texto con los metadatos (nombre, teléfono, montos, etc.).
+    Los PDF con archivo adjunto (`payment_receipt_pdf`, `contract_consent_pdf`) se envían como
+    **multipart/form-data**: binario en el campo **`data`** y metadatos como campos de texto.
     Si no hay PDF válido en `pdf_base64`, se usa JSON como antes.
     """
 
@@ -33,13 +35,21 @@ class NotificationService:
         self,
         webhook_url: Optional[str],
         receipt_webhook_url: Optional[str] = None,
+        contract_consent_webhook_url: Optional[str] = None,
     ):
         self.webhook_url = (webhook_url or "").strip() or None
         self.receipt_webhook_url = (receipt_webhook_url or "").strip() or None
+        self.contract_consent_webhook_url = (contract_consent_webhook_url or "").strip() or None
 
     def _resolve_url(self, event: str) -> Optional[str]:
         if event == "payment_receipt_pdf":
             return self.receipt_webhook_url or self.webhook_url
+        if event == "contract_consent_pdf":
+            return (
+                self.contract_consent_webhook_url
+                or self.receipt_webhook_url
+                or self.webhook_url
+            )
         return self.webhook_url
 
     def notify(self, event: str, data: dict[str, object]) -> bool:
@@ -47,7 +57,7 @@ class NotificationService:
         if not url:
             return False
 
-        if event == "payment_receipt_pdf":
+        if event in ("payment_receipt_pdf", "contract_consent_pdf"):
             b64 = data.get("pdf_base64")
             if isinstance(b64, str) and b64.strip():
                 try:
@@ -56,7 +66,7 @@ class NotificationService:
                     pdf_bytes = b""
                 if pdf_bytes:
                     meta = {k: v for k, v in data.items() if k not in ("pdf_base64", "mime_type")}
-                    fname = str(meta.get("file_name") or "recibo.pdf")
+                    fname = str(meta.get("file_name") or ("consentimiento.pdf" if event == "contract_consent_pdf" else "recibo.pdf"))
                     ts = datetime.datetime.now().isoformat()
                     form_data: dict[str, str] = {
                         "event": event,
@@ -76,7 +86,9 @@ class NotificationService:
                         )
                         return response.status_code == 200
                     except Exception as e:
-                        print(f"Error enviando recibo PDF (multipart) a n8n: {e}")
+                        print(
+                            f"Error enviando PDF (multipart, event={event}) a n8n: {e}"
+                        )
                         return False
 
         payload = {
