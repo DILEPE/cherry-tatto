@@ -3,6 +3,9 @@
 --
 -- Compatibilidad InnoDB (error 1071 en algunos servidores): índices UNIQUE sobre columnas
 -- utf8mb4 largas deben usar prefijo (p. ej. email(191)) si el límite de clave es 767 bytes.
+--
+-- contracts.health_data: LONGTEXT en lugar de tipo JSON nativo para MySQL < 5.7.8 / motores
+-- sin tipo JSON; la API serializa objeto como texto JSON (igual que con columna JSON).
 
 CREATE DATABASE IF NOT EXISTS cherry_tatto
   CHARACTER SET utf8mb4
@@ -89,7 +92,7 @@ CREATE TABLE IF NOT EXISTS contracts (
     appointment_id BIGINT UNSIGNED NOT NULL,
     template_id BIGINT UNSIGNED NULL,
     is_minor BOOLEAN NOT NULL DEFAULT FALSE,
-    health_data JSON NULL,
+    health_data LONGTEXT NULL COMMENT 'Datos de salud (JSON como texto)',
     client_signature LONGTEXT NULL,
     tutor_signature LONGTEXT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
