@@ -649,6 +649,58 @@ class AppointmentRepository:
             if conn:
                 conn.close()
 
+    def list_procedure_consent_labels(self) -> list[str]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT survey_option_label
+                FROM procedure_consent_documents
+                WHERE survey_option_label IS NOT NULL AND TRIM(survey_option_label) <> ''
+                ORDER BY survey_option_label
+                """
+            )
+            rows = cursor.fetchall() or []
+            return [
+                str(r["survey_option_label"]).strip()
+                for r in rows
+                if r.get("survey_option_label") and str(r["survey_option_label"]).strip()
+            ]
+        finally:
+            if conn:
+                conn.close()
+
+    def list_survey_answer_texts_for_appointment(self, appointment_id: int) -> list[str]:
+        """Textos de respuesta guardados para la cita (p. ej. radio/select/checkbox como JSON)."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT sa.answer_text
+                FROM surveys s
+                INNER JOIN survey_answers sa ON sa.survey_id = s.id
+                WHERE s.appointment_id = %s
+                  AND sa.answer_text IS NOT NULL
+                  AND TRIM(sa.answer_text) <> ''
+                ORDER BY sa.question_id ASC, sa.id ASC
+                """,
+                (int(appointment_id),),
+            )
+            out: list[str] = []
+            for r in cursor.fetchall() or []:
+                raw = r.get("answer_text")
+                if raw is None:
+                    continue
+                s = str(raw).strip()
+                if s:
+                    out.append(s)
+            return out
+        finally:
+            if conn:
+                conn.close()
+
     # --- Preguntas de encuesta (configuración) ---
 
     def list_survey_questions(

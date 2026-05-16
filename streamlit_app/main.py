@@ -33,7 +33,7 @@ import streamlit as st
 from streamlit_app import api_client
 from streamlit_app.citas_tab import render_citas_tab, render_reporte_citas_tab
 from streamlit_app.contract_read_view import render_contract_read_view
-from streamlit_app.contract_signing import render_contract_signing_view
+from streamlit_app.contract_signing import render_contract_express_piercing_view, render_contract_signing_view
 from streamlit_app.contracts_admin import render_contract_admin_tab
 from streamlit_app.customers_management import render_customers_management_tab
 from streamlit_app.panel_auth import (
@@ -307,6 +307,10 @@ def main() -> None:
     # requieren sesión del panel (gate anterior). Navegar con botones (panel_navigation), no link_button.
     view = st.query_params.get("view")
     if view == "contract_sign":
+        express_raw = (st.query_params.get("express_piercing") or "").strip().lower()
+        if express_raw in ("1", "true", "yes", "on"):
+            render_contract_express_piercing_view()
+            return
         appt_id_raw = st.query_params.get("appointment_id")
         try:
             appt_id = int(appt_id_raw) if appt_id_raw is not None else 0
