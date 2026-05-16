@@ -1,0 +1,42 @@
+{
+  "name": "status",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "cherry-tatto/status",
+        "options": {
+          "rawBody": true,
+          "responseCode": {
+            "values": {}
+          },
+          "responseData": "{   \"status\": \"ok\",   \"service\": \"n8n\",   \"check\": \"cherry_tattoo_health\",   \"version\": \"1\" }"
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "b7bb6eb7-a82c-420d-8829-b5924520352b",
+      "name": "Webhook",
+      "webhookId": "cbbd0283-f2b7-41a5-9725-c183279dde39"
+    }
+  ],
+  "pinData": {},
+  "connections": {},
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "dc9f361e-d32b-4209-9248-8aa3d8f6280c",
+  "meta": {
+    "instanceId": "b56ae73836276e902eab7260bda1c240d29fb935abb341d8530a9fc2085fe3df"
+  },
+  "id": "StaA2phL74Wxo4HD",
+  "tags": []
+}

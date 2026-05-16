@@ -1,0 +1,150 @@
+{
+  "name": "import procedure consent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cherry-tatto/import-procedure-consent-pdfs",
+        "options": {
+          "responseData": ""
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -496,
+        -112
+      ],
+      "id": "2d900cd1-755d-43b6-a45d-56cc89b0b54c",
+      "name": "Webhook",
+      "webhookId": "b855dcce-5bba-4630-9da5-8d31137b17de"
+    },
+    {
+      "parameters": {
+        "resource": "media",
+        "phoneNumberId": "1107930225741590",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        -288,
+        -112
+      ],
+      "id": "360a3de5-d133-4224-bbf9-41da542d6ece",
+      "name": "Transformacion pdf a id wp",
+      "webhookId": "fc1b442e-b700-4253-a45f-ea016b82ef7c",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "nFu6KkT6PkJuu5zh",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "1107930225741590",
+        "recipientPhoneNumber": "={{ $('Webhook').item.json.body.phone }}",
+        "messageType": "document",
+        "mediaPath": "useMediaId",
+        "mediaId": "={{ $json.id }}",
+        "mediaFilename": "rock-city-threadments",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        -80,
+        -112
+      ],
+      "id": "1793a105-be5b-4ae1-974a-744c645c853b",
+      "name": "Envio pdf cuidados",
+      "webhookId": "22c3c153-6a03-4408-8220-97806acc24c1",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "nFu6KkT6PkJuu5zh",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "1107930225741590",
+        "recipientPhoneNumber": "={{ $('Webhook').item.json.body.phone }}",
+        "textBody": "=Hola {{ $('Webhook').item.json.body.customer_name }} , estos son los cuidados que debes tener en cuenta para tu procedimiento de {{ $('Webhook').item.json.body.procedure_label }}.",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        96,
+        -112
+      ],
+      "id": "a71957e1-9f96-493f-8068-21e80ee35d09",
+      "name": "Envio mensaje cuidados",
+      "webhookId": "3948a5c1-c41e-4246-acf5-eb481d1581f4",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "nFu6KkT6PkJuu5zh",
+          "name": "WhatsApp account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Transformacion pdf a id wp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transformacion pdf a id wp": {
+      "main": [
+        [
+          {
+            "node": "Envio pdf cuidados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Envio pdf cuidados": {
+      "main": [
+        [
+          {
+            "node": "Envio mensaje cuidados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Envio mensaje cuidados": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "2dfa89f1-4445-4fa5-8779-79efa0d2779b",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "b56ae73836276e902eab7260bda1c240d29fb935abb341d8530a9fc2085fe3df"
+  },
+  "id": "Z2LF1IJGmeGYLkh0",
+  "tags": []
+}
