@@ -1,0 +1,135 @@
+{
+  "_note": "Volcado desde panel (mayo 2026), textos y orden revisados. Cargar: python scripts/seed_survey_questions_from_manifest.py --manifest scripts/data/survey_questions_seed_rock_city.json --apply",
+  "_generated_from": "preguntas proporcionadas por usuario (export manual)",
+  "questions": [
+    {
+      "id": 3,
+      "label": "Pregúntale al asesor cómo se llama tu perforación.",
+      "question_type": "select",
+      "options": [
+        "Helix",
+        "Lobulos",
+        "Expansion Lobulos",
+        "Nostril",
+        "Surface",
+        "Microdermal",
+        "Septum",
+        "Labio",
+        "Ombligo",
+        "Pezon",
+        "Ceja",
+        "Conch",
+        "Industrial",
+        "Upper Lobe",
+        "Tragus",
+        "Lengua",
+        "Cristina",
+        "Daith",
+        "Rook",
+        "Antihelix",
+        "Contrahelix",
+        "Flat"
+      ],
+      "sort_order": 1,
+      "contract_kind": "piercing",
+      "is_active": true
+    },
+    {
+      "id": 4,
+      "label": "¿Cuánto es el valor de tu procedimiento?",
+      "question_type": "number",
+      "options": null,
+      "sort_order": 2,
+      "contract_kind": "piercing",
+      "is_active": true
+    },
+    {
+      "id": 5,
+      "label": "¿Tienes tendencia a presentar queloides? Por favor, infórmale al asesor y/o al perforador.",
+      "question_type": "yes_no",
+      "options": null,
+      "sort_order": 3,
+      "contract_kind": "piercing",
+      "is_active": true
+    },
+    {
+      "id": 6,
+      "label": "¿Has comido en las últimas 4 horas? Es importante haber ingerido algún alimento al menos en las 4 horas previas al {service_type}; eso ayuda a la tranquilidad y relajación durante el procedimiento.",
+      "question_type": "yes_no",
+      "options": null,
+      "sort_order": 4,
+      "contract_kind": "both",
+      "is_active": true
+    },
+    {
+      "id": 7,
+      "label": "¿Presentas alergia a alguno de estos elementos? Si es así, por favor indícale al asesor o al manager antes de continuar.",
+      "question_type": "radio",
+      "options": ["Látex", "Jabón", "Yodo", "Alcohol", "Ninguna de las anteriores"],
+      "sort_order": 5,
+      "contract_kind": "both",
+      "is_active": true
+    },
+    {
+      "id": 8,
+      "label": "¿Cómo evaluarías a nuestro asesor y nuestra tienda física?",
+      "question_type": "radio",
+      "options": ["Excelente", "Buena", "Mala"],
+      "sort_order": 6,
+      "contract_kind": "both",
+      "is_active": true
+    },
+    {
+      "id": 9,
+      "label": "¿Cómo calificarías tu experiencia en nuestro estudio?",
+      "question_type": "radio",
+      "options": ["Excelente", "Buena", "Mala"],
+      "sort_order": 7,
+      "contract_kind": "tattoo",
+      "is_active": true
+    },
+    {
+      "id": 10,
+      "label": "¿Cómo fue la atención que recibiste por parte de nuestro equipo?",
+      "question_type": "radio",
+      "options": ["Excelente", "Buena", "Mala"],
+      "sort_order": 8,
+      "contract_kind": "tattoo",
+      "is_active": true
+    },
+    {
+      "id": 11,
+      "label": "¿Cómo fue la atención que recibiste por parte de nuestro equipo?",
+      "question_type": "radio",
+      "options": ["Excelente", "Buena", "Mala"],
+      "sort_order": 9,
+      "contract_kind": "both",
+      "is_active": true
+    },
+    {
+      "id": 12,
+      "label": "¿Qué mejorarías en tu experiencia con nosotros?",
+      "question_type": "textarea",
+      "options": null,
+      "sort_order": 10,
+      "contract_kind": "tattoo",
+      "is_active": true
+    },
+    {
+      "id": 13,
+      "label": "¿Cómo te enteraste de Rock City?",
+      "question_type": "checkbox",
+      "options": [
+        "Instagram",
+        "Facebook",
+        "Google",
+        "Tiktok",
+        "Alguien te recomendó",
+        "Otros"
+      ],
+      "sort_order": 11,
+      "contract_kind": "tattoo",
+      "is_active": true
+    }
+  ]
+}
