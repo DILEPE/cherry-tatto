@@ -1,5 +1,8 @@
 -- Migración 000: estructura base inicial para cherry_tatto
 -- Nota: esta base NO incluye columnas agregadas en migraciones incrementales posteriores.
+--
+-- Compatibilidad InnoDB (error 1071 en algunos servidores): índices UNIQUE sobre columnas
+-- utf8mb4 largas deben usar prefijo (p. ej. email(191)) si el límite de clave es 767 bytes.
 
 CREATE DATABASE IF NOT EXISTS cherry_tatto
   CHARACTER SET utf8mb4
@@ -35,7 +38,7 @@ CREATE TABLE IF NOT EXISTS customers (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     UNIQUE KEY uk_customers_document_number (document_number),
-    UNIQUE KEY uk_customers_email (email)
+    UNIQUE KEY uk_customers_email (email(191))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE INDEX idx_customers_name ON customers (last_name, first_name);
@@ -75,7 +78,7 @@ CREATE TABLE IF NOT EXISTS contract_templates (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
-    UNIQUE KEY uk_tpl_kind_name_version (contract_kind, name, version)
+    UNIQUE KEY uk_tpl_kind_name_version (contract_kind, name(120), version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =========================
