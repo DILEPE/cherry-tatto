@@ -11,12 +11,10 @@ inserta la fila o actualiza label/tipo/opciones/orden/ámbito/activo si ya exist
 Requisitos: migraciones de encuestas aplicadas (`011`+ y columna `contract_kind` de `013`).
 La pregunta **id 3** coincide con `021_survey_question_3_procedure_options.sql` (procedimientos piercing).
 
-Volcar la tabla actual a JSON (por ejemplo antes de migrar de servidor)::
+Para el manifiesto fijo Rock City en disco (``scripts/data/survey_questions_seed_rock_city.json``)::
 
-    python scripts/export_survey_questions_to_manifest.py -o scripts/data/mi_volcado.json
-
-Si en destino **ya hay filas** y solo quieres actualizarlas desde el JSON **sin insertar** nuevas,
-usa ``backfill_survey_questions_existing.py --manifest ... --apply``.
+    python scripts/seed_survey_questions_rock_city.py
+    python scripts/seed_survey_questions_rock_city.py --apply
 
 Uso (desde la raíz del proyecto)::
 
