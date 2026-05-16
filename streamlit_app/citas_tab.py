@@ -33,6 +33,93 @@ from streamlit_app.customer_sync import fetch_customer_by_document
 from streamlit_app.validation import validate_appointment
 
 
+def _booking_customer_create_for_existing_client(
+    snap: Dict[str, Any],
+    *,
+    first_name: str,
+    last_name: str,
+    phone_number: str,
+    email_s: str,
+    document_number: str,
+) -> CustomerCreate:
+    """Fusiona la ficha API (`snap`) con nombre/teléfono/correo editados en el formulario de agendamiento."""
+    bd_raw = snap.get("birth_date")
+    if isinstance(bd_raw, str) and bd_raw.strip():
+        birth_date = date.fromisoformat(bd_raw.strip()[:10])
+    elif isinstance(bd_raw, date):
+        birth_date = bd_raw
+    elif isinstance(bd_raw, datetime):
+        birth_date = bd_raw.date()
+    else:
+        birth_date = CUSTOMER_BIRTH_PENDING
+
+    doc_issue_d: Optional[date] = None
+    doc_issue = snap.get("document_issue_date")
+    if doc_issue is not None and str(doc_issue).strip():
+        if isinstance(doc_issue, str):
+            doc_issue_d = date.fromisoformat(str(doc_issue).strip()[:10])
+        elif isinstance(doc_issue, date):
+            doc_issue_d = doc_issue
+        elif isinstance(doc_issue, datetime):
+            doc_issue_d = doc_issue.date()
+
+    raw_ty = str(snap.get("document_type") or "CC").strip().upper()
+    if raw_ty not in ("CC", "TI", "CE", "PAS"):
+        raw_ty = "CC"
+
+    g_issue: Optional[date] = None
+    g_raw = snap.get("guardian_document_issue_date")
+    if g_raw is not None and str(g_raw).strip():
+        if isinstance(g_raw, str):
+            g_issue = date.fromisoformat(str(g_raw).strip()[:10])
+        elif isinstance(g_raw, date):
+            g_issue = g_raw
+        elif isinstance(g_raw, datetime):
+            g_issue = g_raw.date()
+
+    gdt_clean: Optional[str] = None
+    gdt = snap.get("guardian_document_type")
+    if gdt is not None and str(gdt).strip():
+        u = str(gdt).strip().upper()
+        if u in ("CC", "TI", "CE", "PAS"):
+            gdt_clean = u
+
+    sm_raw = snap.get("social_media")
+    social_media: Optional[str] = None
+    if isinstance(sm_raw, str) and sm_raw.strip():
+        social_media = sm_raw.strip()
+    elif sm_raw is not None and not isinstance(sm_raw, str):
+        social_media = str(sm_raw).strip() or None
+
+    return CustomerCreate(
+        first_name=first_name.strip(),
+        last_name=last_name.strip(),
+        birth_date=birth_date,
+        document_type=raw_ty,  # type: ignore[arg-type]
+        document_number=document_number.strip(),
+        document_issue_date=doc_issue_d,
+        email=email_s,
+        phone_number=phone_number.strip(),
+        address=(str(snap["address"]).strip() if snap.get("address") else None),
+        nationality=(str(snap["nationality"]).strip() if snap.get("nationality") else None),
+        profession=(str(snap["profession"]).strip() if snap.get("profession") else None),
+        social_media=social_media,
+        emergency_contact_name=(
+            str(snap["emergency_contact_name"]).strip() if snap.get("emergency_contact_name") else None
+        ),
+        emergency_contact_phone=(
+            str(snap["emergency_contact_phone"]).strip() if snap.get("emergency_contact_phone") else None
+        ),
+        is_minor=bool(snap.get("is_minor")),
+        guardian_name=(str(snap["guardian_name"]).strip() if snap.get("guardian_name") else None),
+        guardian_document_type=gdt_clean,  # type: ignore[arg-type]
+        guardian_document_number=(
+            str(snap["guardian_document_number"]).strip() if snap.get("guardian_document_number") else None
+        ),
+        guardian_document_issue_date=g_issue,
+    )
+
+
 def _api_error(payload: Any) -> str:
     if isinstance(payload, dict):
         return str(payload.get("detail", payload))
@@ -1047,6 +1134,7 @@ def _init_appt_form_state_once() -> None:
 def _pop_booking_document_session() -> None:
     for k in (
         "_ap_booking_customer_id",
+        "_ap_booking_customer_snapshot",
         "_ap_need_new_customer",
         "_ap_doc_verified",
         "_ap_verify_msg",
@@ -1225,6 +1313,7 @@ def _dialog_agendar_cita() -> None:
                 st.session_state["_ap_need_new_customer"] = False
                 st.session_state["_ap_doc_verified"] = True
                 st.session_state["_ap_verified_doc_number"] = doc_in
+                st.session_state["_ap_booking_customer_snapshot"] = dict(row_f)
                 st.session_state["ap_fn"] = str(row_f.get("first_name") or "")
                 st.session_state["ap_ln"] = str(row_f.get("last_name") or "")
                 st.session_state["ap_phone"] = str(row_f.get("phone_number") or "")
@@ -1400,20 +1489,41 @@ def _dialog_agendar_cita() -> None:
                 st.error("La fecha de la cita no puede ser anterior a hoy.")
                 return
 
+            dep_norm = max(0.0, round(float(deposit), 2))
             appt_payload: Dict[str, Any] = {
                 "name": full_name,
                 "phone": (phone or "").strip(),
                 "service": (service or "").strip(),
                 "date": dt_str,
                 "detail": detail_for_api,
-                "deposit": float(deposit),
+                "deposit": dep_norm,
                 "total_amount": float(total_amount),
-                "pending_balance": float(max(pending_balance, 0)),
+                "pending_balance": float(max(round(float(total_amount) - dep_norm, 2), 0)),
                 "is_priority": bool(st.session_state.get("ap_priority")),
                 "assigned_panel_user_id": aid_int,
             }
             if cust_id is not None:
                 appt_payload["customer_id"] = int(cust_id)
+                snap = st.session_state.get("_ap_booking_customer_snapshot")
+                if not isinstance(snap, dict) or int(snap.get("id") or 0) != int(cust_id):
+                    st.error(
+                        "Los datos del cliente no coinciden con la verificación. "
+                        "Pulsa **Verificar documento** de nuevo."
+                    )
+                    return
+                try:
+                    c_exist = _booking_customer_create_for_existing_client(
+                        snap,
+                        first_name=(fn or "").strip(),
+                        last_name=(ln or "").strip(),
+                        phone_number=(phone or "").strip(),
+                        email_s=email_s,
+                        document_number=doc_in,
+                    )
+                except ValidationError as ve:
+                    st.error(str(ve))
+                    return
+                appt_payload["customer"] = c_exist.model_dump(mode="json")
             elif need_new:
                 doc_ty = str(st.session_state.get("ap_doc_type") or "CC")
                 if doc_ty not in ("CC", "TI", "CE", "PAS"):
@@ -1447,10 +1557,15 @@ def _dialog_agendar_cita() -> None:
                 ok_a, code_a, data_a = api_client.post_appointment(appt_payload)
             if ok_a:
                 st.session_state["_ap_reload"] = True
-                _queue_appointment_action_success(
-                    "**Cita creada.** Se generó el recibo inicial (PDF); puedes descargarlo desde "
-                    "**Recibos** en el menú de la cita."
-                )
+                dep_created = max(0.0, round(float(appt_payload.get("deposit") or 0), 2))
+                if dep_created > 0:
+                    ok_msg = (
+                        "**Cita creada.** Se generó el recibo inicial (PDF); puedes descargarlo desde "
+                        "**Recibos** en el menú de la cita."
+                    )
+                else:
+                    ok_msg = "**Cita creada.** No hubo abono al agendar; no se emitió recibo PDF."
+                _queue_appointment_action_success(ok_msg)
                 _reset_appointment_form_state()
                 st.session_state.pop("_ap_dlg", None)
                 st.rerun()
@@ -1872,7 +1987,7 @@ def _render_cita_row_actions(r: Dict[str, Any], *, show_firma: bool = True) -> N
             disabled=rec_key_dis,
             use_container_width=True,
             key=f"fb_rec_{appt_id}",
-            help="PDF por agenda y por cada abono",
+            help="PDF si hubo abono al agendar y por cada abono adicional",
         ):
             st.session_state["_ap_receipts_item"] = r
             st.rerun()
@@ -2296,8 +2411,9 @@ def _dialog_recibos_cita() -> None:
     name = str(appt.get("customer_name") or appt.get("name") or "").strip()
     st.markdown(f"**Cita #{appt_id}** · {name or '—'}")
     st.caption(
-        "Cada vez que confirmas una cita y cada abono adicional generan un recibo en PDF "
-        "(logo y datos del estudio). Los archivos se guardan en el servidor."
+        "Si al crear la cita hubo abono, se genera un recibo inicial; cada abono adicional, otro PDF "
+        "(logo y datos del estudio). Sin abono al agendar no hay recibo de ese momento. "
+        "Los archivos se guardan en el servidor."
     )
 
     list_key = f"{_AP_RECEIPTS_CACHE_PREFIX}{appt_id}"

@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import base64
 import hmac
+import json
 import os
 import time
 from pathlib import Path
 from typing import Any, Final
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from app.domain.panel_modules import ASSIGNABLE_PANEL_MODULE_KEYS
 from app.domain.panel_user_profile import (
@@ -30,6 +32,187 @@ from streamlit_app import api_client
 _ENV_ON: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
 """Segundos: debe ser ≥ duración CSS de la cortina (0.52s) para no crear widgets antes."""
 _PANEL_CURTAIN_ANIM_DONE_S: Final[float] = 0.58
+
+# Se ejecuta dentro del iframe/documento principal de Streamlit (inyectado con <script>).
+_LOGIN_AUTOFILL_INNER_JS = r"""
+(function () {
+  var NS = "__panelLoginAutofillSync_v5";
+  if (window[NS]) return;
+  window[NS] = true;
+
+  function loginColumn() {
+    return document.querySelector('section.main [data-testid="column"]:has(.panel-login-frame-root)');
+  }
+
+  function visitNode(node, fnInp) {
+    if (!node) return;
+    if (node.nodeType === 1 && node.tagName === "INPUT") {
+      var t = String(node.type || "").toLowerCase();
+      if (t === "text" || t === "password" || t === "email") fnInp(node);
+    }
+    if (node.shadowRoot) visitNode(node.shadowRoot, fnInp);
+    var ch = node.children;
+    if (!ch) return;
+    for (var i = 0; i < ch.length; i++) visitNode(ch[i], fnInp);
+  }
+
+  function eachLoginInput(fn) {
+    var col = loginColumn();
+    var scope = col || document.querySelector("section.main") || document.body;
+    visitNode(scope, fn);
+  }
+
+  function wakeInput(inp) {
+    var v = inp.value;
+    if (v === undefined || v === null) v = "";
+    try {
+      var desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+      if (desc && desc.set) desc.set.call(inp, v);
+    } catch (e1) {}
+    try {
+      var tr = inp._valueTracker;
+      if (tr && typeof tr.setValue === "function") tr.setValue("");
+    } catch (e2) {}
+    try {
+      inp.dispatchEvent(new InputEvent("input", { bubbles: true, cancelable: true }));
+    } catch (e3) {
+      try { inp.dispatchEvent(new Event("input", { bubbles: true })); } catch (e4) {}
+    }
+    try { inp.dispatchEvent(new Event("change", { bubbles: true })); } catch (e5) {}
+  }
+
+  function wakeAll() {
+    eachLoginInput(wakeInput);
+  }
+
+  function burstWake() {
+    wakeAll();
+    try {
+      queueMicrotask(wakeAll);
+    } catch (e0) {}
+    try {
+      requestAnimationFrame(function () {
+        wakeAll();
+        requestAnimationFrame(wakeAll);
+      });
+    } catch (e1) {}
+  }
+
+  function bindAutofillHooks() {
+    eachLoginInput(function (inp) {
+      if (inp.dataset.panelLoginAutofillHook) return;
+      inp.dataset.panelLoginAutofillHook = "1";
+      inp.addEventListener("animationstart", function (ev) {
+        if (ev && ev.animationName && ev.animationName.indexOf("panel-login-autofill-start") !== -1) {
+          wakeInput(inp);
+        }
+      });
+    });
+  }
+
+  function bindPreInteractWake() {
+    var col = loginColumn();
+    if (!col || col.dataset.panelLoginInteractWake) return;
+    col.dataset.panelLoginInteractWake = "1";
+    ["mousedown", "touchstart", "pointerdown", "click"].forEach(function (etype) {
+      col.addEventListener(
+        etype,
+        function () {
+          burstWake();
+        },
+        true
+      );
+    });
+  }
+
+  function bindDocCaptureWake() {
+    if (document.documentElement.dataset.panelLoginDocWake) return;
+    document.documentElement.dataset.panelLoginDocWake = "1";
+    ["pointerdown", "mousedown", "touchstart"].forEach(function (etype) {
+      document.addEventListener(etype, burstWake, true);
+    });
+  }
+
+  function bindFocusSync() {
+    if (document.documentElement.dataset.panelLoginFocusinWake) return;
+    document.documentElement.dataset.panelLoginFocusinWake = "1";
+    document.addEventListener(
+      "focusin",
+      function (ev) {
+        var t = ev.target;
+        if (!t || String(t.tagName || "").toUpperCase() !== "INPUT") return;
+        var col = loginColumn();
+        if (col && col.contains(t)) wakeInput(t);
+      },
+      true
+    );
+  }
+
+  function run() {
+    bindAutofillHooks();
+    bindPreInteractWake();
+    bindDocCaptureWake();
+    bindFocusSync();
+    burstWake();
+  }
+
+  run();
+  setTimeout(run, 0);
+  setTimeout(run, 40);
+  setTimeout(run, 120);
+  setTimeout(run, 400);
+  setTimeout(run, 1000);
+  setTimeout(run, 2200);
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) setTimeout(run, 40);
+  });
+})();
+"""
+
+
+def _login_autofill_component_html() -> str:
+    inner_lit = json.dumps(_LOGIN_AUTOFILL_INNER_JS)
+    return f"""<script>
+(function () {{
+  function appDocument() {{
+    try {{
+      var t = window.top;
+      if (t && t.document && t.document.querySelector('[data-testid="stApp"]')) return t.document;
+    }} catch (e0) {{}}
+    var x = window;
+    for (var i = 0; i < 12; i++) {{
+      try {{
+        if (!x || !x.document) break;
+        var d = x.document;
+        if (d.querySelector('[data-testid="stApp"]')) return d;
+        if (x.parent === x) break;
+        x = x.parent;
+      }} catch (e) {{
+        break;
+      }}
+    }}
+    try {{
+      return window.top.document;
+    }} catch (e2) {{
+      return document;
+    }}
+  }}
+  function injectScript(doc, text) {{
+    try {{
+      var s = doc.createElement("script");
+      s.textContent = text;
+      (doc.head || doc.documentElement).appendChild(s);
+      s.remove();
+    }} catch (e) {{}}
+  }}
+  injectScript(appDocument(), {inner_lit});
+}})();
+</script>"""
+
+
+def _inject_login_autofill_sync_script() -> None:
+    """Sincroniza autofill del navegador con React/Streamlit (script en el documento de la app)."""
+    components.html(_login_autofill_component_html(), height=0, width=0)
 
 
 def panel_auth_enabled() -> bool:
@@ -129,6 +312,13 @@ def _logout_clear_all() -> None:
     st.session_state.pop("panel_mod_radio", None)
     st.session_state.pop("_panel_module_transition", None)
     st.session_state.pop("_panel_just_switched_module", None)
+    for _lk in (
+        "_panel_login_user",
+        "_panel_login_pass",
+        "_panel_db_login_user",
+        "_panel_db_login_pass",
+    ):
+        st.session_state.pop(_lk, None)
     _pop_login_curtain_ui_state()
     _clear_db_panel_identity()
 
@@ -230,7 +420,7 @@ def _inject_login_brand_styles() -> None:
             background: linear-gradient(165deg, rgba(44, 44, 52, 0.96), rgba(28, 28, 34, 0.99));
             border: 1px solid rgba(255, 255, 255, 0.14);
             border-radius: 20px;
-            padding: 1.75rem 1.55rem 2rem !important;
+            padding: 1.5rem 1.35rem 1.75rem !important;
             box-shadow:
               0 0 0 1px rgba(255, 0, 127, 0.14),
               0 20px 56px rgba(0, 0, 0, 0.55),
@@ -241,29 +431,34 @@ def _inject_login_brand_styles() -> None:
             isolation: isolate;
           }
           /* Streamlit pinta los widgets después del markdown en el mismo bloque: sin esto,
-             usuario/contraseña quedan por encima de la cortina y parecen “sobresalir”.
-             pointer-events: none en el wrapper y auto solo en la cortina permite clicar los inputs
-             cuando la cortina está arriba. */
+             usuario/contraseña quedan por debajo de la cortina en el apilamiento.
+             Cuando la cortina está subida (--locked-open), el shell se colapsa para no solapar.
+             Los inputs llevan pointer-events explícitos por si queda algún contenedor que los bloquee. */
           section.main [data-testid="column"]:has(.panel-login-frame-root) div:has(> .panel-login-gate-shell) {
             position: relative;
             z-index: 40 !important;
-            pointer-events: none;
           }
           section.main [data-testid="column"]:has(.panel-login-frame-root) [data-testid="stTextInput"],
           section.main [data-testid="column"]:has(.panel-login-frame-root) [data-testid="stTextInputRootElement"],
           section.main [data-testid="column"]:has(.panel-login-frame-root) .stTextInput {
             position: relative;
-            z-index: 1 !important;
+            z-index: 80 !important;
+            pointer-events: auto !important;
+          }
+          section.main [data-testid="column"]:has(.panel-login-frame-root) [data-testid="stTextInput"] input {
+            pointer-events: auto !important;
           }
           section.main [data-testid="column"]:has(.panel-login-frame-root) [data-testid="baseButton-primary"],
           section.main [data-testid="column"]:has(.panel-login-frame-root) [data-testid="stTabs"] [data-testid="baseButton"] {
             position: relative;
-            z-index: 1 !important;
+            z-index: 80 !important;
+            pointer-events: auto !important;
           }
           section.main [data-testid="column"]:has(.panel-login-frame-root) [data-testid="stSelectbox"],
           section.main [data-testid="column"]:has(.panel-login-frame-root) [data-testid="stExpander"] {
             position: relative;
-            z-index: 1 !important;
+            z-index: 80 !important;
+            pointer-events: auto !important;
           }
           /* Hueco que solapa el formulario; logo completo visible (contain) */
           .panel-login-gate-shell {
@@ -315,11 +510,60 @@ def _inject_login_brand_styles() -> None:
             transform: translateY(-100%) !important;
             pointer-events: none !important;
           }
+          /* Tras subir la cortina ya no debe quedar capa invisible sobre usuario/contraseña */
+          .panel-login-gate-shell:has(.panel-login-gate-curtain--locked-open) {
+            height: 0 !important;
+            min-height: 0 !important;
+            margin-bottom: 0 !important;
+            padding: 0 !important;
+            overflow: hidden !important;
+            pointer-events: none !important;
+            border: none !important;
+            box-shadow: none !important;
+          }
           /* Solo el power controla la cortina (sin hover). */
           /* Registro: más alto para cubrir más campos antes de subir la cortina */
           .panel-login-gate-shell.panel-login-gate-shell--tall {
             height: 540px;
             margin-bottom: -540px;
+          }
+          /* Chrome/Edge: autofill no notifica a React; animación mínima para enganchar animationstart */
+          @keyframes panel-login-autofill-start {
+            from { opacity: 0.999; }
+            to { opacity: 1; }
+          }
+          section.main [data-testid="column"]:has(.panel-login-frame-root) input:-webkit-autofill {
+            animation-name: panel-login-autofill-start;
+            animation-duration: 0.001s;
+          }
+          /* Campos más compactos y centrados en la tarjeta */
+          section.main [data-testid="column"]:has(.panel-login-frame-root) [data-testid="stTextInput"] {
+            max-width: 320px;
+            margin-left: auto !important;
+            margin-right: auto !important;
+          }
+          section.main [data-testid="column"]:has(.panel-login-frame-root) [data-testid="stTextInput"] input {
+            min-height: 2.35rem;
+            font-size: 0.95rem;
+          }
+          section.main [data-testid="column"]:has(.panel-login-frame-root) [data-testid="stForm"] {
+            max-width: 320px;
+            margin-left: auto;
+            margin-right: auto;
+          }
+          section.main [data-testid="column"]:has(.panel-login-frame-root) [data-testid="stFormSubmitButton"] {
+            width: 100%;
+            max-width: 320px;
+            margin-left: auto !important;
+            margin-right: auto !important;
+            display: flex;
+            justify-content: center;
+          }
+          section.main [data-testid="column"]:has(.panel-login-frame-root) [data-testid="stFormSubmitButton"] button {
+            width: 100%;
+            max-width: 320px;
+            min-height: 2.45rem;
+            font-size: 0.95rem;
           }
         </style>
         """,
@@ -399,7 +643,7 @@ def render_login_gate() -> bool:
             st.stop()
 
         user_env, pass_env = cred
-        _, mid, _ = st.columns([1, 3.35, 1])
+        _, mid, _ = st.columns([1.25, 2.15, 1.25])
         with mid:
             _render_login_frame_open()
             _pw1, _pw2 = st.columns([6, 1])
@@ -415,18 +659,26 @@ def render_login_gate() -> bool:
             if co and not _panel_login_curtain_fields_ready():
                 _panel_login_curtain_poll_fragment()
             if co and _panel_login_curtain_fields_ready():
-                st.text_input(
-                    "Usuario",
-                    key="_panel_login_user",
-                    autocomplete="username",
-                )
-                st.text_input(
-                    "Contraseña",
-                    type="password",
-                    key="_panel_login_pass",
-                    autocomplete="current-password",
-                )
-                go = st.button("Entrar", use_container_width=True, type="primary", key="_panel_env_enter_btn")
+                # st.form: al enviar, Streamlit serializa los widgets del bloque junto (mejor con autofill).
+                with st.form("panel_env_login_form", clear_on_submit=False):
+                    # Rellenar desde .env en session_state **antes** del widget: así «Entrar» lee
+                    # valores válidos sin tener que hacer clic en los inputs primero.
+                    if "_panel_login_user" not in st.session_state:
+                        st.session_state["_panel_login_user"] = user_env
+                    if "_panel_login_pass" not in st.session_state:
+                        st.session_state["_panel_login_pass"] = pass_env
+                    st.text_input(
+                        "Usuario",
+                        key="_panel_login_user",
+                        autocomplete="username",
+                    )
+                    st.text_input(
+                        "Contraseña",
+                        type="password",
+                        key="_panel_login_pass",
+                        autocomplete="current-password",
+                    )
+                    go = st.form_submit_button("Entrar", use_container_width=True, type="primary")
 
                 if go:
                     u_input = str(st.session_state.get("_panel_login_user") or "")
@@ -446,10 +698,12 @@ def render_login_gate() -> bool:
                             unsafe_allow_html=True,
                         )
 
+                _inject_login_autofill_sync_script()
+
         st.stop()
 
     # --- Modo base de datos ---
-    _, mid, _ = st.columns([1, 3.35, 1])
+    _, mid, _ = st.columns([1.25, 2.15, 1.25])
     with mid:
         _render_login_frame_open()
         _pw1, _pw2 = st.columns([6, 1])
@@ -469,18 +723,19 @@ def render_login_gate() -> bool:
         with tab_in:
             render_login_gate_door(curtain_locked_open=co)
             if co and _panel_login_curtain_fields_ready():
-                st.text_input(
-                    "Usuario",
-                    key="_panel_db_login_user",
-                    autocomplete="username",
-                )
-                st.text_input(
-                    "Contraseña",
-                    type="password",
-                    key="_panel_db_login_pass",
-                    autocomplete="current-password",
-                )
-                go_in = st.button("Entrar", use_container_width=True, type="primary", key="_panel_db_enter_btn")
+                with st.form("panel_db_login_form", clear_on_submit=False):
+                    st.text_input(
+                        "Usuario",
+                        key="_panel_db_login_user",
+                        autocomplete="username",
+                    )
+                    st.text_input(
+                        "Contraseña",
+                        type="password",
+                        key="_panel_db_login_pass",
+                        autocomplete="current-password",
+                    )
+                    go_in = st.form_submit_button("Entrar", use_container_width=True, type="primary")
 
                 if go_in:
                     u_raw = str(st.session_state.get("_panel_db_login_user") or "").strip()
@@ -581,6 +836,9 @@ def render_login_gate() -> bool:
                                 f"No se pudo registrar: {_http_detail(raw)}"
                                 + (f" (HTTP {code})" if code else "")
                             )
+
+        if co and _panel_login_curtain_fields_ready():
+            _inject_login_autofill_sync_script()
 
     st.stop()
 
