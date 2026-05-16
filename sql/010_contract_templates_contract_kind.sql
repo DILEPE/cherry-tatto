@@ -54,7 +54,7 @@ SET @new_exists := (
 );
 SET @sql := IF(
   @new_exists = 0,
-  'ALTER TABLE contract_templates ADD UNIQUE KEY uk_tpl_kind_name_version (contract_kind, name, version)',
+  'ALTER TABLE contract_templates ADD UNIQUE KEY uk_tpl_kind_name_version (contract_kind, name(120), version)',
   'SELECT ''010: uk_tpl_kind_name_version ya existe'' AS migracion_010_msg'
 );
 PREPARE stmt FROM @sql;
