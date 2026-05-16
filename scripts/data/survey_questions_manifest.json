@@ -1,0 +1,63 @@
+{
+  "questions": [
+    {
+      "id": 1,
+      "label": "¿Cómo calificarías tu experiencia?",
+      "question_type": "rating_1_5",
+      "options": null,
+      "sort_order": 10,
+      "contract_kind": "both",
+      "is_active": true
+    },
+    {
+      "id": 2,
+      "label": "¿Recomendarías nuestro servicio?",
+      "question_type": "yes_no",
+      "options": null,
+      "sort_order": 20,
+      "contract_kind": "both",
+      "is_active": true
+    },
+    {
+      "id": 3,
+      "label": "¿Qué procedimiento te realizaste?",
+      "question_type": "select",
+      "options": [
+        "Helix",
+        "Lobulos",
+        "Expansion Lobulos",
+        "Nostril",
+        "Surface",
+        "Microdermal",
+        "Septum",
+        "Labio",
+        "Ombligo",
+        "Pezon",
+        "Ceja",
+        "Conch",
+        "Industrial",
+        "Upper Lobe",
+        "Tragus",
+        "Lengua",
+        "Cristina",
+        "Daith",
+        "Rook",
+        "Antihelix",
+        "Contrahelix",
+        "Flat"
+      ],
+      "sort_order": 30,
+      "contract_kind": "piercing",
+      "is_active": true
+    },
+    {
+      "id": 4,
+      "label": "Comentarios adicionales",
+      "question_type": "textarea",
+      "options": null,
+      "sort_order": 40,
+      "contract_kind": "both",
+      "is_active": true
+    }
+  ]
+}
