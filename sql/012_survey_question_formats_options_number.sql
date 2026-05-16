@@ -1,12 +1,12 @@
 -- Ampliación: formatos radio, checkbox, select, textarea, texto corto, numérico.
--- Opciones JSON para choice types; columna answer_number en respuestas.
+-- Columna options_json como LONGTEXT (JSON serializado); answer_number en respuestas.
 -- Idempotente: columnas y CHECK solo se aplican si faltan / hace falta reemplazar.
 
 USE cherry_tatto;
 
 SET @db := DATABASE();
 
--- options_json en survey_questions
+-- options_json en survey_questions (texto JSON; sin tipo JSON nativo en el servidor)
 SET @c := (
     SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_SCHEMA = @db
@@ -15,7 +15,7 @@ SET @c := (
 );
 SET @sql := IF(
     @c = 0,
-    'ALTER TABLE survey_questions ADD COLUMN options_json JSON NULL COMMENT ''Opciones (array de strings) para radio, checkbox, select'' AFTER question_type',
+    'ALTER TABLE survey_questions ADD COLUMN options_json LONGTEXT NULL COMMENT ''Opciones (array JSON como texto) para radio, checkbox, select'' AFTER question_type',
     'SELECT 1 AS skip_options_json'
 );
 PREPARE _s FROM @sql;

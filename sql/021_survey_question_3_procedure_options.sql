@@ -5,9 +5,7 @@
 
 USE cherry_tatto;
 
+-- Texto JSON válido (sin CAST AS JSON: compatible si la columna es LONGTEXT o servidor sin tipo JSON).
 UPDATE survey_questions
-SET options_json = CAST(
-    '["Helix","Lobulos","Expansion Lobulos","Nostril","Surface","Microdermal","Septum","Labio","Ombligo","Pezon","Ceja","Conch","Industrial","Upper Lobe","Tragus","Lengua","Cristina","Daith","Rook","Antihelix","Contrahelix","Flat"]'
-    AS JSON
-)
+SET options_json = '["Helix","Lobulos","Expansion Lobulos","Nostril","Surface","Microdermal","Septum","Labio","Ombligo","Pezon","Ceja","Conch","Industrial","Upper Lobe","Tragus","Lengua","Cristina","Daith","Rook","Antihelix","Contrahelix","Flat"]'
 WHERE id = 3;
