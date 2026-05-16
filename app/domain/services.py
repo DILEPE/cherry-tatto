@@ -25,7 +25,11 @@ from app.domain.models import (
 from app.domain.panel_user_profile import PANEL_ROLE_LABEL_ES
 from app.domain.panel_modules import ASSIGNABLE_PANEL_MODULE_KEYS
 from app.domain.panel_passwords import hash_password, verify_password
-from app.domain.payment_receipt_pdf import PaymentReceiptPdfContext, build_payment_receipt_pdf
+from app.domain.payment_receipt_pdf import (
+    PAYMENT_RECEIPT_N8N_TEMPLATE_KEY,
+    PaymentReceiptPdfContext,
+    build_payment_receipt_pdf,
+)
 from app.domain.survey_question_helpers import (
     QUESTION_TYPES_NEEDING_OPTIONS,
     parse_options_json,
@@ -72,6 +76,49 @@ class BusinessLogicService:
         self.notifier = notifier
         self.panel_user_repo = panel_user_repository
 
+    def _payment_receipt_pdf_webhook_payload(
+        self,
+        *,
+        appointment_id: int,
+        receipt_id: int,
+        customer_id: Optional[int],
+        customer_name: str,
+        phone: str,
+        kind: str,
+        appointment_payment_id: Optional[int],
+        amount: float,
+        payment_note: str,
+        file_name: str,
+        pdf_bytes: bytes,
+    ) -> dict[str, object]:
+        """Payload único para `payment_receipt_pdf` → n8n (sustituye al PDF tipo «recibo Cherry» anterior)."""
+        return {
+            "appointment_id": appointment_id,
+            "receipt_id": receipt_id,
+            "customer_id": customer_id,
+            "customer_name": customer_name,
+            "phone": phone,
+            "kind": kind,
+            "appointment_payment_id": appointment_payment_id,
+            "amount": amount,
+            "payment_note": payment_note,
+            "file_name": file_name,
+            "mime_type": "application/pdf",
+            "pdf_template": PAYMENT_RECEIPT_N8N_TEMPLATE_KEY,
+            "pdf_base64": base64.standard_b64encode(pdf_bytes).decode("ascii"),
+        }
+
+    def _schedule_n8n_notify(self, event: str, payload: dict[str, object]) -> None:
+        """Programa `_async_notify` y registra fallos (create_task oculta excepciones si no se espera la tarea)."""
+
+        async def _runner() -> None:
+            try:
+                await self._async_notify(event, payload)
+            except Exception:
+                logger.exception("Fallo al notificar n8n en segundo plano (event=%s)", event)
+
+        asyncio.create_task(_runner())
+
     def _issue_payment_receipt(
         self,
         appointment_id: int,
@@ -85,15 +132,38 @@ class BusinessLogicService:
 
         Devuelve ``(receipt_id, pdf_bytes, file_name)`` o ``(None, None, None)`` si falla la cita.
         """
+        if float(receipt_amount or 0) <= 0:
+            return None, None, None
         appt = self.repository.get_by_id(appointment_id)
         if appt is None:
             return None, None, None
         raw_cust = getattr(appt, "customer_id", None)
         customer_id = int(raw_cust) if raw_cust is not None else None
         kind_label = "Abono adicional" if kind == "abono" else "Agendamiento / primer abono"
+
+        rows_pay = self.repository.list_payments_by_appointment(appointment_id)
+        payment_history: list[tuple[float, Optional[str]]] = [
+            (float(r["amount"]), str(r["note"]).strip() if r.get("note") else None) for r in rows_pay
+        ]
+
+        client_name = str(getattr(appt, "name", "") or "").strip()
+        client_phone = str(getattr(appt, "phone", "") or "").strip()
+        email_s = ""
+        if customer_id is not None:
+            crow = self.customers.get_by_id(int(customer_id))
+            if crow:
+                email_s = str(crow.get("email") or "").strip()
+                if not client_name:
+                    fn = str(crow.get("first_name") or "").strip()
+                    ln = str(crow.get("last_name") or "").strip()
+                    client_name = f"{fn} {ln}".strip()
+                if not client_phone:
+                    client_phone = str(crow.get("phone_number") or "").strip()
+
         ctx = PaymentReceiptPdfContext(
-            client_name=str(getattr(appt, "name", "") or ""),
-            client_phone=str(getattr(appt, "phone", "") or ""),
+            appointment_id=int(appointment_id),
+            client_name=client_name,
+            client_phone=client_phone,
             appointment_when=str(getattr(appt, "date", "") or ""),
             service=str(getattr(appt, "service", "") or ""),
             detail=str(getattr(appt, "detail", "") or ""),
@@ -104,9 +174,18 @@ class BusinessLogicService:
             kind_label=kind_label,
             issued_at=datetime.now(),
             payment_note=payment_note,
+            client_email=email_s,
+            payment_history=payment_history,
         )
-        pdf_bytes = build_payment_receipt_pdf(ctx)
-        file_name = f"recibo_cita_{appointment_id}_{int(datetime.now().timestamp() * 1000)}.pdf"
+        try:
+            pdf_bytes = build_payment_receipt_pdf(ctx)
+        except Exception:
+            logger.exception(
+                "Fallo al generar orden de trabajo PDF (cita id=%s). Comprueba pymupdf.",
+                appointment_id,
+            )
+            return None, None, None
+        file_name = f"orden_trabajo_cita_{appointment_id}_{int(datetime.now().timestamp() * 1000)}.pdf"
         rid = self.repository.insert_payment_receipt(
             appointment_id,
             customer_id,
@@ -130,6 +209,9 @@ class BusinessLogicService:
         """
         Crea cita. Si viene `customer` (dict), valida con Pydantic y hace upsert por documento.
         Si viene `customer_id`, verifica existencia. Usa transacción para cliente + cita.
+
+        Recibo PDF inicial: solo si el abono al agendar es **estrictamente mayor que cero**
+        (sin movimiento en historial ni webhook `payment_receipt_pdf` si el abono es 0).
         """
         resolved_type = resolve_service_type(data.service)
 
@@ -150,10 +232,31 @@ class BusinessLogicService:
 
         await asyncio.to_thread(_pre_validate)
 
+        dep_round = max(0.0, round(float(data.deposit or 0), 2))
+        tot_round = max(0.0, round(float(data.total_amount or 0), 2))
+        pend_round = max(0.0, round(tot_round - dep_round, 2))
+        data.deposit = dep_round
+        data.total_amount = tot_round
+        data.pending_balance = pend_round
+
         def _sync_register() -> tuple[int, Optional[int]]:
             with self.repository.db.transaction() as conn:
                 resolved_id: Optional[int] = data.customer_id
-                if data.customer is not None:
+                if data.customer_id is not None:
+                    cid = int(data.customer_id)
+                    row = self.customers.get_by_id(cid, conn)
+                    if row is None:
+                        raise ValueError(f"Cliente id={cid} no encontrado.")
+                    resolved_id = cid
+                    if data.customer is not None:
+                        c = CustomerCreate.model_validate(data.customer)
+                        doc_existing = str(row.get("document_number") or "").strip()
+                        if str(c.document_number).strip() != doc_existing:
+                            raise ValueError(
+                                "El documento enviado no coincide con el cliente vinculado a la cita."
+                            )
+                        self.customers.update(cid, CustomerUpdate(**c.model_dump()), conn)
+                elif data.customer is not None:
                     c = CustomerCreate.model_validate(data.customer)
                     resolved_id = self.customers.upsert_by_document(c, conn)
                 elif resolved_id is not None:
@@ -169,13 +272,14 @@ class BusinessLogicService:
                 return new_id, resolved_id
 
         new_id, customer_id = await asyncio.to_thread(_sync_register)
+        deposit_amt = float(data.deposit or 0)
         initial_pay_id: Optional[int] = None
-        if data.deposit > 0:
+        if deposit_amt > 0:
             try:
                 initial_pay_id = await asyncio.to_thread(
                     self.repository.insert_payment_ledger_row_only,
                     new_id,
-                    float(data.deposit),
+                    deposit_amt,
                     "Abono inicial al agendar",
                 )
             except Exception:
@@ -183,45 +287,40 @@ class BusinessLogicService:
                     "No fue posible registrar abono inicial en historial para cita id=%s",
                     new_id,
                 )
-        try:
-            receipt_out = await asyncio.to_thread(
-                lambda: self._issue_payment_receipt(
-                    new_id,
-                    kind="inicial",
-                    appointment_payment_id=initial_pay_id,
-                    receipt_amount=float(data.deposit),
-                    payment_note=(
-                        "Abono inicial al agendar"
-                        if data.deposit > 0
-                        else "Confirmación de cita"
-                    ),
+        receipt_out: tuple[Optional[int], Optional[bytes], Optional[str]] = (None, None, None)
+        if deposit_amt > 0:
+            try:
+                receipt_out = await asyncio.to_thread(
+                    lambda: self._issue_payment_receipt(
+                        new_id,
+                        kind="inicial",
+                        appointment_payment_id=initial_pay_id,
+                        receipt_amount=deposit_amt,
+                        payment_note="Abono inicial al agendar",
+                    )
                 )
-            )
-        except Exception:
-            logger.exception("No se pudo emitir recibo inicial para cita id=%s", new_id)
-            receipt_out = (None, None, None)
+            except Exception:
+                logger.exception("No se pudo emitir recibo inicial para cita id=%s", new_id)
+                receipt_out = (None, None, None)
 
         rid, pdf_b, fname = receipt_out
-        if rid and pdf_b:
-            receipt_payload: dict[str, object] = {
-                "appointment_id": new_id,
-                "receipt_id": rid,
-                "customer_id": customer_id,
-                "customer_name": str(data.name or ""),
-                "phone": str(data.phone or ""),
-                "kind": "inicial",
-                "appointment_payment_id": initial_pay_id,
-                "amount": float(data.deposit),
-                "payment_note": (
-                    "Abono inicial al agendar"
-                    if data.deposit > 0
-                    else "Confirmación de cita"
-                ),
-                "file_name": fname or "recibo.pdf",
-                "mime_type": "application/pdf",
-                "pdf_base64": base64.standard_b64encode(pdf_b).decode("ascii"),
-            }
-            asyncio.create_task(self._async_notify("payment_receipt_pdf", receipt_payload))
+        queued_initial_receipt_pdf = False
+        if rid and pdf_b and deposit_amt > 0 and len(pdf_b) > 0:
+            receipt_payload = self._payment_receipt_pdf_webhook_payload(
+                appointment_id=new_id,
+                receipt_id=rid,
+                customer_id=customer_id,
+                customer_name=str(data.name or ""),
+                phone=str(data.phone or ""),
+                kind="inicial",
+                appointment_payment_id=initial_pay_id,
+                amount=deposit_amt,
+                payment_note="Abono inicial al agendar",
+                file_name=fname or "orden_trabajo.pdf",
+                pdf_bytes=pdf_b,
+            )
+            self._schedule_n8n_notify("payment_receipt_pdf", receipt_payload)
+            queued_initial_receipt_pdf = True
 
         payload: dict[str, object] = {
             "id": new_id,
@@ -230,6 +329,10 @@ class BusinessLogicService:
             "service": data.service,
             "date": data.date,
             "customer_id": customer_id,
+            "deposit": float(data.deposit or 0),
+            "total_amount": float(data.total_amount or 0),
+            "pending_balance": float(data.pending_balance or 0),
+            "payment_receipt_pdf_webhook_enqueued": queued_initial_receipt_pdf,
         }
         asyncio.create_task(self._async_notify("appointment_created", payload))
         return new_id, customer_id
@@ -590,24 +693,23 @@ class BusinessLogicService:
             receipt_out = (None, None, None)
 
         rid, pdf_b, fname = receipt_out
-        if rid and pdf_b:
+        if rid and pdf_b and len(pdf_b) > 0:
             raw_cust = getattr(appointment, "customer_id", None)
             cid_pdf = int(raw_cust) if raw_cust is not None else None
-            receipt_payload = {
-                "appointment_id": appointment_id,
-                "receipt_id": rid,
-                "customer_id": cid_pdf,
-                "customer_name": str(getattr(appointment, "name", "") or ""),
-                "phone": str(getattr(appointment, "phone", "") or ""),
-                "kind": "abono",
-                "appointment_payment_id": pay_id,
-                "amount": float(amount),
-                "payment_note": note or "",
-                "file_name": fname or "recibo.pdf",
-                "mime_type": "application/pdf",
-                "pdf_base64": base64.standard_b64encode(pdf_b).decode("ascii"),
-            }
-            asyncio.create_task(self._async_notify("payment_receipt_pdf", receipt_payload))
+            receipt_payload = self._payment_receipt_pdf_webhook_payload(
+                appointment_id=appointment_id,
+                receipt_id=rid,
+                customer_id=cid_pdf,
+                customer_name=str(getattr(appointment, "name", "") or ""),
+                phone=str(getattr(appointment, "phone", "") or ""),
+                kind="abono",
+                appointment_payment_id=pay_id,
+                amount=float(amount),
+                payment_note=note or "",
+                file_name=fname or "orden_trabajo.pdf",
+                pdf_bytes=pdf_b,
+            )
+            self._schedule_n8n_notify("payment_receipt_pdf", receipt_payload)
         return pay_id
 
     async def list_appointment_payment_receipts(self, appointment_id: int) -> list[dict[str, object]]:

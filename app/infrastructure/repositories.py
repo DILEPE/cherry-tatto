@@ -1,4 +1,5 @@
 import json
+from datetime import date, datetime
 from typing import Any, Optional
 from app.domain.models import (
     AppointmentCreate,
@@ -13,7 +14,18 @@ class AppointmentRepository:
     """
     Capa de persistencia: Gestiona SQL para citas, contratos y plantillas.
     """
-    
+
+    @staticmethod
+    def _appointment_datetime_sql_string(val: object) -> str:
+        """Serializa valor MySQL DATE/DATETIME a texto estable para capas superiores (PDF, API)."""
+        if val is None:
+            return ""
+        if isinstance(val, datetime):
+            return val.strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(val, date):
+            return f"{val.strftime('%Y-%m-%d')} 09:00:00"
+        return str(val).strip()
+
     def __init__(self, db_manager):
         self.db = db_manager
 
@@ -261,18 +273,18 @@ class AppointmentRepository:
                 # Retornamos un objeto genérico o mapeado para el servicio
                 from types import SimpleNamespace
                 return SimpleNamespace(
-                    id=res['id'],
-                    name=res['customer_name'],
-                    phone=res['phone'],
-                    service=res['service_type'],
-                    service_type=res['service_type'],
-                    date=str(res['appointment_date']),
-                    status=res.get('status'),
-                    deposit=float(res.get('deposit') or 0),
-                    total_amount=float(res.get('total_amount') or 0),
-                    pending_balance=float(res.get('pending_balance') or 0),
-                    customer_id=res.get('customer_id'),
-                    detail=(res.get('detail') or '') or '',
+                    id=res["id"],
+                    name=(res.get("customer_name") or "") or "",
+                    phone=(res.get("phone") or "") or "",
+                    service=(res.get("service_type") or "") or "",
+                    service_type=(res.get("service_type") or "") or "",
+                    date=self._appointment_datetime_sql_string(res.get("appointment_date")),
+                    status=res.get("status"),
+                    deposit=float(res.get("deposit") or 0),
+                    total_amount=float(res.get("total_amount") or 0),
+                    pending_balance=float(res.get("pending_balance") or 0),
+                    customer_id=res.get("customer_id"),
+                    detail=(res.get("detail") or "") or "",
                 )
             return None
         finally:

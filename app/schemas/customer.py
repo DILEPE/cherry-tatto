@@ -36,7 +36,8 @@ _SOCIAL_MEDIA_DESCRIPTION = (
     f"Texto plano (redes o contacto), máximo {SOCIAL_MEDIA_MAX_LEN} caracteres. No es JSON."
 )
 CUSTOMER_EMBEDDED_IN_APPOINTMENT_DESCRIPTION = (
-    "Objeto para crear el cliente al mismo tiempo que la cita (excluyente con `customer_id` si ya existe). "
+    "Sin `customer_id`: crea o fusiona el cliente por documento (`upsert`). "
+    "Con `customer_id`: actualiza la ficha del cliente si el payload coincide en `document_number`. "
     f"Si aún no se conoce el cumpleaños: enviar `birth_date=\"{CUSTOMER_BIRTH_PENDING_ISO}\"`, `is_minor=false`, "
     "sin `document_issue_date`; `document_type` puede ser TI u otros. Completar datos reales después vía `PUT /api/customers/{{id}}`."
 )

@@ -35,7 +35,9 @@ DB_USER = os.getenv("DB_USER")
 DB_PASS = os.getenv("DB_PASSWORD")
 DB_NAME = os.getenv("DB_NAME", "inkmanager_db")
 N8N_URL = os.getenv("N8N_WEBHOOK_URL")
-# Webhook dedicado para recibos PDF (event payment_receipt_pdf). Si no está definido, usa N8N_WEBHOOK_URL.
+# Webhook dedicado para PDF de abonos (event payment_receipt_pdf). Si no está definido, usa N8N_WEBHOOK_URL.
+# Modo envío `payment_receipt_pdf`: multipart por defecto (WhatsApp / binario «data» en n8n).
+# Solo JSON con pdf_base64: N8N_PAYMENT_RECEIPT_TRANSPORT=json
 N8N_RECEIPT_WEBHOOK_URL = os.getenv("N8N_RECEIPT_WEBHOOK_URL")
 # Webhook para PDF de consentimiento por procedimiento (event contract_consent_pdf). Si no está definido,
 # se usa N8N_RECEIPT_WEBHOOK_URL y luego N8N_WEBHOOK_URL.
