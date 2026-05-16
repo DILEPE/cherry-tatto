@@ -1,4 +1,4 @@
--- Idempotente: alinea opciones de encuesta (pregunta 3) y renombra consentimiento Nostry → Nostril.
+-- Idempotente: alinea opciones de encuesta (pregunta 3); renombra Nostry→Nostril y DELETE no-op si ya estaba aplicado.
 -- Ejecutar si ya tenías datos cargados con la versión anterior de 021/import.
 
 USE cherry_tatto;

@@ -1,5 +1,6 @@
 -- Documentos PDF de consentimiento por tipo de procedimiento (opción de encuesta → PDF en base64).
 -- Orden: tras migraciones de encuestas (011+).
+-- Idempotente: CREATE TABLE IF NOT EXISTS.
 
 USE cherry_tatto;
 

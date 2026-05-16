@@ -1,5 +1,5 @@
 -- Campos financieros para control de cita.
--- Ejecutar una vez en bases existentes.
+-- Idempotente: columnas condicionales; los UPDATE son seguros al repetir.
 
 SET @has_total := (
     SELECT COUNT(*)

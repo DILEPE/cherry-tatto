@@ -1,4 +1,5 @@
 -- Permisos por módulo del panel (usuarios que no son administrador).
+-- Idempotente: CREATE TABLE IF NOT EXISTS.
 
 USE cherry_tatto;
 

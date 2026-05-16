@@ -1,5 +1,6 @@
 -- Recibos de pago en PDF por cita (vinculados opcionalmente a fila de appointment_payments).
 -- Ejecutar tras 006_appointment_payments_traceability.sql (tabla appointment_payments).
+-- Idempotente: CREATE TABLE IF NOT EXISTS.
 
 CREATE TABLE IF NOT EXISTS appointment_payment_receipts (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

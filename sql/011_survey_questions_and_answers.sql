@@ -1,5 +1,6 @@
 -- Preguntas configurables de encuesta y respuestas por envío (survey).
 -- Orden: tras 010_contract_templates_contract_kind.sql
+-- Idempotente: CREATE TABLE IF NOT EXISTS; MODIFY surveys.id puede repetirse.
 --
 -- Si al crear survey_answers obtienes el error 3780 (columnas incompatibles en FK),
 -- suele ser porque surveys.id no coincide en signo/tipo con este repo (000_initial usa

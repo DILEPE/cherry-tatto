@@ -1,5 +1,5 @@
 -- social_media: columna texto plano (50 caracteres), sin JSON.
--- Ejecutar sobre la base del proyecto (p. ej. cherry_tatto).
+-- Idempotente: MODIFY puede repetirse; UPDATE solo afecta filas con datos.
 
 USE cherry_tatto;
 

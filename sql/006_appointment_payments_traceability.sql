@@ -1,5 +1,5 @@
 -- Trazabilidad de abonos por cita.
--- Ejecutar una vez en bases existentes.
+-- Idempotente: CREATE TABLE IF NOT EXISTS; el INSERT ignora citas ya migradas al historial.
 -- Usa el mismo tipo de appointments.id para evitar incompatibilidades de FK.
 
 SET @appt_id_type := (

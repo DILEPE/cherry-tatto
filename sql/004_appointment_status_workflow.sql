@@ -1,5 +1,5 @@
 -- Estandariza estados de citas para flujo operativo.
--- Ejecutar una vez en bases existentes.
+-- Idempotente: el ADD COLUMN es condicional; MODIFY y UPDATE pueden ejecutarse más de una vez.
 
 SET @has_status := (
     SELECT COUNT(*)
