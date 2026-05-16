@@ -1,0 +1,150 @@
+{
+  "name": "appointments receipt",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cherry-tatto/receipt",
+        "options": {
+          "responseData": ""
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -496,
+        -112
+      ],
+      "id": "ab0db02a-b8d7-4fb6-8876-e5fc701582d8",
+      "name": "Webhook",
+      "webhookId": "4ee1ef9d-d382-446f-8a4e-b09c3fb2ae38"
+    },
+    {
+      "parameters": {
+        "resource": "media",
+        "phoneNumberId": "1107930225741590",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        -288,
+        -112
+      ],
+      "id": "957abf5f-93c9-4b8d-bcc0-813e4e6acc1d",
+      "name": "Transformacion pdf a id wp",
+      "webhookId": "dc59c007-95b1-451d-b3d7-f0bfabcffadd",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "nFu6KkT6PkJuu5zh",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "1107930225741590",
+        "recipientPhoneNumber": "={{ $('Webhook').item.json.body.phone }}",
+        "messageType": "document",
+        "mediaPath": "useMediaId",
+        "mediaId": "={{ $json.id }}",
+        "mediaFilename": "cherry-tatto-receipt",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        -80,
+        -112
+      ],
+      "id": "8c113291-d97c-463b-8242-2d0582ac5eac",
+      "name": "Envio archivo comprobante",
+      "webhookId": "f3db27ff-d939-46bb-ab38-30260119e285",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "nFu6KkT6PkJuu5zh",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "1107930225741590",
+        "recipientPhoneNumber": "={{ $('Webhook').item.json.body.phone }}",
+        "textBody": "=Hola  {{ $('Webhook').item.json.body.customer_name }}, este es tu recibo de pago del abonono emitido el dia {{\n  new Date($('Webhook').item.json.body.timestamp.replace(\" \", \"T\"))\n    .toLocaleString(\"es-CO\", {\n      day: \"2-digit\",\n      month: \"long\",\n      year: \"numeric\"\n    })\n}}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        96,
+        -112
+      ],
+      "id": "2d872804-7852-4553-abda-dbb0e9852b08",
+      "name": "Envio mensaje comprobante",
+      "webhookId": "d9750d98-d1b1-4998-99ab-91d5d675a0bf",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "nFu6KkT6PkJuu5zh",
+          "name": "WhatsApp account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Transformacion pdf a id wp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transformacion pdf a id wp": {
+      "main": [
+        [
+          {
+            "node": "Envio archivo comprobante",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Envio archivo comprobante": {
+      "main": [
+        [
+          {
+            "node": "Envio mensaje comprobante",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Envio mensaje comprobante": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "a0ab5c63-e3c2-43a8-98ab-b01100edeb94",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "b56ae73836276e902eab7260bda1c240d29fb935abb341d8530a9fc2085fe3df"
+  },
+  "id": "UMjIifopOCDTVYGQ",
+  "tags": []
+}
