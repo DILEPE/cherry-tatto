@@ -19,12 +19,13 @@ from app.domain.contract_kinds import (
     SCOPE_LABEL_ES,
     appointment_to_contract_kind,
     service_type_requires_contract,
+    service_type_to_contract_kind,
 )
 from app.domain.contract_signing_guard import appointment_must_be_fully_paid_for_contract
 from app.domain.survey_question_helpers import question_type_label_es, question_type_supports_distribution_chart
 from app.schemas.customer import CUSTOMER_BIRTH_PENDING, CustomerCreate
 from streamlit_app import api_client, report_charts
-from streamlit_app.panel_navigation import open_contract_signing
+from streamlit_app.panel_navigation import open_contract_express_piercing, open_contract_signing
 from streamlit_app.cached_public_api import (
     get_panel_users_assignable_cached,
     get_survey_question_stats_summary_cached,
@@ -1161,10 +1162,28 @@ def _reset_appointment_form_state() -> None:
         "ap_doc_type",
         "ap_assigned_staff_id",
         "ap_duration_slots",
+        "ex_full_name",
     ):
         st.session_state.pop(key, None)
     st.session_state["_ap_form_ready"] = False
     _pop_booking_document_session()
+
+
+def _initial_receipt_success_message(dep_created: float, service_str: str) -> str:
+    """Texto tras crear cita: piercing no envía recibo PDF inicial aunque haya abono."""
+    dep_created = max(0.0, round(float(dep_created or 0), 2))
+    if dep_created <= 0:
+        return "**Cita creada.** No hubo abono al agendar; no se emitió recibo PDF."
+    resolved = resolve_service_type((service_str or "").strip())
+    if service_type_to_contract_kind(resolved) == "piercing":
+        return (
+            "**Cita creada.** Servicio de **piercing**: el abono quedó registrado; **no se envía recibo PDF** "
+            "al agendar (solo la notificación de la cita). Los abonos adicionales pueden generar recibo."
+        )
+    return (
+        "**Cita creada.** Se generó el recibo inicial (PDF); puedes descargarlo desde "
+        "**Recibos** en el menú de la cita."
+    )
 
 
 @st.dialog("Agendar cita", width="large", dismissible=False)
@@ -1558,13 +1577,7 @@ def _dialog_agendar_cita() -> None:
             if ok_a:
                 st.session_state["_ap_reload"] = True
                 dep_created = max(0.0, round(float(appt_payload.get("deposit") or 0), 2))
-                if dep_created > 0:
-                    ok_msg = (
-                        "**Cita creada.** Se generó el recibo inicial (PDF); puedes descargarlo desde "
-                        "**Recibos** en el menú de la cita."
-                    )
-                else:
-                    ok_msg = "**Cita creada.** No hubo abono al agendar; no se emitió recibo PDF."
+                ok_msg = _initial_receipt_success_message(dep_created, str(appt_payload.get("service") or ""))
                 _queue_appointment_action_success(ok_msg)
                 _reset_appointment_form_state()
                 st.session_state.pop("_ap_dlg", None)
@@ -2411,9 +2424,9 @@ def _dialog_recibos_cita() -> None:
     name = str(appt.get("customer_name") or appt.get("name") or "").strip()
     st.markdown(f"**Cita #{appt_id}** · {name or '—'}")
     st.caption(
-        "Si al crear la cita hubo abono, se genera un recibo inicial; cada abono adicional, otro PDF "
-        "(logo y datos del estudio). Sin abono al agendar no hay recibo de ese momento. "
-        "Los archivos se guardan en el servidor."
+        "Si al crear la cita hubo abono y el servicio es **tatuaje** (u otro no piercing), se genera un recibo inicial; "
+        "en **piercing / limpieza / cambio** no se envía recibo PDF al agendar (solo notificación de cita). "
+        "Cada abono adicional puede generar otro PDF. Los archivos se guardan en el servidor."
     )
 
     list_key = f"{_AP_RECEIPTS_CACHE_PREFIX}{appt_id}"
@@ -2678,6 +2691,14 @@ def _inject_citas_shared_styles() -> None:
             font-weight: 500;
             color: #e2e8f0;
             white-space: nowrap;
+        }
+        /* Botones primary en área principal (p. ej. Cita express): relleno rosa marca */
+        [data-testid="stMain"] button[data-testid="baseButton-primary"] {
+            background-image: linear-gradient(180deg, #ff5fb8 0%, #ff007f 52%, #d90064 100%) !important;
+            background-color: #ff007f !important;
+            color: #ffffff !important;
+            border: 1px solid rgba(255, 210, 235, 0.92) !important;
+            box-shadow: 0 0 18px rgba(255, 0, 127, 0.38) !important;
         }
         </style>
         """,
@@ -3157,7 +3178,24 @@ def render_citas_tab() -> None:
     ):
         _render_citas_color_legend()
 
-    st.markdown("##### Filtros del calendario")
+    filt_head_l, filt_head_r = st.columns([4.2, 1.35])
+    with filt_head_l:
+        st.markdown("##### Filtros del calendario")
+    with filt_head_r:
+        _cex_disabled = _panel_is_technician_role()
+        if st.button(
+            "Cita express",
+            type="primary",
+            use_container_width=True,
+            disabled=_cex_disabled,
+            key="btn_cita_express_cal_header",
+            help=(
+                "Piercing: agenda con abono completo, alta de cliente, encuesta de piercing y firma del contrato."
+                if not _cex_disabled
+                else "Los tatuadores y perforadores no pueden iniciar este flujo desde aquí."
+            ),
+        ):
+            open_contract_express_piercing()
     cf1, cf2, cf3 = st.columns([1.3, 1.0, 1.0])
     with cf1:
         st.text_input("Filtrar nombre", key="_ap_cal_f_name", placeholder="Nombre cliente")

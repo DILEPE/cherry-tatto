@@ -15,8 +15,9 @@ from typing import Any, Optional
 import json
 
 import streamlit as st
+from pydantic import ValidationError
 
-from app.schemas.customer import CUSTOMER_BIRTH_PENDING, SOCIAL_MEDIA_MAX_LEN
+from app.schemas.customer import CUSTOMER_BIRTH_PENDING, CustomerCreate, SOCIAL_MEDIA_MAX_LEN
 from app.domain.contract_kinds import KIND_LABEL_ES, appointment_to_contract_kind, service_type_requires_contract
 from app.domain.contract_signing_guard import appointment_must_be_fully_paid_for_contract
 from app.domain.survey_question_helpers import QUESTION_TYPES_NEEDING_OPTIONS
@@ -26,6 +27,7 @@ from streamlit_app.customer_sync import social_media_api_to_form_text, social_me
 from streamlit_app.validation import (
     mobile_phone_co_10_error,
     social_media_text_error,
+    validate_appointment,
 )
 from streamlit_app.customers_management import (
     _clamp_date,
@@ -318,6 +320,10 @@ def _exit_contract_signing_to_panel() -> None:
     st.session_state.pop("ctsig_step", None)
     st.session_state.pop("ctsig_aid", None)
     _ctsig_clear_contract_caches()
+    for k in list(st.session_state.keys()):
+        if isinstance(k, str) and k.startswith("ctsig_expr_"):
+            st.session_state.pop(k, None)
+    st.session_state.pop("ctsig_skip_init_step", None)
     leave_contract_view_to_panel()
 
 
@@ -1213,7 +1219,8 @@ def render_contract_signing_view(appointment_id: int) -> None:
     aid = int(appointment_id)
     if st.session_state.get("ctsig_aid") != aid:
         st.session_state["ctsig_aid"] = aid
-        st.session_state["ctsig_step"] = 1
+        skip_init = bool(st.session_state.pop("ctsig_skip_init_step", False))
+        st.session_state["ctsig_step"] = 2 if skip_init else 1
         st.session_state.pop("_ctsig_pending_toast", None)
         _ctsig_clear_contract_caches()
 
@@ -1269,3 +1276,480 @@ def render_contract_signing_view(appointment_id: int) -> None:
         _render_step2_questionnaire(aid, appt)
         return
     _render_step3_sign_contract(aid, customer_id, customer, appt)
+
+
+def _leave_express_piercing_to_panel() -> None:
+    for k in list(st.session_state.keys()):
+        if isinstance(k, str) and k.startswith("ctsig_expr_"):
+            st.session_state.pop(k, None)
+    st.session_state.pop("ctsig_skip_init_step", None)
+    leave_contract_view_to_panel()
+
+
+def _format_cop_express(value: float | int) -> str:
+    amount = int(round(float(value or 0)))
+    return f"COP ${amount:,.0f}".replace(",", ".")
+
+
+def render_contract_express_piercing_view() -> None:
+    """Flujo piercing: agenda → alta cliente (POST) → cita (POST) → misma vista de firma (pasos 2 y 3)."""
+    from streamlit_app.citas_tab import (
+        _MAX_BOOKING_DURATION_SLOTS,
+        _MIN_BOOKING_DURATION_SLOTS,
+        _append_agenda_slots_marker,
+        _appointments_for_artist_schedule,
+        _appointments_same_day_schedule_kind,
+        _available_start_slots,
+        _busy_slot_indices_for_day,
+        _combine_appointment_datetime,
+        _ensure_assignable_staff,
+        _initial_receipt_success_message,
+        _panel_is_technician_role,
+        _queue_appointment_action_success,
+        _service_and_detail_for_work_kind,
+        _show_validation_errors,
+        _time_slot_options,
+        _work_kind_to_assignee_role,
+        _work_kind_to_schedule_kind,
+    )
+    from streamlit_app.panel_auth import panel_auth_enabled
+
+    st.subheader("Cita express (piercing)")
+    st.caption(
+        "Agenda la cita con **abono completo**, registra los **datos del cliente** y continúa con la **encuesta** "
+        "y la **firma del contrato** en el mismo asistente."
+    )
+    if st.button("Volver al panel principal", key="ctsig_expr_back_panel"):
+        _leave_express_piercing_to_panel()
+        return
+
+    if _panel_is_technician_role():
+        st.warning(
+            "Tu rol (**tatuador** / **perforador**) no puede iniciar citas express desde aquí. "
+            "Pide a recepción que registre la cita o usa una cuenta con permiso de agenda."
+        )
+        return
+
+    booking = st.session_state.get("ctsig_expr_booking")
+    if not isinstance(booking, dict):
+        st.markdown("#### Datos de la cita")
+        st.info(
+            "Define día, perforador, horario y montos. **El valor total debe quedar cubierto por el abono** "
+            "para pasar al cuestionario y a la firma."
+        )
+        wk_submit = "piercing"
+        picked_raw = st.session_state.get("ctsig_expr_pick_day")
+        picked = picked_raw if isinstance(picked_raw, date) else date.today()
+        st.date_input(
+            "Fecha de la cita *",
+            value=picked,
+            min_value=date.today(),
+            format="DD/MM/YYYY",
+            key="ctsig_expr_pick_day",
+        )
+        picked2_raw = st.session_state.get("ctsig_expr_pick_day")
+        picked_d = picked2_raw if isinstance(picked2_raw, date) else date.today()
+
+        need_role = _work_kind_to_assignee_role(wk_submit)
+        staff_opts = [s for s in _ensure_assignable_staff() if str(s.get("role")) == need_role]
+        assigned_id: Optional[int] = None
+        role_me = str(st.session_state.get("_panel_user_role") or "")
+        uid_me = st.session_state.get("_panel_user_id")
+        locked_self = (
+            panel_auth_enabled()
+            and not st.session_state.get("_panel_session_full_access")
+            and role_me == need_role
+            and uid_me is not None
+        )
+        if locked_self:
+            assigned_id = int(uid_me)
+            st.caption("La cita quedará asignada a **tu usuario** del panel.")
+        elif not staff_opts:
+            st.error(
+                f"No hay usuario activo con rol **{need_role}**. Da de alta un perforador en **Gestión de usuarios**."
+            )
+        else:
+            labels_p = [
+                f"{s.get('first_name', '')} {s.get('last_name', '')} (@{s.get('username', '')})"
+                for s in staff_opts
+            ]
+            pick_key = "ctsig_expr_staff_pick"
+            if pick_key not in st.session_state or st.session_state[pick_key] not in labels_p:
+                st.session_state[pick_key] = labels_p[0]
+            choice_p = st.selectbox(
+                "Perforador asignado *",
+                options=labels_p,
+                key=pick_key,
+            )
+            idx_p = labels_p.index(str(choice_p))
+            assigned_id = int(staff_opts[idx_p]["id"])
+
+        st.number_input(
+            "Franjas de 30 min a reservar *",
+            min_value=_MIN_BOOKING_DURATION_SLOTS,
+            max_value=_MAX_BOOKING_DURATION_SLOTS,
+            step=1,
+            key="ctsig_expr_slots",
+        )
+        need_slots = max(
+            _MIN_BOOKING_DURATION_SLOTS,
+            min(_MAX_BOOKING_DURATION_SLOTS, int(st.session_state.get("ctsig_expr_slots") or 1)),
+        )
+        slot_opts = _time_slot_options()
+        sched_kind = _work_kind_to_schedule_kind(wk_submit)
+        raw_appt_list = list(st.session_state.get("_ap_list") or [])
+        artist_for_busy: Optional[int] = None
+        aid_raw = assigned_id
+        if aid_raw not in (None, "", 0):
+            try:
+                artist_for_busy = int(aid_raw)
+            except (TypeError, ValueError):
+                artist_for_busy = None
+        if artist_for_busy is not None:
+            day_rows_cal = _appointments_for_artist_schedule(
+                raw_appt_list, picked_d, artist_for_busy, schedule_kind=sched_kind
+            )
+        else:
+            day_rows_cal = _appointments_same_day_schedule_kind(raw_appt_list, picked_d, sched_kind)
+        busy_idx = _busy_slot_indices_for_day(day_rows_cal, slot_opts)
+        avail_slots = _available_start_slots(slot_opts, need_slots, busy_idx)
+        cur_slot = st.session_state.get("ctsig_expr_slot")
+        if avail_slots and cur_slot not in avail_slots:
+            st.session_state["ctsig_expr_slot"] = avail_slots[0]
+
+        slot: Optional[str]
+        if not avail_slots:
+            st.warning("No quedan franjas libres ese día para esta duración.")
+            slot = None
+        else:
+            slot = st.selectbox(
+                "Franja de inicio *",
+                options=avail_slots,
+                key="ctsig_expr_slot",
+            )
+
+        st.number_input("Valor total del trabajo (COP) *", min_value=0.0, step=10000.0, key="ctsig_expr_total")
+        st.number_input("Saldo abonado (COP) *", min_value=0.0, step=10000.0, key="ctsig_expr_dep")
+        st.text_area("Notas (opcional)", height=72, key="ctsig_expr_det")
+        st.checkbox("Cita prioritaria", key="ctsig_expr_priority")
+
+        total_amount = float(st.session_state.get("ctsig_expr_total") or 0)
+        deposit = max(0.0, round(float(st.session_state.get("ctsig_expr_dep") or 0), 2))
+        pending_balance = round(total_amount - deposit, 2)
+        st.caption(f"Saldo pendiente: **{_format_cop_express(max(pending_balance, 0))}** (debe ser **0** para encuesta y firma).")
+
+        c_go, c_cancel = st.columns(2)
+        with c_cancel:
+            if st.button("Cancelar", use_container_width=True, key="ctsig_expr_book_cancel"):
+                _leave_express_piercing_to_panel()
+        with c_go:
+            if st.button("Continuar a datos del cliente", type="primary", use_container_width=True, key="ctsig_expr_book_go"):
+                if assigned_id is None:
+                    st.error("Indica el perforador asignado.")
+                    return
+                if picked_d < date.today():
+                    st.error("La fecha no puede ser anterior a hoy.")
+                    return
+                if not avail_slots or slot is None:
+                    st.error("No hay franja disponible.")
+                    return
+                if total_amount <= 0:
+                    st.error("Indica un valor total mayor a cero.")
+                    return
+                if round(total_amount - deposit, 2) > 0.02:
+                    st.error(
+                        "Para pasar a **encuesta y firma**, el **abono debe cubrir el valor total** de la cita "
+                        "(saldo pendiente cero)."
+                    )
+                    return
+                slot_str = (st.session_state.get("ctsig_expr_slot") or "").strip()
+                aid_int = int(assigned_id)
+                slot_opts_chk = _time_slot_options()
+                raw_chk = list(st.session_state.get("_ap_list") or [])
+                day_chk = _appointments_for_artist_schedule(
+                    raw_chk, picked_d, aid_int, schedule_kind=sched_kind
+                )
+                busy_chk = _busy_slot_indices_for_day(day_chk, slot_opts_chk)
+                avail_chk = _available_start_slots(slot_opts_chk, need_slots, busy_chk)
+                if not avail_chk or slot_str not in avail_chk:
+                    st.error("La franja ya no está libre. Elige otra hora.")
+                    return
+                detail_raw = str(st.session_state.get("ctsig_expr_det") or "")
+                service, detail_for_api = _service_and_detail_for_work_kind(wk_submit, detail_raw)
+                detail_for_api = _append_agenda_slots_marker(detail_for_api or "", need_slots)
+                st.session_state["ctsig_expr_booking"] = {
+                    "picked": picked_d,
+                    "slot_str": slot_str,
+                    "assigned_id": aid_int,
+                    "duration_slots": need_slots,
+                    "total": float(total_amount),
+                    "deposit": float(deposit),
+                    "service": service,
+                    "detail": detail_for_api,
+                    "priority": bool(st.session_state.get("ctsig_expr_priority")),
+                }
+                st.rerun()
+        return
+
+    # --- Fase datos cliente + crear registros ---
+    bk = booking
+    st.markdown("#### Datos personales del cliente")
+    st.caption(
+        "Completa la ficha. Se creará el **cliente** y la **cita**; después entrarás en **cuestionario** y **firma**."
+    )
+    if st.button("← Volver a agenda", key="ctsig_expr_back_booking"):
+        st.session_state.pop("ctsig_expr_booking", None)
+        st.rerun()
+
+    min_date_100, max_date_today = _date_range_100y()
+    ed: dict[str, Any] = {}
+    a, b = st.columns(2)
+    with a:
+        st.text_input("Nombre *", value=str(ed.get("first_name") or ""), key="ctsig_expr_s1_fn")
+        st.text_input("Apellido *", value=str(ed.get("last_name") or ""), key="ctsig_expr_s1_ln")
+        bd = st.date_input(
+            "Fecha de nacimiento *",
+            value=_clamp_date(_parse_date(ed.get("birth_date")), min_date_100, max_date_today),
+            min_value=min_date_100,
+            max_value=max_date_today,
+            key="ctsig_expr_s1_bd",
+            format="DD/MM/YYYY",
+        )
+        if _is_minor_by_birth_date(bd):
+            st.warning(
+                "**Menor de edad:** en la **etapa de firma** completarás datos del tutor o representante "
+                "y la documentación requerida antes de guardar el contrato."
+            )
+        edt = st.selectbox(
+            "Tipo de documento *",
+            ["CC", "TI", "CE", "PAS"],
+            index=_doc_type_index(ed.get("document_type")),
+            format_func=lambda x: {"CC": "CC — Cédula", "TI": "TI — Tarjeta identidad", "CE": "CE — Extranjería", "PAS": "PAS — Pasaporte"}[x],
+            key="ctsig_expr_s1_dt",
+        )
+        st.text_input("Número de documento *", value=str(ed.get("document_number") or ""), key="ctsig_expr_s1_dn")
+        eddi_raw = ed.get("document_issue_date")
+        st.checkbox(
+            "Registrar fecha de expedición del documento del cliente *",
+            value=bool(eddi_raw),
+            key="ctsig_expr_s1_has_ddi",
+            help="Para firmar el contrato desde el panel es obligatorio indicar la expedición del documento.",
+        )
+        st.date_input(
+            "Fecha de expedición del documento del cliente",
+            value=_clamp_date(_parse_date(eddi_raw), min_date_100, max_date_today) if eddi_raw else date(2015, 1, 1),
+            min_value=min_date_100,
+            max_value=max_date_today,
+            key="ctsig_expr_s1_ddi",
+            format="DD/MM/YYYY",
+        )
+    with b:
+        st.text_input("Correo *", value=str(ed.get("email") or ""), key="ctsig_expr_s1_em")
+        st.text_input(
+            "Celular *",
+            value=str(ed.get("phone_number") or ""),
+            key="ctsig_expr_s1_ph",
+            help="10 dígitos (puedes escribir espacios o +57; se validan solo los dígitos).",
+        )
+        st.text_input(
+            "Nacionalidad *",
+            value=str(ed.get("nationality") or ""),
+            key="ctsig_expr_s1_nat",
+        )
+        st.text_input(
+            "Profesión *",
+            value=str(ed.get("profession") or ""),
+            key="ctsig_expr_s1_prof",
+        )
+
+    with st.expander("Contacto y redes (obligatorio para firma)", expanded=True):
+        st.text_input("Dirección *", value=str(ed.get("address") or ""), key="ctsig_expr_s1_addr")
+        st.text_area(
+            "Redes sociales *",
+            value=social_media_api_to_form_text(ed.get("social_media")),
+            height=70,
+            key="ctsig_expr_s1_sm",
+            max_chars=SOCIAL_MEDIA_MAX_LEN,
+            help=f"Texto plano, máximo {SOCIAL_MEDIA_MAX_LEN} caracteres (@, enlaces, etc.). No es JSON.",
+        )
+
+    with st.expander("Contacto de emergencia (obligatorio para firma)", expanded=True):
+        st.text_input("Nombre contacto emergencia *", value=str(ed.get("emergency_contact_name") or ""), key="ctsig_expr_s1_ecn")
+        st.text_input(
+            "Celular contacto emergencia *",
+            value=str(ed.get("emergency_contact_phone") or ""),
+            key="ctsig_expr_s1_ecp",
+            help="10 dígitos (obligatorio para firmar desde esta vista).",
+        )
+
+    st.info(
+        "**Tutor / representante:** si aplica menor de edad, la **etapa de firma** solicitará datos y capturas del tutor."
+    )
+
+    if st.button("Crear cliente y cita, ir al cuestionario", type="primary", use_container_width=True, key="ctsig_expr_submit"):
+        picked_d = bk["picked"]
+        slot_str = str(bk["slot_str"] or "").strip()
+        aid_int = int(bk["assigned_id"])
+        service = str(bk["service"] or "")
+        detail_for_api = bk.get("detail")
+        tot = float(bk["total"])
+        dep = float(bk["deposit"])
+        fn = (st.session_state.get("ctsig_expr_s1_fn") or "").strip()
+        ln = (st.session_state.get("ctsig_expr_s1_ln") or "").strip()
+        if len(fn) < 1 or len(ln) < 1:
+            st.error("Nombre y apellido son obligatorios.")
+            return
+        bd_v = st.session_state.get("ctsig_expr_s1_bd")
+        if not isinstance(bd_v, date):
+            bd_v = _parse_date(bd_v)
+        if bd_v == CUSTOMER_BIRTH_PENDING:
+            st.error(
+                "Indica la **fecha de nacimiento real** del cliente (no la fecha provisional del agendamiento)."
+            )
+            return
+        expected_minor = _is_minor_by_birth_date(bd_v)
+        dt = str(st.session_state.get("ctsig_expr_s1_dt") or "CC")
+        dn = (st.session_state.get("ctsig_expr_s1_dn") or "").strip()
+        if len(dn) < 5:
+            st.error("Número de documento inválido.")
+            return
+        has_ddi = bool(st.session_state.get("ctsig_expr_s1_has_ddi"))
+        if not has_ddi:
+            st.error(
+                "Para firmar el contrato debes marcar **Registrar fecha de expedición del documento** "
+                "e indicar la fecha correcta."
+            )
+            return
+        ddi_v = st.session_state.get("ctsig_expr_s1_ddi")
+        if not isinstance(ddi_v, date):
+            ddi_v = _parse_date(ddi_v)
+        doc_err = _validate_document_rules(
+            birth_date=bd_v,
+            document_type=dt,
+            has_document_issue_date=True,
+            document_issue_date=ddi_v,
+        )
+        if doc_err:
+            st.error(doc_err)
+            return
+        em = (st.session_state.get("ctsig_expr_s1_em") or "").strip()
+        ph = (st.session_state.get("ctsig_expr_s1_ph") or "").strip()
+        if len(em) < 3:
+            st.error("El correo es obligatorio (formato válido).")
+            return
+        ph_err = mobile_phone_co_10_error(ph)
+        if ph_err:
+            st.error(ph_err)
+            return
+        nat = (st.session_state.get("ctsig_expr_s1_nat") or "").strip()
+        if len(nat) < 2:
+            st.error("La **nacionalidad** es obligatoria para firmar el contrato.")
+            return
+        prof = (st.session_state.get("ctsig_expr_s1_prof") or "").strip()
+        if len(prof) < 2:
+            st.error("La **profesión** es obligatoria para firmar el contrato.")
+            return
+        addr = (st.session_state.get("ctsig_expr_s1_addr") or "").strip()
+        if len(addr) < 5:
+            st.error("La **dirección** es obligatoria para firmar el contrato (al menos 5 caracteres).")
+            return
+        sm_raw = st.session_state.get("ctsig_expr_s1_sm") or ""
+        sm_err = social_media_text_error(str(sm_raw))
+        if sm_err:
+            st.error(sm_err)
+            return
+        sm_for_api = social_media_form_text_to_api(str(sm_raw))
+        if not sm_for_api:
+            st.error("Indica **redes sociales** (texto breve: usuario @, red o enlace).")
+            return
+        ecn = (st.session_state.get("ctsig_expr_s1_ecn") or "").strip()
+        if len(ecn) < 3:
+            st.error("El **nombre del contacto de emergencia** es obligatorio.")
+            return
+        ecp = (st.session_state.get("ctsig_expr_s1_ecp") or "").strip()
+        ecp_err = mobile_phone_co_10_error(ecp)
+        if ecp_err:
+            st.error(f"Celular de emergencia: {ecp_err}")
+            return
+
+        full_name = f"{fn} {ln}".strip()
+        dt_str = _combine_appointment_datetime(picked_d, slot_str)
+        detail_raw_val = str(bk.get("detail") or "")
+        valid_a, errs_a = validate_appointment(full_name, ph, em, service, dt_str, detail_raw_val, dep)
+        if not valid_a:
+            _show_validation_errors(errs_a)
+            return
+        if dep > tot:
+            st.error("El saldo abonado no puede ser mayor que el valor total.")
+            return
+
+        try:
+            c_new = CustomerCreate(
+                first_name=fn,
+                last_name=ln,
+                birth_date=bd_v,
+                document_type=dt,  # type: ignore[arg-type]
+                document_number=dn,
+                document_issue_date=ddi_v,
+                email=em,
+                phone_number=ph,
+                address=addr or None,
+                nationality=nat or None,
+                profession=prof or None,
+                social_media=sm_for_api,
+                emergency_contact_name=ecn or None,
+                emergency_contact_phone=ecp or None,
+                is_minor=expected_minor,
+            )
+        except ValidationError as ve:
+            st.error(str(ve))
+            return
+
+        cust_payload = c_new.model_dump(mode="json")
+        with st.spinner("Creando cliente…"):
+            ok_c, code_c, data_c = api_client.post_customer(cust_payload)
+        if not ok_c or not isinstance(data_c, dict):
+            st.error(f"No se pudo crear el cliente (HTTP {code_c}): {_detail(data_c)}")
+            return
+        cid_raw = data_c.get("id")
+        if cid_raw is None:
+            st.error("Respuesta de alta de cliente sin id.")
+            return
+        customer_id = int(cid_raw)
+
+        pending_bal = max(round(float(tot) - float(dep), 2), 0)
+        appt_payload: dict[str, Any] = {
+            "name": full_name,
+            "phone": ph,
+            "service": service,
+            "date": dt_str,
+            "detail": detail_for_api,
+            "deposit": float(dep),
+            "total_amount": float(tot),
+            "pending_balance": float(pending_bal),
+            "is_priority": bool(bk.get("priority")),
+            "assigned_panel_user_id": aid_int,
+            "customer_id": customer_id,
+        }
+        with st.spinner("Creando cita…"):
+            ok_a, code_a, data_a = api_client.post_appointment(appt_payload)
+        if not ok_a or not isinstance(data_a, dict):
+            st.error(f"No se pudo crear la cita (HTTP {code_a}): {_detail(data_a)}")
+            return
+        aid_new_raw = data_a.get("id")
+        if aid_new_raw is None:
+            st.error("Respuesta de cita sin id.")
+            return
+        aid_new = int(aid_new_raw)
+
+        st.session_state["_ap_reload"] = True
+        dep_created = max(0.0, round(float(dep), 2))
+        _queue_appointment_action_success(_initial_receipt_success_message(dep_created, str(service)))
+        st.session_state.pop("ctsig_expr_booking", None)
+        for k in list(st.session_state.keys()):
+            if isinstance(k, str) and k.startswith("ctsig_expr_s1_"):
+                st.session_state.pop(k, None)
+        st.session_state["ctsig_skip_init_step"] = True
+        st.query_params["appointment_id"] = str(aid_new)
+        st.query_params.pop("express_piercing", None)
+        st.rerun()

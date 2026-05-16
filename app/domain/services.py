@@ -12,6 +12,7 @@ from app.domain.contract_kinds import (
     SurveyQuestionScope,
     appointment_to_contract_kind,
     service_type_to_assignee_panel_role,
+    service_type_to_contract_kind,
 )
 from app.domain.contract_signing_guard import appointment_must_be_fully_paid_for_contract
 from app.domain.procedure_consent import PROCEDURE_CONSENT_SURVEY_QUESTION_ID
@@ -63,6 +64,24 @@ from app.schemas.survey_questions import (
 from app.schemas.template import ContractTemplateCreate, ContractTemplateRead, ContractTemplateUpdate
 
 logger = logging.getLogger(__name__)
+
+
+def _expand_procedure_answer_candidates(raw: str) -> list[str]:
+    """Opción única o elementos de lista JSON (checkbox de encuesta) candidatos a etiqueta de consentimiento."""
+    s = (raw or "").strip()
+    if not s:
+        return []
+    out: list[str] = [s]
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, list):
+            for x in parsed:
+                sx = str(x).strip()
+                if sx:
+                    out.append(sx)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    return out
 
 
 class BusinessLogicService:
@@ -210,10 +229,13 @@ class BusinessLogicService:
         Crea cita. Si viene `customer` (dict), valida con Pydantic y hace upsert por documento.
         Si viene `customer_id`, verifica existencia. Usa transacción para cliente + cita.
 
-        Recibo PDF inicial: solo si el abono al agendar es **estrictamente mayor que cero**
-        (sin movimiento en historial ni webhook `payment_receipt_pdf` si el abono es 0).
+        Recibo PDF inicial: solo si el abono al agendar es **estrictamente mayor que cero** y el servicio
+        **no** es de eje piercing (tatuaje puede llevar recibo; piercing solo notificación `appointment_created`).
+
+        Si el abono es 0: sin movimiento en historial ni webhook `payment_receipt_pdf`.
         """
         resolved_type = resolve_service_type(data.service)
+        skip_initial_receipt_pdf = service_type_to_contract_kind(resolved_type) == "piercing"
 
         def _pre_validate() -> None:
             if data.assigned_panel_user_id is None:
@@ -288,7 +310,7 @@ class BusinessLogicService:
                     new_id,
                 )
         receipt_out: tuple[Optional[int], Optional[bytes], Optional[str]] = (None, None, None)
-        if deposit_amt > 0:
+        if deposit_amt > 0 and not skip_initial_receipt_pdf:
             try:
                 receipt_out = await asyncio.to_thread(
                     lambda: self._issue_payment_receipt(
@@ -372,6 +394,45 @@ class BusinessLogicService:
         if consent_pdf_payload:
             asyncio.create_task(self._async_notify("contract_consent_pdf", consent_pdf_payload))
 
+    def _resolve_piercing_procedure_label(
+        self, appointment_id: int, preferred_answer: Optional[str]
+    ) -> Optional[str]:
+        """
+        Etiqueta para `procedure_consent_documents`: primero la pregunta fija (id configurado),
+        luego cualquier respuesta de encuesta cuyo texto coincida (exacto o sin distinguir mayúsculas).
+        Así se envía el PDF de cuidados aunque la pregunta de procedimiento no sea la id=3 o venga en checkbox.
+        """
+        lower_index: dict[str, str] = {}
+        for lbl in self.repository.list_procedure_consent_labels():
+            if not lbl:
+                continue
+            lower_index[lbl.lower()] = lbl
+
+        def match_piece(piece: str) -> Optional[str]:
+            p = piece.strip()
+            if not p:
+                return None
+            row = self.repository.get_procedure_consent_document(p)
+            if row is not None:
+                sl = row.get("survey_option_label")
+                return str(sl).strip() if sl else p
+            low = p.lower()
+            if low in lower_index:
+                return lower_index[low]
+            return None
+
+        for cand in _expand_procedure_answer_candidates(preferred_answer or ""):
+            got = match_piece(cand)
+            if got:
+                return got
+
+        for raw in self.repository.list_survey_answer_texts_for_appointment(appointment_id):
+            for cand in _expand_procedure_answer_candidates(raw):
+                got = match_piece(cand)
+                if got:
+                    return got
+        return None
+
     def _build_contract_consent_pdf_payload(
         self, appointment_id: int, appointment: Any
     ) -> Optional[dict[str, object]]:
@@ -383,11 +444,12 @@ class BusinessLogicService:
             ans = self.repository.get_survey_answer_text(
                 appointment_id, PROCEDURE_CONSENT_SURVEY_QUESTION_ID
             )
-            label = (ans or "").strip()
+            label = self._resolve_piercing_procedure_label(int(appointment_id), ans)
             if not label:
                 logger.warning(
-                    "Contrato piercing firmado sin respuesta de encuesta para la pregunta %s (cita %s). "
-                    "No se envía PDF de consentimiento a n8n.",
+                    "Contrato piercing firmado sin respuesta reconocible para PDF de consentimiento/cuidados "
+                    "(pregunta %s ni ningún texto en survey_answers coincide con procedure_consent_documents). "
+                    "cita=%s",
                     PROCEDURE_CONSENT_SURVEY_QUESTION_ID,
                     appointment_id,
                 )
