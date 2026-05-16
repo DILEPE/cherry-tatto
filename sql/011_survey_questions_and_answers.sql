@@ -2,6 +2,8 @@
 -- Orden: tras 010_contract_templates_contract_kind.sql
 -- Idempotente: CREATE TABLE IF NOT EXISTS; MODIFY surveys.id puede repetirse.
 --
+-- options_json: LONGTEXT (JSON como texto), compatible con MySQL sin tipo JSON nativo (error 1064).
+--
 -- Si al crear survey_answers obtienes el error 3780 (columnas incompatibles en FK),
 -- suele ser porque surveys.id no coincide en signo/tipo con este repo (000_initial usa
 -- BIGINT UNSIGNED). El ALTER siguiente alinea surveys.id antes del CREATE de respuestas.
@@ -12,7 +14,7 @@ CREATE TABLE IF NOT EXISTS survey_questions (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     label VARCHAR(500) NOT NULL,
     question_type VARCHAR(32) NOT NULL COMMENT 'rating_1_5 | yes_no | text | radio | checkbox | select | textarea | text_short | number',
-    options_json JSON NULL COMMENT 'Opciones (array JSON de strings) para radio, checkbox, select',
+    options_json LONGTEXT NULL COMMENT 'Opciones (array JSON como texto) para radio, checkbox, select',
     sort_order INT NOT NULL DEFAULT 0,
     is_active TINYINT(1) NOT NULL DEFAULT 1,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
