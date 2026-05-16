@@ -1,0 +1,71 @@
+{
+  "name": "appointments",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cherry-tatto/appointment",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "01fd1e6f-c4c6-4de7-a8d0-06223507ac33",
+      "name": "Webhook",
+      "webhookId": "b9388e56-426a-4d87-b98b-d9eaf810e603"
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "1107930225741590",
+        "recipientPhoneNumber": "={{ $json.body.data.phone }}",
+        "textBody": "=Hola {{ $json.body.data.name }}, tu cita ha sido confirmada para el dìa {{ new Date($json.body.data.date.replace(' ', 'T')).toLocaleString('es-CO', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }) }}. Te esperamos. ",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        208,
+        0
+      ],
+      "id": "8fc5e8f5-408f-4a21-ab87-2a72e260f2ad",
+      "name": "Send message",
+      "webhookId": "7c45d885-3b0f-4637-9ab6-e7b573451583",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "nFu6KkT6PkJuu5zh",
+          "name": "WhatsApp account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Send message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "879783fb-8618-4e9a-b4e4-d9b28b895ed7",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "b56ae73836276e902eab7260bda1c240d29fb935abb341d8530a9fc2085fe3df"
+  },
+  "id": "Pe9Ei6jZmQF0Q4Nk",
+  "tags": []
+}
