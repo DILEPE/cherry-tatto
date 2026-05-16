@@ -1,5 +1,5 @@
 {
-  "_note": "Volcado desde panel (mayo 2026), textos y orden revisados. Cargar: python scripts/seed_survey_questions_from_manifest.py --manifest scripts/data/survey_questions_seed_rock_city.json --apply",
+  "_note": "Volcado desde panel (mayo 2026), textos y orden revisados. Cargar: python scripts/seed_survey_questions_rock_city.py --apply",
   "_generated_from": "preguntas proporcionadas por usuario (export manual)",
   "questions": [
     {
