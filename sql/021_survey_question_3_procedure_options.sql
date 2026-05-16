@@ -1,4 +1,5 @@
 -- Opciones de la pregunta id=3: títulos de los consentimientos (sin extensión .pdf).
+-- Idempotente: UPDATE por id=3 (mismo resultado si se repite).
 -- «Tatuaje» no va en el cuestionario; el PDF de tatuaje se envía por tipo de cita.
 -- Ajusta question_type a select si la pregunta 3 no era de opciones.
 

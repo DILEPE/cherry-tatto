@@ -1,4 +1,5 @@
 -- Usuarios del panel operativo (login Streamlit vía API cuando PANEL_AUTH_USERS_SOURCE=database).
+-- Idempotente: CREATE TABLE IF NOT EXISTS.
 
 USE cherry_tatto;
 
