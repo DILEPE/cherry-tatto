@@ -1,0 +1,22 @@
+{
+  "questions": [
+    {
+      "id": 1,
+      "label": "Ejemplo activo (rating)",
+      "question_type": "rating_1_5",
+      "options": null,
+      "sort_order": 10,
+      "contract_kind": "both",
+      "is_active": true
+    },
+    {
+      "id": 99,
+      "label": "Pregunta en borrador (no se carga)",
+      "question_type": "text_short",
+      "options": null,
+      "sort_order": 99,
+      "contract_kind": "both",
+      "is_active": false
+    }
+  ]
+}
