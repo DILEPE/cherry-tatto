@@ -1,4 +1,5 @@
 -- Customer management + link to appointments (MySQL 8+, InnoDB)
+-- Índice uk_customers_email con prefijo por límite InnoDB 767 bytes con utf8mb4 (error 1071).
 -- Review before apply: if `customer_id` already exists, skip the ALTER ADD COLUMN.
 
 CREATE TABLE IF NOT EXISTS customers (
@@ -27,7 +28,7 @@ CREATE TABLE IF NOT EXISTS customers (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     UNIQUE KEY uk_customers_document_number (document_number),
-    UNIQUE KEY uk_customers_email (email),
+    UNIQUE KEY uk_customers_email (email(191)),
     CONSTRAINT chk_customers_minor_guardian CHECK (
         is_minor = FALSE
         OR (
