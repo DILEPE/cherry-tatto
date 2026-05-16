@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 
 class N8nHealthResponse(BaseModel):
-    """Salida de GET /health/n8n."""
+    """Salida de GET /health/n8n (incluye eco del JSON devuelto por n8n en el GET de sondeo)."""
 
     level: Literal["success", "warn", "error"] = Field(
         ...,
@@ -21,3 +21,13 @@ class N8nHealthResponse(BaseModel):
         ...,
         description="True si existe N8N_STATUS_URL o N8N_WEBHOOK_URL.",
     )
+    status: Optional[str] = Field(
+        None,
+        description="Eco de `status` del cuerpo JSON de n8n (p. ej. «ok»).",
+    )
+    service: Optional[str] = Field(None, description="Eco de `service` del cuerpo n8n (p. ej. «n8n»).")
+    check: Optional[str] = Field(
+        None,
+        description="Eco de `check` del cuerpo n8n (p. ej. «cherry_tattoo_health»).",
+    )
+    version: Optional[str] = Field(None, description="Eco de `version` del cuerpo n8n.")

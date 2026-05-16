@@ -61,10 +61,6 @@ def _fetch_questions(include_inactive: bool = True) -> List[Dict[str, Any]]:
 
 def render_survey_questions_tab() -> None:
     st.markdown('<p class="neon-title" style="font-size:1.1rem;">Gestión de preguntas — encuesta</p>', unsafe_allow_html=True)
-    st.caption(
-        "Define el formulario (equivalente a radio, casillas, lista, área de texto, texto corto y número). "
-        "Las respuestas se reflejan en **Reporte → pestaña Encuestas**."
-    )
     with st.expander("Tipos soportados (misma API que el backend)", expanded=False):
         st.markdown(
             "| Tipo en panel | Uso |\n"
@@ -83,10 +79,6 @@ def render_survey_questions_tab() -> None:
     questions = _fetch_questions(include_inactive=True)
 
     st.markdown("##### Crear pregunta")
-    st.caption(
-        "Elige primero el **tipo**: si es radio, casillas o lista desplegable aparece el cuadro de opciones "
-        "**antes** de pulsar crear (los campos de tipo y opciones están fuera del formulario para que se actualicen al instante)."
-    )
     c_type, c_kind, c_hint = st.columns([1, 1, 1])
     with c_type:
         create_qtype = st.selectbox(

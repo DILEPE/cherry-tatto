@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -35,8 +35,16 @@ def _request(
     return ok, r.status_code, data
 
 
-def get_appointments() -> Tuple[bool, int, Any]:
-    return _request("GET", "/api/appointments")
+def get_appointments(assigned_panel_user_id: Optional[int] = None) -> Tuple[bool, int, Any]:
+    params: Optional[Dict[str, Any]] = None
+    if assigned_panel_user_id is not None:
+        params = {"assigned_panel_user_id": int(assigned_panel_user_id)}
+    return _request("GET", "/api/appointments", params=params)
+
+
+def get_appointment(appointment_id: int) -> Tuple[bool, int, Any]:
+    """Detalle de una cita (mismo formato que cada elemento del listado)."""
+    return _request("GET", f"/api/appointments/{int(appointment_id)}")
 
 
 def post_appointment(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
@@ -87,12 +95,36 @@ def get_appointment_payments(appointment_id: int) -> Tuple[bool, int, Any]:
     return _request("GET", f"/api/appointments/{appointment_id}/payments")
 
 
-def post_appointment_payment(appointment_id: int, amount: float, note: Optional[str] = None) -> Tuple[bool, int, Any]:
+def post_appointment_payment(
+    appointment_id: int, amount: float, note: Optional[str] = None
+) -> Tuple[bool, int, Any]:
     return _request(
         "POST",
         f"/api/appointments/{appointment_id}/payments",
         json_body={"amount": float(amount), "note": note},
     )
+
+
+def get_appointment_receipts(appointment_id: int) -> Tuple[bool, int, Any]:
+    return _request("GET", f"/api/appointments/{appointment_id}/receipts")
+
+
+def fetch_appointment_receipt_pdf(appointment_id: int, receipt_id: int) -> Tuple[bool, int, bytes, str]:
+    """Descarga binario PDF. El cuarto valor es nombre sugerido o mensaje de error corto."""
+    url = f"{base_url()}/api/appointments/{appointment_id}/receipts/{int(receipt_id)}/pdf"
+    try:
+        r = requests.get(url, timeout=60)
+    except requests.RequestException as e:
+        return False, 0, b"", str(e)
+    if not (200 <= r.status_code < 300):
+        return False, r.status_code, b"", ""
+    fname = f"recibo_{appointment_id}_{receipt_id}.pdf"
+    cd = r.headers.get("Content-Disposition") or ""
+    if "filename=" in cd:
+        part = cd.split("filename=", 1)[-1].strip().strip('"')
+        if part:
+            fname = part.split(";", 1)[0].strip('"')
+    return True, r.status_code, r.content, fname
 
 
 def post_contract(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
@@ -130,12 +162,85 @@ def delete_template(template_id: int) -> Tuple[bool, int, Any]:
     return _request("DELETE", f"/api/templates/{template_id}")
 
 
+def post_panel_user_register(
+    username: str,
+    password: str,
+    *,
+    first_name: str = "",
+    last_name: str = "",
+    address: Optional[str] = None,
+    phone: Optional[str] = None,
+    store: str = "cherry_tattoo",
+    role: str = "vendedor",
+) -> Tuple[bool, int, Any]:
+    body: Dict[str, Any] = {
+        "username": username,
+        "password": password,
+        "first_name": first_name,
+        "last_name": last_name,
+        "store": store,
+        "role": role,
+    }
+    if address is not None:
+        body["address"] = address
+    if phone is not None:
+        body["phone"] = phone
+    return _request("POST", "/api/panel-users/register", json_body=body)
+
+
+def post_panel_user_login(username: str, password: str) -> Tuple[bool, int, Any]:
+    if not (username or "").strip() or not password:
+        return False, 422, {"detail": "Usuario y contraseña son obligatorios."}
+    return _request(
+        "POST",
+        "/api/panel-users/login",
+        json_body={"username": username.strip().lower(), "password": password},
+    )
+
+
+def get_panel_users_assignable_for_appointments() -> Tuple[bool, int, Any]:
+    return _request("GET", "/api/panel-users/assignable-for-appointments")
+
+
+def get_panel_users() -> Tuple[bool, int, Any]:
+    return _request("GET", "/api/panel-users/")
+
+
+def get_panel_user(user_id: int) -> Tuple[bool, int, Any]:
+    return _request("GET", f"/api/panel-users/{user_id}")
+
+
+def post_panel_user_create(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
+    return _request("POST", "/api/panel-users/", json_body=payload)
+
+
+def patch_panel_user(user_id: int, payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
+    return _request("PATCH", f"/api/panel-users/{user_id}", json_body=payload)
+
+
+def get_panel_user_effective_modules(user_id: int) -> Tuple[bool, int, Any]:
+    return _request("GET", f"/api/panel-users/{user_id}/modules/effective")
+
+
+def get_panel_user_module_grants(user_id: int) -> Tuple[bool, int, Any]:
+    return _request("GET", f"/api/panel-users/{user_id}/modules")
+
+
+def put_panel_user_modules(user_id: int, modules: List[str]) -> Tuple[bool, int, Any]:
+    return _request("PUT", f"/api/panel-users/{user_id}/modules", json_body={"modules": modules})
+
+
 def post_survey(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
     return _request("POST", "/api/surveys", json_body=payload)
 
 
 def get_surveys() -> Tuple[bool, int, Any]:
     return _request("GET", "/api/surveys/")
+
+
+def get_survey_for_appointment(appointment_id: int) -> Tuple[bool, int, Any]:
+    """Consulta si existe encuesta para la cita (evita listar todas las encuestas)."""
+    return _request("GET", f"/api/surveys/by-appointment/{int(appointment_id)}")
 
 
 def get_survey_questions(

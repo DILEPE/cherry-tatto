@@ -9,6 +9,7 @@ import streamlit as st
 
 from app.schemas.customer import CUSTOMER_BIRTH_PENDING, SOCIAL_MEDIA_MAX_LEN
 from streamlit_app import api_client
+from streamlit_app.panel_navigation import open_contract_read
 from streamlit_app.customer_sync import social_media_api_to_form_text, social_media_form_text_to_api
 from streamlit_app.validation import (
     mobile_phone_co_10_error,
@@ -86,6 +87,20 @@ def _detail(payload: Any) -> str:
     return str(payload)
 
 
+_CUST_ACTION_INFO_KEY = "_cust_action_info"
+
+
+def _queue_cust_action_success(msg: str) -> None:
+    """Confirmación visible en el siguiente rerun de la pestaña (tras cerrar el diálogo)."""
+    st.session_state[_CUST_ACTION_INFO_KEY] = msg
+
+
+def _render_cust_action_feedback() -> None:
+    msg = st.session_state.pop(_CUST_ACTION_INFO_KEY, None)
+    if msg:
+        st.toast(msg, icon="✅", duration="long")
+
+
 def _fetch_list(search: str, limit: int, page: int) -> None:
     offset = page * limit
     params: Dict[str, Any] = {"limit": limit, "offset": offset}
@@ -102,10 +117,6 @@ def _fetch_list(search: str, limit: int, page: int) -> None:
 
 def _render_customer_row_actions(cid: int, nombre: str) -> None:
     """Menú único por fila (mismo patrón que Gestión citas): popover o botones compactos."""
-
-    def _dispatch_view() -> None:
-        st.session_state["_cust_dlg"] = "view"
-        st.session_state["_cust_dlg_id"] = cid
 
     def _dispatch_edit() -> None:
         st.session_state["_cust_dlg"] = "edit"
@@ -130,8 +141,6 @@ def _render_customer_row_actions(cid: int, nombre: str) -> None:
                 st.caption(f"Cliente #{cid}")
             if nombre:
                 st.caption(nombre[:80] + ("…" if len(nombre) > 80 else ""))
-            if st.button("Ver", key=f"cust_v_{cid}", use_container_width=True):
-                _dispatch_view()
             if st.button("Editar", key=f"cust_e_{cid}", use_container_width=True):
                 _dispatch_edit()
             if st.button("Eliminar", key=f"cust_d_{cid}", use_container_width=True):
@@ -142,16 +151,13 @@ def _render_customer_row_actions(cid: int, nombre: str) -> None:
 
     ln1, ln2 = st.columns(2)
     with ln1:
-        if st.button("Ver", key=f"cust_fb_v_{cid}", use_container_width=True):
-            _dispatch_view()
-    with ln2:
         if st.button("Editar", key=f"cust_fb_e_{cid}", use_container_width=True):
             _dispatch_edit()
-    bn1, bn2 = st.columns(2)
-    with bn1:
+    with ln2:
         if st.button("Eliminar", key=f"cust_fb_d_{cid}", use_container_width=True):
             _dispatch_delete()
-    with bn2:
+    bn1, bn2 = st.columns(2)
+    with bn1:
         if st.button("Contratos", key=f"cust_fb_ct_{cid}", use_container_width=True):
             _dispatch_contracts()
 
@@ -356,42 +362,22 @@ def _dialog_crear_cliente() -> None:
             }
             ok, code, data = api_client.post_customer(payload)
             if ok:
-                st.success("Cliente registrado correctamente.")
+                _queue_cust_action_success("Cliente registrado correctamente.")
                 st.session_state["_cust_reload"] = True
                 _reset_create_customer_form_state()
                 _close_dialogs()
                 st.rerun()
             else:
-                st.error(f"No se pudo registrar (HTTP {code}): {_detail(data)}")
+                st.toast(
+                    f"No se pudo registrar (HTTP {code}): {_detail(data)}",
+                    icon="❌",
+                    duration="long",
+                )
     with c2:
         if st.button("Cancelar", use_container_width=True, key="dlg_cc_cancel"):
             _reset_create_customer_form_state()
             _close_dialogs()
             st.rerun()
-
-
-@st.dialog("Detalle del cliente", width="large")
-def _dialog_ver_cliente(cliente_id: int) -> None:
-    ok, code, data = api_client.get_customer(cliente_id)
-    if not ok or not isinstance(data, dict):
-        st.error(f"No se pudo cargar (HTTP {code}): {_detail(data)}")
-    else:
-        st.markdown(f"**ID:** {data.get('id')}")
-        doc_line = f"{data.get('document_type')} {data.get('document_number')}"
-        ddi = data.get("document_issue_date")
-        if ddi:
-            doc_line += f" (expedición: {ddi})"
-        st.markdown(
-            f"**Nombre:** {data.get('first_name', '')} {data.get('last_name', '')}  \n"
-            f"**Documento:** {doc_line}  \n"
-            f"**Correo:** {data.get('email')}  \n"
-            f"**Teléfono:** {data.get('phone_number')}"
-        )
-        with st.expander("Más datos", expanded=False):
-            st.json(data)
-    if st.button("Cerrar", use_container_width=True, key="dlg_view_close"):
-        _close_dialogs()
-        st.rerun()
 
 
 @st.dialog("Editar cliente", width="large")
@@ -589,14 +575,18 @@ def _dialog_editar_cliente(cliente_id: int) -> None:
             }
             ok, code, data = api_client.put_customer(cliente_id, payload)
             if ok:
-                st.success("Cliente actualizado.")
+                _queue_cust_action_success("Cliente actualizado.")
                 st.session_state.pop("_dlg_edit_payload", None)
                 st.session_state.pop("_dlg_edit_id", None)
                 st.session_state["_cust_reload"] = True
                 _close_dialogs()
                 st.rerun()
             else:
-                st.error(f"HTTP {code}: {_detail(data)}")
+                st.toast(
+                    f"HTTP {code}: {_detail(data)}",
+                    icon="❌",
+                    duration="long",
+                )
     with c2:
         if st.button("Cancelar", use_container_width=True, key="dlg_ed_cancel"):
             st.session_state.pop("_dlg_edit_payload", None)
@@ -614,12 +604,16 @@ def _dialog_eliminar_cliente(cliente_id: int, nombre: str) -> None:
         if st.button("Sí, eliminar", type="primary", use_container_width=True, key="dlg_del_yes"):
             ok, code, data = api_client.delete_customer(cliente_id)
             if ok:
-                st.success("Cliente eliminado.")
+                _queue_cust_action_success("Cliente eliminado.")
                 st.session_state["_cust_reload"] = True
                 _close_dialogs()
                 st.rerun()
             else:
-                st.error(f"HTTP {code}: {_detail(data)}")
+                st.toast(
+                    f"HTTP {code}: {_detail(data)}",
+                    icon="❌",
+                    duration="long",
+                )
     with c2:
         if st.button("No, cancelar", use_container_width=True, key="dlg_del_no"):
             _close_dialogs()
@@ -649,12 +643,13 @@ def _dialog_contracts_cliente(cliente_id: int, nombre: str) -> None:
             c4.write(str(row.get("appointment_date", "")))
             with c5:
                 cid = int(row.get("id", 0) or 0)
-                st.link_button(
+                if st.button(
                     "Contenido",
-                    url=f"?view=contract_read&contract_id={cid}",
                     use_container_width=True,
                     disabled=cid <= 0,
-                )
+                    key=f"cust_dlg_contract_read_{cid}_{row.get('appointment_id')}",
+                ):
+                    open_contract_read(cid)
     if st.button("Cerrar", use_container_width=True, key="dlg_contracts_close"):
         _close_dialogs()
         st.rerun()
@@ -662,7 +657,6 @@ def _dialog_contracts_cliente(cliente_id: int, nombre: str) -> None:
 
 def render_customers_management_tab() -> None:
     st.subheader("Gestión de clientes")
-    st.caption("Alta, consulta, edición y baja lógica. Por fila usa **Acciones** (mismo esquema que en citas).")
 
     if "_cust_page" not in st.session_state:
         st.session_state["_cust_page"] = 0
@@ -705,8 +699,11 @@ def render_customers_management_tab() -> None:
     page = int(st.session_state["_cust_page"])
 
     if st.session_state.get("_cust_reload"):
-        _fetch_list(search, limit, page)
+        with st.spinner("Cargando clientes…"):
+            _fetch_list(search, limit, page)
         st.session_state["_cust_reload"] = False
+
+    _render_cust_action_feedback()
 
     err = st.session_state.get("_cust_last_error")
     if err:
@@ -722,24 +719,24 @@ def render_customers_management_tab() -> None:
     st.markdown(f"**{total}** cliente(s) en total · mostrando página **{page + 1}** de **{max(1, (total + limit - 1) // limit)}**")
 
     st.markdown(
-        """
-        <style>
-          .cust-col-title {
-            display: inline-block;
-            font-weight: 700;
-            letter-spacing: 0.02em;
-            color: #111827;
-            background: #f3f4f6;
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            padding: 0.18rem 0.45rem;
-            white-space: nowrap;
-            line-height: 1.35;
-          }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+            """
+            <style>
+              .cust-col-title {
+                display: inline-block;
+                font-weight: 700;
+                letter-spacing: 0.02em;
+                color: #111827;
+                background: #f3f4f6;
+                border: 1px solid #e5e7eb;
+                border-radius: 8px;
+                padding: 0.18rem 0.45rem;
+                white-space: nowrap;
+                line-height: 1.35;
+              }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
 
     cust_colw = [1.62, 1.22, 1.52, 1.12, 1.52]
     h1, h2, h3, h4, h5 = st.columns(cust_colw)
@@ -767,38 +764,52 @@ def render_customers_management_tab() -> None:
 
     st.divider()
 
-    # Paginación al pie (compacta)
-    p1, p2, p3, p4 = st.columns([1, 1, 1.2, 2.0])
+    # Paginación al pie: botones, selector y resumen en una sola línea visual alineada
+    total_pages = max(1, (total + limit - 1) // limit)
+    picked_limit = limit
+
+    p1, p2, p_tail = st.columns([1, 1, 5])
     with p1:
-        st.write("")
         if st.button("◀ Anterior", disabled=page <= 0, use_container_width=True, key="cust_prev"):
             st.session_state["_cust_page"] = max(0, page - 1)
             st.session_state["_cust_reload"] = True
             st.rerun()
     with p2:
-        st.write("")
         if st.button("Siguiente ▶", disabled=(page + 1) * limit >= total if total else True, use_container_width=True, key="cust_next"):
             st.session_state["_cust_page"] = page + 1
             st.session_state["_cust_reload"] = True
             st.rerun()
-    with p3:
-        st.caption("Registros por página")
-        new_limit = st.selectbox(
-            "Registros por página",
-            options=[10, 20, 50, 100],
-            index=[10, 20, 50, 100].index(limit) if limit in (10, 20, 50, 100) else 1,
-            key="cust_limit_sel",
-            label_visibility="collapsed",
-        )
-        if new_limit != limit:
-            st.session_state["_cust_limit"] = new_limit
-            st.session_state["_cust_page"] = 0
-            st.session_state["_cust_reload"] = True
-            st.rerun()
-    with p4:
-        st.write("")
-        total_pages = max(1, (total + limit - 1) // limit)
-        st.caption(f"Página {page + 1}/{total_pages} · Total: {total}")
+
+    with p_tail:
+        t_sel, t_info = st.columns([2.2, 2.8])
+        with t_sel:
+            lab_col, dd_col = st.columns([1.25, 1])
+            with lab_col:
+                st.markdown(
+                    '<div style="display:flex;align-items:center;min-height:2.75rem;font-size:0.875rem;">Por página</div>',
+                    unsafe_allow_html=True,
+                )
+            with dd_col:
+                picked_limit = st.selectbox(
+                    "_cust_rp",
+                    options=[10, 20, 50, 100],
+                    index=[10, 20, 50, 100].index(limit) if limit in (10, 20, 50, 100) else 1,
+                    key="cust_limit_sel",
+                    label_visibility="collapsed",
+                    help="Cuántos registros mostrar por página.",
+                )
+        with t_info:
+            st.markdown(
+                f'<div style="display:flex;align-items:center;min-height:2.75rem;font-size:0.875rem;opacity:0.85;">'
+                f"Página {page + 1}/{total_pages} · Total: {total}</div>",
+                unsafe_allow_html=True,
+            )
+
+    if picked_limit != limit:
+        st.session_state["_cust_limit"] = picked_limit
+        st.session_state["_cust_page"] = 0
+        st.session_state["_cust_reload"] = True
+        st.rerun()
 
     # Diálogos (invocación nativa Streamlit)
     dlg = st.session_state.get("_cust_dlg")
@@ -806,8 +817,6 @@ def render_customers_management_tab() -> None:
 
     if dlg == "create":
         _dialog_crear_cliente()
-    elif dlg == "view" and dlg_id:
-        _dialog_ver_cliente(int(dlg_id))
     elif dlg == "edit" and dlg_id:
         _dialog_editar_cliente(int(dlg_id))
     elif dlg == "delete" and dlg_id:

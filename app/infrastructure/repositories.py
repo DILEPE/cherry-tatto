@@ -1,4 +1,5 @@
 import json
+from datetime import date, datetime
 from typing import Any, Optional
 from app.domain.models import (
     AppointmentCreate,
@@ -13,7 +14,18 @@ class AppointmentRepository:
     """
     Capa de persistencia: Gestiona SQL para citas, contratos y plantillas.
     """
-    
+
+    @staticmethod
+    def _appointment_datetime_sql_string(val: object) -> str:
+        """Serializa valor MySQL DATE/DATETIME a texto estable para capas superiores (PDF, API)."""
+        if val is None:
+            return ""
+        if isinstance(val, datetime):
+            return val.strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(val, date):
+            return f"{val.strftime('%Y-%m-%d')} 09:00:00"
+        return str(val).strip()
+
     def __init__(self, db_manager):
         self.db = db_manager
 
@@ -25,7 +37,111 @@ class AppointmentRepository:
 
     # --- Métodos de Citas ---
 
-    def get_all(self) -> list[dict[str, object]]:
+    def get_all(self, assigned_panel_user_id: Optional[int] = None) -> list[dict[str, object]]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            if assigned_panel_user_id is None:
+                cursor.execute(
+                    """
+                    SELECT a.*,
+                        EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
+                            AS has_signed_contract,
+                        pu.username AS assigned_username,
+                        pu.first_name AS assigned_first_name,
+                        pu.last_name AS assigned_last_name,
+                        pu.role AS assigned_role
+                    FROM appointments a
+                    LEFT JOIN panel_users pu ON pu.id = a.assigned_panel_user_id
+                    ORDER BY a.created_at DESC
+                    """
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT a.*,
+                        EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
+                            AS has_signed_contract,
+                        pu.username AS assigned_username,
+                        pu.first_name AS assigned_first_name,
+                        pu.last_name AS assigned_last_name,
+                        pu.role AS assigned_role
+                    FROM appointments a
+                    LEFT JOIN panel_users pu ON pu.id = a.assigned_panel_user_id
+                    WHERE a.assigned_panel_user_id = %s
+                    ORDER BY a.created_at DESC
+                    """,
+                    (assigned_panel_user_id,),
+                )
+            rows = cursor.fetchall()
+            for row in rows:
+                raw = row.get("has_signed_contract")
+                row["has_signed_contract"] = bool(raw) if raw is not None else False
+            return rows
+        except Exception as e:
+            err = str(e)
+            if (
+                "Unknown column 'a.assigned_panel_user_id'" in err
+                or "Unknown column 'assigned_panel_user_id'" in err
+            ):
+                return self._get_all_legacy_no_assignee()
+            raise
+        finally:
+            if conn:
+                conn.close()
+
+    def get_appointment_list_row(self, appointment_id: int) -> Optional[dict[str, object]]:
+        """Una fila con el mismo shape que `get_all` (join con panel_users si existe la columna)."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            try:
+                cursor.execute(
+                    """
+                    SELECT a.*,
+                        EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
+                            AS has_signed_contract,
+                        pu.username AS assigned_username,
+                        pu.first_name AS assigned_first_name,
+                        pu.last_name AS assigned_last_name,
+                        pu.role AS assigned_role
+                    FROM appointments a
+                    LEFT JOIN panel_users pu ON pu.id = a.assigned_panel_user_id
+                    WHERE a.id = %s
+                    LIMIT 1
+                    """,
+                    (appointment_id,),
+                )
+            except Exception as e:
+                err = str(e)
+                if (
+                    "Unknown column 'a.assigned_panel_user_id'" in err
+                    or "Unknown column 'assigned_panel_user_id'" in err
+                ):
+                    cursor.execute(
+                        """
+                        SELECT a.*,
+                            EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
+                                AS has_signed_contract
+                        FROM appointments a
+                        WHERE a.id = %s
+                        LIMIT 1
+                        """,
+                        (appointment_id,),
+                    )
+                else:
+                    raise
+            row = cursor.fetchone()
+            if not row:
+                return None
+            raw = row.get("has_signed_contract")
+            row["has_signed_contract"] = bool(raw) if raw is not None else False
+            return row
+        finally:
+            if conn:
+                conn.close()
+
+    def _get_all_legacy_no_assignee(self) -> list[dict[str, object]]:
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn, dictionary=True)
@@ -44,7 +160,8 @@ class AppointmentRepository:
                 row["has_signed_contract"] = bool(raw) if raw is not None else False
             return rows
         finally:
-            if conn: conn.close()
+            if conn:
+                conn.close()
 
     def create(
         self,
@@ -60,43 +177,84 @@ class AppointmentRepository:
         try:
             cursor = self._get_cursor(conn)
             service_type = resolve_service_type(data.service)
+            aid = getattr(data, "assigned_panel_user_id", None)
+            assignee_val = int(aid) if aid is not None else None
+
+            def _insert_financial_no_assignee() -> None:
+                q = """INSERT INTO appointments
+                       (customer_id, customer_name, phone, service_type, detail, appointment_date, deposit, total_amount, pending_balance, customer_credit, is_priority, status)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+                cursor.execute(
+                    q,
+                    (
+                        customer_id,
+                        data.name,
+                        data.phone,
+                        service_type,
+                        data.detail or "",
+                        data.date,
+                        data.deposit or 0,
+                        data.total_amount or 0,
+                        data.pending_balance or 0,
+                        0,
+                        1 if getattr(data, "is_priority", False) else 0,
+                        "Agendada",
+                    ),
+                )
+
+            def _insert_legacy_minimal() -> None:
+                q = """INSERT INTO appointments
+                      (customer_id, customer_name, phone, service_type, detail, appointment_date, deposit, status)
+                      VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
+                cursor.execute(
+                    q,
+                    (
+                        customer_id,
+                        data.name,
+                        data.phone,
+                        service_type,
+                        data.detail or "",
+                        data.date,
+                        data.deposit or 0,
+                        "Agendada",
+                    ),
+                )
+
             try:
-                query = """INSERT INTO appointments
-                           (customer_id, customer_name, phone, service_type, detail, appointment_date, deposit, total_amount, pending_balance, customer_credit, is_priority, status)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
-                values = (
-                    customer_id,
-                    data.name,
-                    data.phone,
-                    service_type,
-                    data.detail or "",
-                    data.date,
-                    data.deposit or 0,
-                    data.total_amount or 0,
-                    data.pending_balance or 0,
-                    0,
-                    1 if getattr(data, "is_priority", False) else 0,
-                    "Agendada",
+                q_full = """INSERT INTO appointments
+                           (customer_id, assigned_panel_user_id, customer_name, phone, service_type, detail, appointment_date, deposit, total_amount, pending_balance, customer_credit, is_priority, status)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+                cursor.execute(
+                    q_full,
+                    (
+                        customer_id,
+                        assignee_val,
+                        data.name,
+                        data.phone,
+                        service_type,
+                        data.detail or "",
+                        data.date,
+                        data.deposit or 0,
+                        data.total_amount or 0,
+                        data.pending_balance or 0,
+                        0,
+                        1 if getattr(data, "is_priority", False) else 0,
+                        "Agendada",
+                    ),
                 )
-                cursor.execute(query, values)
             except Exception as e:
-                # Compatibilidad temporal mientras se ejecuta la migración financiera.
-                if "Unknown column 'total_amount'" not in str(e):
+                err = str(e)
+                if "Unknown column 'assigned_panel_user_id'" in err:
+                    try:
+                        _insert_financial_no_assignee()
+                    except Exception as e2:
+                        if "Unknown column 'total_amount'" not in str(e2):
+                            raise
+                        _insert_legacy_minimal()
+                elif "Unknown column 'total_amount'" not in err:
                     raise
-                query_legacy = """INSERT INTO appointments
-                                  (customer_id, customer_name, phone, service_type, detail, appointment_date, deposit, status)
-                                  VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
-                values_legacy = (
-                    customer_id,
-                    data.name,
-                    data.phone,
-                    service_type,
-                    data.detail or "",
-                    data.date,
-                    data.deposit or 0,
-                    "Agendada",
-                )
-                cursor.execute(query_legacy, values_legacy)
+                else:
+                    _insert_legacy_minimal()
             new_id = cursor.lastrowid
             if own:
                 conn.commit()
@@ -115,15 +273,18 @@ class AppointmentRepository:
                 # Retornamos un objeto genérico o mapeado para el servicio
                 from types import SimpleNamespace
                 return SimpleNamespace(
-                    id=res['id'],
-                    name=res['customer_name'],
-                    phone=res['phone'],
-                    service=res['service_type'],
-                    date=str(res['appointment_date']),
-                    status=res.get('status'),
-                    deposit=float(res.get('deposit') or 0),
-                    total_amount=float(res.get('total_amount') or 0),
-                    pending_balance=float(res.get('pending_balance') or 0),
+                    id=res["id"],
+                    name=(res.get("customer_name") or "") or "",
+                    phone=(res.get("phone") or "") or "",
+                    service=(res.get("service_type") or "") or "",
+                    service_type=(res.get("service_type") or "") or "",
+                    date=self._appointment_datetime_sql_string(res.get("appointment_date")),
+                    status=res.get("status"),
+                    deposit=float(res.get("deposit") or 0),
+                    total_amount=float(res.get("total_amount") or 0),
+                    pending_balance=float(res.get("pending_balance") or 0),
+                    customer_id=res.get("customer_id"),
+                    detail=(res.get("detail") or "") or "",
                 )
             return None
         finally:
@@ -279,7 +440,7 @@ class AppointmentRepository:
             if conn:
                 conn.close()
 
-    def create_payment(self, appointment_id: int, amount: float, note: Optional[str] = None) -> None:
+    def create_payment(self, appointment_id: int, amount: float, note: Optional[str] = None) -> int:
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn)
@@ -290,16 +451,40 @@ class AppointmentRepository:
                 """,
                 (appointment_id, amount, note),
             )
+            new_pid = int(cursor.lastrowid or 0)
             cursor.execute(
                 """
                 UPDATE appointments
-                SET deposit = COALESCE(deposit, 0) + %s,
-                    pending_balance = GREATEST(COALESCE(total_amount, 0) - (COALESCE(deposit, 0) + %s), 0)
+                SET deposit = (@_new_dep := COALESCE(deposit, 0) + %s),
+                    pending_balance = GREATEST(COALESCE(total_amount, 0) - @_new_dep, 0)
                 WHERE id = %s
                 """,
-                (amount, amount, appointment_id),
+                (amount, appointment_id),
             )
             conn.commit()
+            return new_pid
+        finally:
+            if conn:
+                conn.close()
+
+    def insert_payment_ledger_row_only(
+        self, appointment_id: int, amount: float, note: Optional[str] = None
+    ) -> int:
+        """Solo escribe el historial en appointment_payments; no modifica deposit ni pending_balance.
+        El abono ya debe estar reflejado en la fila de la cita (p. ej. create() con deposit inicial)."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                """
+                INSERT INTO appointment_payments (appointment_id, amount, note)
+                VALUES (%s, %s, %s)
+                """,
+                (appointment_id, amount, note),
+            )
+            new_pid = int(cursor.lastrowid or 0)
+            conn.commit()
+            return new_pid
         finally:
             if conn:
                 conn.close()
@@ -418,6 +603,103 @@ class AppointmentRepository:
             return cursor.fetchall()
         finally:
             if conn: conn.close()
+
+    def get_survey_answer_text(self, appointment_id: int, question_id: int) -> Optional[str]:
+        """Texto en `survey_answers` (p. ej. opción elegida en radio/select)."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT sa.answer_text
+                FROM surveys s
+                INNER JOIN survey_answers sa ON sa.survey_id = s.id
+                WHERE s.appointment_id = %s AND sa.question_id = %s
+                LIMIT 1
+                """,
+                (int(appointment_id), int(question_id)),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            raw = row.get("answer_text")
+            if raw is None:
+                return None
+            t = str(raw).strip()
+            return t if t else None
+        finally:
+            if conn:
+                conn.close()
+
+    def get_procedure_consent_document(self, survey_option_label: str) -> Optional[dict[str, object]]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT survey_option_label, source_filename, pdf_base64
+                FROM procedure_consent_documents
+                WHERE survey_option_label = %s
+                LIMIT 1
+                """,
+                (survey_option_label,),
+            )
+            return cursor.fetchone()
+        finally:
+            if conn:
+                conn.close()
+
+    def list_procedure_consent_labels(self) -> list[str]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT survey_option_label
+                FROM procedure_consent_documents
+                WHERE survey_option_label IS NOT NULL AND TRIM(survey_option_label) <> ''
+                ORDER BY survey_option_label
+                """
+            )
+            rows = cursor.fetchall() or []
+            return [
+                str(r["survey_option_label"]).strip()
+                for r in rows
+                if r.get("survey_option_label") and str(r["survey_option_label"]).strip()
+            ]
+        finally:
+            if conn:
+                conn.close()
+
+    def list_survey_answer_texts_for_appointment(self, appointment_id: int) -> list[str]:
+        """Textos de respuesta guardados para la cita (p. ej. radio/select/checkbox como JSON)."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT sa.answer_text
+                FROM surveys s
+                INNER JOIN survey_answers sa ON sa.survey_id = s.id
+                WHERE s.appointment_id = %s
+                  AND sa.answer_text IS NOT NULL
+                  AND TRIM(sa.answer_text) <> ''
+                ORDER BY sa.question_id ASC, sa.id ASC
+                """,
+                (int(appointment_id),),
+            )
+            out: list[str] = []
+            for r in cursor.fetchall() or []:
+                raw = r.get("answer_text")
+                if raw is None:
+                    continue
+                s = str(raw).strip()
+                if s:
+                    out.append(s)
+            return out
+        finally:
+            if conn:
+                conn.close()
 
     # --- Preguntas de encuesta (configuración) ---
 
@@ -715,10 +997,25 @@ class AppointmentRepository:
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn)
+            cursor.execute(
+                "SELECT COUNT(*) FROM contracts WHERE template_id = %s",
+                (template_id,),
+            )
+            row = cursor.fetchone()
+            used = int(row[0]) if row else 0
+            if used > 0:
+                raise ValueError("TEMPLATE_IN_USE")
             cursor.execute("DELETE FROM contract_templates WHERE id = %s", (template_id,))
+            if cursor.rowcount == 0:
+                raise ValueError("TEMPLATE_NOT_FOUND")
             conn.commit()
+        except Exception:
+            if conn:
+                conn.rollback()
+            raise
         finally:
-            if conn: conn.close()
+            if conn:
+                conn.close()
 
     def get_detailed_report(self, start_date: str, end_date: str) -> list[dict[str, object]]:
         """Citas en rango de fechas con campos útiles para reporte financiero."""
@@ -738,3 +1035,92 @@ class AppointmentRepository:
             return cursor.fetchall()
         finally:
             if conn: conn.close()
+
+    # --- Recibos de pago (PDF) ---
+
+    def insert_payment_receipt(
+        self,
+        appointment_id: int,
+        customer_id: Optional[int],
+        appointment_payment_id: Optional[int],
+        kind: str,
+        amount: float,
+        total_amount_snapshot: float,
+        deposit_after: float,
+        pending_after: float,
+        note: Optional[str],
+        file_name: str,
+        pdf_bytes: bytes,
+    ) -> int:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                """
+                INSERT INTO appointment_payment_receipts (
+                    appointment_id, customer_id, appointment_payment_id, kind,
+                    amount, total_amount_snapshot, deposit_after, pending_after,
+                    note, file_name, pdf
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    appointment_id,
+                    customer_id,
+                    appointment_payment_id,
+                    kind,
+                    float(amount),
+                    float(total_amount_snapshot),
+                    float(deposit_after),
+                    float(pending_after),
+                    note,
+                    file_name,
+                    pdf_bytes,
+                ),
+            )
+            conn.commit()
+            return int(cursor.lastrowid or 0)
+        finally:
+            if conn:
+                conn.close()
+
+    def list_payment_receipts_by_appointment(self, appointment_id: int) -> list[dict[str, object]]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT id, appointment_id, customer_id, appointment_payment_id, kind,
+                       amount, total_amount_snapshot, deposit_after, pending_after,
+                       note, file_name, created_at
+                FROM appointment_payment_receipts
+                WHERE appointment_id = %s
+                ORDER BY created_at ASC, id ASC
+                """,
+                (appointment_id,),
+            )
+            return cursor.fetchall()
+        finally:
+            if conn:
+                conn.close()
+
+    def get_payment_receipt_file(self, appointment_id: int, receipt_id: int) -> Optional[dict[str, object]]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT id, appointment_id, file_name, pdf
+                FROM appointment_payment_receipts
+                WHERE id = %s AND appointment_id = %s
+                LIMIT 1
+                """,
+                (receipt_id, appointment_id),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return row
+        finally:
+            if conn:
+                conn.close()

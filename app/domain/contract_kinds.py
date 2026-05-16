@@ -49,6 +49,26 @@ def service_type_to_contract_kind(service_type: str | None) -> ContractKind:
     return "piercing"
 
 
-def appointment_to_contract_kind(appointment: Mapping[str, Any]) -> ContractKind:
-    """Elige plantilla activa según `service_type` de la cita (solo si aplica contrato)."""
-    return service_type_to_contract_kind(str(appointment.get("service_type") or ""))
+def _appointment_service_type_value(appointment: Any) -> str:
+    """Tipo de servicio de una cita como dict o como objeto (p. ej. SimpleNamespace de `get_by_id`)."""
+    if appointment is None:
+        return ""
+    if isinstance(appointment, Mapping):
+        return str(appointment.get("service_type") or appointment.get("service") or "")
+    st = getattr(appointment, "service_type", None)
+    if st is not None and str(st).strip():
+        return str(st)
+    return str(getattr(appointment, "service", None) or "")
+
+
+def appointment_to_contract_kind(appointment: Any) -> ContractKind:
+    """Elige plantilla activa según tipo de servicio de la cita (solo si aplica contrato)."""
+    return service_type_to_contract_kind(_appointment_service_type_value(appointment))
+
+
+def service_type_to_assignee_panel_role(service_type: str | None) -> str:
+    """
+    Rol en `panel_users` que debe tener el profesional asignado a la cita.
+    Tatuaje → tatuador; el resto de servicios aplicables → perforador.
+    """
+    return "tatuador" if service_type_to_contract_kind(service_type) == "tattoo" else "perforador"

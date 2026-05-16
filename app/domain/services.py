@@ -1,17 +1,35 @@
 import asyncio
+import base64
 import json
 import logging
 import math
-from typing import Optional
+from datetime import datetime
+from typing import Any, Optional
 
 import mysql.connector
 
-from app.domain.contract_kinds import SurveyQuestionScope, appointment_to_contract_kind
+from app.domain.contract_kinds import (
+    SurveyQuestionScope,
+    appointment_to_contract_kind,
+    service_type_to_assignee_panel_role,
+    service_type_to_contract_kind,
+)
+from app.domain.contract_signing_guard import appointment_must_be_fully_paid_for_contract
+from app.domain.procedure_consent import PROCEDURE_CONSENT_SURVEY_QUESTION_ID
+from app.domain.service_types import resolve_service_type
 from app.domain.models import (
     AppointmentCreate,
     ContractSign,
     Survey,
     SurveyQuestion,
+)
+from app.domain.panel_user_profile import PANEL_ROLE_LABEL_ES
+from app.domain.panel_modules import ASSIGNABLE_PANEL_MODULE_KEYS
+from app.domain.panel_passwords import hash_password, verify_password
+from app.domain.payment_receipt_pdf import (
+    PAYMENT_RECEIPT_N8N_TEMPLATE_KEY,
+    PaymentReceiptPdfContext,
+    build_payment_receipt_pdf,
 )
 from app.domain.survey_question_helpers import (
     QUESTION_TYPES_NEEDING_OPTIONS,
@@ -23,6 +41,15 @@ from app.schemas.customer import (
     CustomerListResponse,
     CustomerPublic,
     CustomerUpdate,
+)
+from app.schemas.panel_user import (
+    PanelUserAssignable,
+    PanelUserCreate,
+    PanelUserModulesBody,
+    PanelUserPublic,
+    PanelUserRegister,
+    PanelUserSessionPublic,
+    PanelUserUpdate,
 )
 from app.schemas.report import FinancialReportRow
 from app.schemas.survey import SurveyRow
@@ -39,27 +66,219 @@ from app.schemas.template import ContractTemplateCreate, ContractTemplateRead, C
 logger = logging.getLogger(__name__)
 
 
+def _expand_procedure_answer_candidates(raw: str) -> list[str]:
+    """Opción única o elementos de lista JSON (checkbox de encuesta) candidatos a etiqueta de consentimiento."""
+    s = (raw or "").strip()
+    if not s:
+        return []
+    out: list[str] = [s]
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, list):
+            for x in parsed:
+                sx = str(x).strip()
+                if sx:
+                    out.append(sx)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    return out
+
+
 class BusinessLogicService:
     """
     Capa de dominio / aplicación: orquesta citas, clientes, plantillas y notificaciones.
     """
 
-    def __init__(self, appointment_repository, customer_repository, notifier):
+    def __init__(self, appointment_repository, customer_repository, notifier, panel_user_repository=None):
         self.repository = appointment_repository
         self.customers = customer_repository
         self.notifier = notifier
+        self.panel_user_repo = panel_user_repository
+
+    def _payment_receipt_pdf_webhook_payload(
+        self,
+        *,
+        appointment_id: int,
+        receipt_id: int,
+        customer_id: Optional[int],
+        customer_name: str,
+        phone: str,
+        kind: str,
+        appointment_payment_id: Optional[int],
+        amount: float,
+        payment_note: str,
+        file_name: str,
+        pdf_bytes: bytes,
+    ) -> dict[str, object]:
+        """Payload único para `payment_receipt_pdf` → n8n (sustituye al PDF tipo «recibo Cherry» anterior)."""
+        return {
+            "appointment_id": appointment_id,
+            "receipt_id": receipt_id,
+            "customer_id": customer_id,
+            "customer_name": customer_name,
+            "phone": phone,
+            "kind": kind,
+            "appointment_payment_id": appointment_payment_id,
+            "amount": amount,
+            "payment_note": payment_note,
+            "file_name": file_name,
+            "mime_type": "application/pdf",
+            "pdf_template": PAYMENT_RECEIPT_N8N_TEMPLATE_KEY,
+            "pdf_base64": base64.standard_b64encode(pdf_bytes).decode("ascii"),
+        }
+
+    def _schedule_n8n_notify(self, event: str, payload: dict[str, object]) -> None:
+        """Programa `_async_notify` y registra fallos (create_task oculta excepciones si no se espera la tarea)."""
+
+        async def _runner() -> None:
+            try:
+                await self._async_notify(event, payload)
+            except Exception:
+                logger.exception("Fallo al notificar n8n en segundo plano (event=%s)", event)
+
+        asyncio.create_task(_runner())
+
+    def _issue_payment_receipt(
+        self,
+        appointment_id: int,
+        *,
+        kind: str,
+        appointment_payment_id: Optional[int],
+        receipt_amount: float,
+        payment_note: Optional[str],
+    ) -> tuple[Optional[int], Optional[bytes], Optional[str]]:
+        """Genera PDF y lo guarda en `appointment_payment_receipts`. Ejecutar en worker thread.
+
+        Devuelve ``(receipt_id, pdf_bytes, file_name)`` o ``(None, None, None)`` si falla la cita.
+        """
+        if float(receipt_amount or 0) <= 0:
+            return None, None, None
+        appt = self.repository.get_by_id(appointment_id)
+        if appt is None:
+            return None, None, None
+        raw_cust = getattr(appt, "customer_id", None)
+        customer_id = int(raw_cust) if raw_cust is not None else None
+        kind_label = "Abono adicional" if kind == "abono" else "Agendamiento / primer abono"
+
+        rows_pay = self.repository.list_payments_by_appointment(appointment_id)
+        payment_history: list[tuple[float, Optional[str]]] = [
+            (float(r["amount"]), str(r["note"]).strip() if r.get("note") else None) for r in rows_pay
+        ]
+
+        client_name = str(getattr(appt, "name", "") or "").strip()
+        client_phone = str(getattr(appt, "phone", "") or "").strip()
+        email_s = ""
+        if customer_id is not None:
+            crow = self.customers.get_by_id(int(customer_id))
+            if crow:
+                email_s = str(crow.get("email") or "").strip()
+                if not client_name:
+                    fn = str(crow.get("first_name") or "").strip()
+                    ln = str(crow.get("last_name") or "").strip()
+                    client_name = f"{fn} {ln}".strip()
+                if not client_phone:
+                    client_phone = str(crow.get("phone_number") or "").strip()
+
+        ctx = PaymentReceiptPdfContext(
+            appointment_id=int(appointment_id),
+            client_name=client_name,
+            client_phone=client_phone,
+            appointment_when=str(getattr(appt, "date", "") or ""),
+            service=str(getattr(appt, "service", "") or ""),
+            detail=str(getattr(appt, "detail", "") or ""),
+            total_amount=float(getattr(appt, "total_amount", 0) or 0),
+            this_payment=float(receipt_amount),
+            deposit_total_after=float(getattr(appt, "deposit", 0) or 0),
+            pending_after=float(getattr(appt, "pending_balance", 0) or 0),
+            kind_label=kind_label,
+            issued_at=datetime.now(),
+            payment_note=payment_note,
+            client_email=email_s,
+            payment_history=payment_history,
+        )
+        try:
+            pdf_bytes = build_payment_receipt_pdf(ctx)
+        except Exception:
+            logger.exception(
+                "Fallo al generar orden de trabajo PDF (cita id=%s). Comprueba pymupdf.",
+                appointment_id,
+            )
+            return None, None, None
+        file_name = f"orden_trabajo_cita_{appointment_id}_{int(datetime.now().timestamp() * 1000)}.pdf"
+        rid = self.repository.insert_payment_receipt(
+            appointment_id,
+            customer_id,
+            appointment_payment_id,
+            kind,
+            float(receipt_amount),
+            float(ctx.total_amount),
+            float(ctx.deposit_total_after),
+            float(ctx.pending_after),
+            payment_note,
+            file_name,
+            pdf_bytes,
+        )
+        if not rid:
+            return None, None, None
+        return int(rid), pdf_bytes, file_name
 
     # --- Citas + cliente ---
 
-    async def register_appointment(self, data: AppointmentCreate) -> int:
+    async def register_appointment(self, data: AppointmentCreate) -> tuple[int, Optional[int]]:
         """
         Crea cita. Si viene `customer` (dict), valida con Pydantic y hace upsert por documento.
         Si viene `customer_id`, verifica existencia. Usa transacción para cliente + cita.
+
+        Recibo PDF inicial: solo si el abono al agendar es **estrictamente mayor que cero** y el servicio
+        **no** es de eje piercing (tatuaje puede llevar recibo; piercing solo notificación `appointment_created`).
+
+        Si el abono es 0: sin movimiento en historial ni webhook `payment_receipt_pdf`.
         """
+        resolved_type = resolve_service_type(data.service)
+        skip_initial_receipt_pdf = service_type_to_contract_kind(resolved_type) == "piercing"
+
+        def _pre_validate() -> None:
+            if data.assigned_panel_user_id is None:
+                raise ValueError("Debes asignar un tatuador o perforador a la cita.")
+            if self.panel_user_repo is None:
+                return
+            row = self.panel_user_repo.get_by_id(int(data.assigned_panel_user_id))
+            if not row or not row.get("is_active", True):
+                raise ValueError("El profesional asignado no existe o está inactivo.")
+            need = service_type_to_assignee_panel_role(resolved_type)
+            if str(row.get("role") or "") != need:
+                raise ValueError(
+                    f"Para este tipo de servicio debes elegir un profesional con rol "
+                    f"«{PANEL_ROLE_LABEL_ES.get(need, need)}»."
+                )
+
+        await asyncio.to_thread(_pre_validate)
+
+        dep_round = max(0.0, round(float(data.deposit or 0), 2))
+        tot_round = max(0.0, round(float(data.total_amount or 0), 2))
+        pend_round = max(0.0, round(tot_round - dep_round, 2))
+        data.deposit = dep_round
+        data.total_amount = tot_round
+        data.pending_balance = pend_round
+
         def _sync_register() -> tuple[int, Optional[int]]:
             with self.repository.db.transaction() as conn:
                 resolved_id: Optional[int] = data.customer_id
-                if data.customer is not None:
+                if data.customer_id is not None:
+                    cid = int(data.customer_id)
+                    row = self.customers.get_by_id(cid, conn)
+                    if row is None:
+                        raise ValueError(f"Cliente id={cid} no encontrado.")
+                    resolved_id = cid
+                    if data.customer is not None:
+                        c = CustomerCreate.model_validate(data.customer)
+                        doc_existing = str(row.get("document_number") or "").strip()
+                        if str(c.document_number).strip() != doc_existing:
+                            raise ValueError(
+                                "El documento enviado no coincide con el cliente vinculado a la cita."
+                            )
+                        self.customers.update(cid, CustomerUpdate(**c.model_dump()), conn)
+                elif data.customer is not None:
                     c = CustomerCreate.model_validate(data.customer)
                     resolved_id = self.customers.upsert_by_document(c, conn)
                 elif resolved_id is not None:
@@ -75,16 +294,55 @@ class BusinessLogicService:
                 return new_id, resolved_id
 
         new_id, customer_id = await asyncio.to_thread(_sync_register)
-        if data.deposit > 0:
+        deposit_amt = float(data.deposit or 0)
+        initial_pay_id: Optional[int] = None
+        if deposit_amt > 0:
             try:
-                await asyncio.to_thread(
-                    self.repository.create_payment,
+                initial_pay_id = await asyncio.to_thread(
+                    self.repository.insert_payment_ledger_row_only,
                     new_id,
-                    float(data.deposit),
+                    deposit_amt,
                     "Abono inicial al agendar",
                 )
             except Exception:
-                logger.warning("No fue posible registrar abono inicial en historial para cita id=%s", new_id)
+                logger.warning(
+                    "No fue posible registrar abono inicial en historial para cita id=%s",
+                    new_id,
+                )
+        receipt_out: tuple[Optional[int], Optional[bytes], Optional[str]] = (None, None, None)
+        if deposit_amt > 0 and not skip_initial_receipt_pdf:
+            try:
+                receipt_out = await asyncio.to_thread(
+                    lambda: self._issue_payment_receipt(
+                        new_id,
+                        kind="inicial",
+                        appointment_payment_id=initial_pay_id,
+                        receipt_amount=deposit_amt,
+                        payment_note="Abono inicial al agendar",
+                    )
+                )
+            except Exception:
+                logger.exception("No se pudo emitir recibo inicial para cita id=%s", new_id)
+                receipt_out = (None, None, None)
+
+        rid, pdf_b, fname = receipt_out
+        queued_initial_receipt_pdf = False
+        if rid and pdf_b and deposit_amt > 0 and len(pdf_b) > 0:
+            receipt_payload = self._payment_receipt_pdf_webhook_payload(
+                appointment_id=new_id,
+                receipt_id=rid,
+                customer_id=customer_id,
+                customer_name=str(data.name or ""),
+                phone=str(data.phone or ""),
+                kind="inicial",
+                appointment_payment_id=initial_pay_id,
+                amount=deposit_amt,
+                payment_note="Abono inicial al agendar",
+                file_name=fname or "orden_trabajo.pdf",
+                pdf_bytes=pdf_b,
+            )
+            self._schedule_n8n_notify("payment_receipt_pdf", receipt_payload)
+            queued_initial_receipt_pdf = True
 
         payload: dict[str, object] = {
             "id": new_id,
@@ -93,14 +351,28 @@ class BusinessLogicService:
             "service": data.service,
             "date": data.date,
             "customer_id": customer_id,
+            "deposit": float(data.deposit or 0),
+            "total_amount": float(data.total_amount or 0),
+            "pending_balance": float(data.pending_balance or 0),
+            "payment_receipt_pdf_webhook_enqueued": queued_initial_receipt_pdf,
         }
         asyncio.create_task(self._async_notify("appointment_created", payload))
-        return new_id
+        return new_id, customer_id
 
     async def process_contract_signature(self, data: ContractSign) -> None:
         appointment = self.repository.get_by_id(data.appointment_id)
         if not appointment:
             raise ValueError(f"Cita con ID {data.appointment_id} no encontrada.")
+
+        ok_pay, pay_err = appointment_must_be_fully_paid_for_contract(
+            total_amount=getattr(appointment, "total_amount", None),
+            deposit=getattr(appointment, "deposit", None),
+            pending_balance=getattr(appointment, "pending_balance", None),
+        )
+        if not ok_pay:
+            raise ValueError(
+                pay_err or "La cita no cumple las condiciones de pago para firmar el contrato."
+            )
 
         self.repository.create_contract(data)
         self.repository.update_status(data.appointment_id, "Finalizada")
@@ -113,6 +385,98 @@ class BusinessLogicService:
             "health_summary": data.health_data,
         }
         asyncio.create_task(self._async_notify("contract_signed", notification_payload))
+
+        consent_pdf_payload = await asyncio.to_thread(
+            self._build_contract_consent_pdf_payload,
+            data.appointment_id,
+            appointment,
+        )
+        if consent_pdf_payload:
+            asyncio.create_task(self._async_notify("contract_consent_pdf", consent_pdf_payload))
+
+    def _resolve_piercing_procedure_label(
+        self, appointment_id: int, preferred_answer: Optional[str]
+    ) -> Optional[str]:
+        """
+        Etiqueta para `procedure_consent_documents`: primero la pregunta fija (id configurado),
+        luego cualquier respuesta de encuesta cuyo texto coincida (exacto o sin distinguir mayúsculas).
+        Así se envía el PDF de cuidados aunque la pregunta de procedimiento no sea la id=3 o venga en checkbox.
+        """
+        lower_index: dict[str, str] = {}
+        for lbl in self.repository.list_procedure_consent_labels():
+            if not lbl:
+                continue
+            lower_index[lbl.lower()] = lbl
+
+        def match_piece(piece: str) -> Optional[str]:
+            p = piece.strip()
+            if not p:
+                return None
+            row = self.repository.get_procedure_consent_document(p)
+            if row is not None:
+                sl = row.get("survey_option_label")
+                return str(sl).strip() if sl else p
+            low = p.lower()
+            if low in lower_index:
+                return lower_index[low]
+            return None
+
+        for cand in _expand_procedure_answer_candidates(preferred_answer or ""):
+            got = match_piece(cand)
+            if got:
+                return got
+
+        for raw in self.repository.list_survey_answer_texts_for_appointment(appointment_id):
+            for cand in _expand_procedure_answer_candidates(raw):
+                got = match_piece(cand)
+                if got:
+                    return got
+        return None
+
+    def _build_contract_consent_pdf_payload(
+        self, appointment_id: int, appointment: Any
+    ) -> Optional[dict[str, object]]:
+        """PDF de consentimiento según tipo de cita y respuesta de encuesta (pregunta id fija)."""
+        kind = appointment_to_contract_kind(appointment)
+        if kind == "tattoo":
+            label = "Tatuaje"
+        else:
+            ans = self.repository.get_survey_answer_text(
+                appointment_id, PROCEDURE_CONSENT_SURVEY_QUESTION_ID
+            )
+            label = self._resolve_piercing_procedure_label(int(appointment_id), ans)
+            if not label:
+                logger.warning(
+                    "Contrato piercing firmado sin respuesta reconocible para PDF de consentimiento/cuidados "
+                    "(pregunta %s ni ningún texto en survey_answers coincide con procedure_consent_documents). "
+                    "cita=%s",
+                    PROCEDURE_CONSENT_SURVEY_QUESTION_ID,
+                    appointment_id,
+                )
+                return None
+        row = self.repository.get_procedure_consent_document(label)
+        if row is None:
+            logger.warning(
+                "No hay fila en procedure_consent_documents para %r (cita %s).",
+                label,
+                appointment_id,
+            )
+            return None
+        raw_b64 = row.get("pdf_base64")
+        if not isinstance(raw_b64, str) or not raw_b64.strip():
+            return None
+        fname = str(row.get("source_filename") or "").strip() or f"{label}.pdf"
+        return {
+            "appointment_id": appointment_id,
+            "procedure_label": label,
+            "contract_kind": kind,
+            "customer_name": str(getattr(appointment, "name", "") or ""),
+            "phone": str(getattr(appointment, "phone", "") or ""),
+            "service": str(getattr(appointment, "service", "") or ""),
+            "file_name": fname,
+            "mime_type": "application/pdf",
+            "pdf_base64": raw_b64.strip(),
+        }
 
     async def list_contracts_by_customer(self, customer_id: int) -> list[dict[str, object]]:
         return await asyncio.to_thread(self.repository.get_contracts_by_customer, customer_id)
@@ -270,11 +634,23 @@ class BusinessLogicService:
 
         return await asyncio.to_thread(_run)
 
-    async def list_appointments(self) -> list[AppointmentListItem]:
+    async def list_appointments(
+        self, assigned_panel_user_id: Optional[int] = None
+    ) -> list[AppointmentListItem]:
 
         def _run() -> list[AppointmentListItem]:
-            rows = self.repository.get_all()
+            rows = self.repository.get_all(assigned_panel_user_id=assigned_panel_user_id)
             return [AppointmentListItem.model_validate(r) for r in rows]
+
+        return await asyncio.to_thread(_run)
+
+    async def get_appointment_detail(self, appointment_id: int) -> AppointmentListItem:
+
+        def _run() -> AppointmentListItem:
+            row = self.repository.get_appointment_list_row(appointment_id)
+            if row is None:
+                raise ValueError("Cita no encontrada")
+            return AppointmentListItem.model_validate(row)
 
         return await asyncio.to_thread(_run)
 
@@ -346,7 +722,7 @@ class BusinessLogicService:
             raise ValueError("Cita no encontrada")
         return await asyncio.to_thread(self.repository.list_payments_by_appointment, appointment_id)
 
-    async def add_appointment_payment(self, appointment_id: int, amount: float, note: Optional[str] = None) -> None:
+    async def add_appointment_payment(self, appointment_id: int, amount: float, note: Optional[str] = None) -> int:
         appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
         if appointment is None:
             raise ValueError("Cita no encontrada")
@@ -359,7 +735,67 @@ class BusinessLogicService:
         current_deposit = float(getattr(appointment, "deposit", 0) or 0)
         if current_deposit + amount > total_amount:
             raise ValueError("El abono adicional excede el valor total del trabajo")
-        await asyncio.to_thread(self.repository.create_payment, appointment_id, float(amount), note)
+
+        def _pay() -> int:
+            return self.repository.create_payment(appointment_id, float(amount), note)
+
+        pay_id = await asyncio.to_thread(_pay)
+        try:
+            receipt_out = await asyncio.to_thread(
+                lambda: self._issue_payment_receipt(
+                    appointment_id,
+                    kind="abono",
+                    appointment_payment_id=pay_id,
+                    receipt_amount=float(amount),
+                    payment_note=note,
+                )
+            )
+        except Exception:
+            logger.exception("No se pudo emitir recibo de abono para cita id=%s pago id=%s", appointment_id, pay_id)
+            receipt_out = (None, None, None)
+
+        rid, pdf_b, fname = receipt_out
+        if rid and pdf_b and len(pdf_b) > 0:
+            raw_cust = getattr(appointment, "customer_id", None)
+            cid_pdf = int(raw_cust) if raw_cust is not None else None
+            receipt_payload = self._payment_receipt_pdf_webhook_payload(
+                appointment_id=appointment_id,
+                receipt_id=rid,
+                customer_id=cid_pdf,
+                customer_name=str(getattr(appointment, "name", "") or ""),
+                phone=str(getattr(appointment, "phone", "") or ""),
+                kind="abono",
+                appointment_payment_id=pay_id,
+                amount=float(amount),
+                payment_note=note or "",
+                file_name=fname or "orden_trabajo.pdf",
+                pdf_bytes=pdf_b,
+            )
+            self._schedule_n8n_notify("payment_receipt_pdf", receipt_payload)
+        return pay_id
+
+    async def list_appointment_payment_receipts(self, appointment_id: int) -> list[dict[str, object]]:
+        appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
+        if appointment is None:
+            raise ValueError("Cita no encontrada")
+        return await asyncio.to_thread(self.repository.list_payment_receipts_by_appointment, appointment_id)
+
+    async def get_appointment_receipt_pdf(self, appointment_id: int, receipt_id: int) -> tuple[bytes, str]:
+        appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
+        if appointment is None:
+            raise ValueError("Cita no encontrada")
+
+        def _fetch() -> Optional[dict[str, object]]:
+            return self.repository.get_payment_receipt_file(appointment_id, receipt_id)
+
+        row = await asyncio.to_thread(_fetch)
+        if row is None:
+            raise ValueError("Recibo no encontrado")
+        raw_pdf = row.get("pdf")
+        if raw_pdf is None:
+            raise ValueError("Recibo sin archivo")
+        fn = str(row.get("file_name") or "recibo.pdf")
+        return bytes(raw_pdf), fn
 
     async def list_surveys(self) -> list[SurveyRow]:
 
@@ -569,6 +1005,199 @@ class BusinessLogicService:
         if row is None:
             raise ValueError("Customer not found")
         await asyncio.to_thread(self.customers.soft_delete, customer_id)
+
+    async def register_panel_user(self, data: PanelUserRegister) -> int:
+        if self.panel_user_repo is None:
+            raise RuntimeError("Repositorio de usuarios del panel no configurado.")
+
+        def _run() -> int:
+            with self.panel_user_repo.db.transaction() as conn:
+                if self.panel_user_repo.get_by_username(data.username, conn):
+                    raise ValueError("USERNAME_TAKEN")
+                ph = hash_password(data.password)
+                return self.panel_user_repo.insert(
+                    username=data.username,
+                    password_hash=ph,
+                    first_name=data.first_name,
+                    last_name=data.last_name,
+                    address=data.address,
+                    phone=data.phone,
+                    store=data.store,
+                    role=data.role,
+                    is_active=True,
+                    conn=conn,
+                )
+
+        return await asyncio.to_thread(_run)
+
+    async def create_panel_user(self, data: PanelUserCreate) -> int:
+        if self.panel_user_repo is None:
+            raise RuntimeError("Repositorio de usuarios del panel no configurado.")
+
+        def _run() -> int:
+            with self.panel_user_repo.db.transaction() as conn:
+                if self.panel_user_repo.get_by_username(data.username, conn):
+                    raise ValueError("USERNAME_TAKEN")
+                ph = hash_password(data.password)
+                return self.panel_user_repo.insert(
+                    username=data.username,
+                    password_hash=ph,
+                    first_name=data.first_name,
+                    last_name=data.last_name,
+                    address=data.address,
+                    phone=data.phone,
+                    store=data.store,
+                    role=data.role,
+                    is_active=data.is_active,
+                    conn=conn,
+                )
+
+        return await asyncio.to_thread(_run)
+
+    async def list_panel_users(self) -> list[PanelUserPublic]:
+        if self.panel_user_repo is None:
+            return []
+
+        def _run() -> list[PanelUserPublic]:
+            rows = self.panel_user_repo.list_public_rows()
+            return [PanelUserPublic.model_validate(r) for r in rows]
+
+        return await asyncio.to_thread(_run)
+
+    async def list_panel_users_assignable_for_appointments(self) -> list[PanelUserAssignable]:
+        if self.panel_user_repo is None:
+            return []
+
+        def _run() -> list[PanelUserAssignable]:
+            rows = self.panel_user_repo.list_assignable_for_appointments()
+            return [PanelUserAssignable.model_validate(r) for r in rows]
+
+        return await asyncio.to_thread(_run)
+
+    async def get_panel_user(self, user_id: int) -> Optional[PanelUserPublic]:
+        if self.panel_user_repo is None:
+            return None
+
+        def _run() -> Optional[PanelUserPublic]:
+            row = self.panel_user_repo.get_by_id(user_id)
+            if row is None:
+                return None
+            out = {k: v for k, v in row.items() if k != "password_hash"}
+            return PanelUserPublic.model_validate(out)
+
+        return await asyncio.to_thread(_run)
+
+    async def update_panel_user(self, user_id: int, data: PanelUserUpdate) -> None:
+        if self.panel_user_repo is None:
+            raise RuntimeError("Repositorio de usuarios del panel no configurado.")
+        payload = data.model_dump(exclude_unset=True)
+        if not payload:
+            raise ValueError("EMPTY_UPDATE")
+        if "password" in payload:
+            payload["password_hash"] = hash_password(payload.pop("password"))
+
+        def _run() -> None:
+            with self.panel_user_repo.db.transaction() as conn:
+                if self.panel_user_repo.get_by_id(user_id, conn) is None:
+                    raise ValueError("NOT_FOUND")
+                self.panel_user_repo.update(user_id, payload, conn)
+                if payload.get("role") == "administrador":
+                    self.panel_user_repo.replace_module_keys(user_id, [], conn)
+
+        try:
+            await asyncio.to_thread(_run)
+        except ValueError as e:
+            if str(e) == "NOT_FOUND":
+                raise ValueError("USER_NOT_FOUND") from e
+            raise
+
+    async def login_panel_user_session(self, username: str, password: str) -> Optional[PanelUserSessionPublic]:
+        if self.panel_user_repo is None:
+            return None
+
+        def _run() -> Optional[PanelUserSessionPublic]:
+            row = self.panel_user_repo.get_by_username(username)
+            if not row or not row.get("is_active"):
+                return None
+            if not verify_password(password, str(row["password_hash"])):
+                return None
+            return PanelUserSessionPublic(
+                id=int(row["id"]),
+                username=str(row["username"]),
+                role=str(row["role"]),
+            )
+
+        return await asyncio.to_thread(_run)
+
+    async def get_panel_user_module_grants_raw(self, user_id: int) -> list[str]:
+        if self.panel_user_repo is None:
+            raise RuntimeError("Repositorio de usuarios del panel no configurado.")
+
+        def _run() -> list[str]:
+            row = self.panel_user_repo.get_by_id(user_id)
+            if row is None:
+                raise ValueError("USER_NOT_FOUND")
+            if str(row.get("role")) == "administrador":
+                return []
+            return self.panel_user_repo.list_module_keys_for_user(user_id)
+
+        try:
+            return await asyncio.to_thread(_run)
+        except ValueError as e:
+            if str(e) == "USER_NOT_FOUND":
+                raise ValueError("USER_NOT_FOUND") from e
+            raise
+
+    async def get_effective_panel_module_keys(self, user_id: int) -> list[str]:
+        if self.panel_user_repo is None:
+            raise RuntimeError("Repositorio de usuarios del panel no configurado.")
+
+        def _run() -> list[str]:
+            row = self.panel_user_repo.get_by_id(user_id)
+            if row is None:
+                raise ValueError("USER_NOT_FOUND")
+            if str(row.get("role")) == "administrador":
+                return sorted(ASSIGNABLE_PANEL_MODULE_KEYS)
+            return self.panel_user_repo.list_module_keys_for_user(user_id)
+
+        try:
+            return await asyncio.to_thread(_run)
+        except ValueError as e:
+            if str(e) == "USER_NOT_FOUND":
+                raise ValueError("USER_NOT_FOUND") from e
+            raise
+
+    async def set_panel_user_modules(self, user_id: int, data: PanelUserModulesBody) -> None:
+        if self.panel_user_repo is None:
+            raise RuntimeError("Repositorio de usuarios del panel no configurado.")
+
+        def _run() -> None:
+            with self.panel_user_repo.db.transaction() as conn:
+                row = self.panel_user_repo.get_by_id(user_id, conn)
+                if row is None:
+                    raise ValueError("USER_NOT_FOUND")
+                if str(row.get("role")) == "administrador":
+                    raise ValueError("ADMIN_MODULES_FIXED")
+                self.panel_user_repo.replace_module_keys(user_id, data.modules, conn)
+
+        try:
+            await asyncio.to_thread(_run)
+        except ValueError as e:
+            if str(e) == "USER_NOT_FOUND":
+                raise ValueError("USER_NOT_FOUND") from e
+            raise
+
+    async def verify_panel_user_login(self, username: str, password: str) -> bool:
+        if self.panel_user_repo is None:
+            return False
+
+        def _run() -> bool:
+            row = self.panel_user_repo.get_by_username(username)
+            if not row or not row.get("is_active"):
+                return False
+            return verify_password(password, str(row["password_hash"]))
+
+        return await asyncio.to_thread(_run)
 
     async def _async_notify(self, event: str, payload: dict[str, object]) -> None:
         try:

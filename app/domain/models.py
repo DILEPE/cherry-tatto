@@ -21,8 +21,8 @@ class AppointmentCreate:
     pending_balance: float = 0.0
     is_priority: bool = False
     customer_id: Optional[int] = None
-    # Dict serializado compatible con `CustomerCreate` (vía Pydantic en el servicio)
     customer: Optional[dict[str, JsonValue]] = None
+    assigned_panel_user_id: Optional[int] = None
 
 @dataclass
 class ContractSign:

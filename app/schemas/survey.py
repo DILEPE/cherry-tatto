@@ -96,3 +96,10 @@ class SurveyRow(BaseModel):
     comments: Optional[str] = None
     would_recommend: Optional[bool] = None
     created_at: Optional[datetime] = None
+
+
+class SurveyAppointmentLookup(BaseModel):
+    """Respuesta ligera para saber si ya existe encuesta vinculada a una cita."""
+
+    found: bool
+    survey: Optional[SurveyRow] = None

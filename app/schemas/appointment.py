@@ -48,6 +48,11 @@ class AppointmentCreateRequest(BaseModel):
     total_amount: float = Field(ge=0, default=0)
     pending_balance: float = Field(ge=0, default=0)
     is_priority: bool = Field(default=False, description="Cita prioritaria (etiqueta roja en agenda).")
+    assigned_panel_user_id: int = Field(
+        ...,
+        ge=1,
+        description="Usuario del panel (tatuador o perforador) al que se asigna la franja horaria.",
+    )
     customer_id: Optional[int] = Field(default=None, ge=1)
     customer: Optional[CustomerCreate] = Field(
         default=None,
@@ -74,6 +79,7 @@ def appointment_request_to_domain(req: AppointmentCreateRequest) -> AppointmentC
         is_priority=bool(req.is_priority),
         customer_id=req.customer_id,
         customer=req.customer.model_dump(mode="json") if req.customer is not None else None,
+        assigned_panel_user_id=int(req.assigned_panel_user_id),
     )
 
 
@@ -96,6 +102,11 @@ class AppointmentListItem(BaseModel):
     customer_id: Optional[int] = None
     created_at: Optional[datetime | str] = None
     has_signed_contract: bool = Field(default=False, description="True si existe fila en contracts para esta cita.")
+    assigned_panel_user_id: Optional[int] = None
+    assigned_username: Optional[str] = None
+    assigned_first_name: Optional[str] = None
+    assigned_last_name: Optional[str] = None
+    assigned_role: Optional[str] = None
 
 
 class AppointmentStatusUpdateRequest(BaseModel):
@@ -171,4 +182,23 @@ class AppointmentPaymentItem(BaseModel):
     appointment_id: int
     amount: float
     note: Optional[str] = None
+    created_at: Optional[datetime | str] = None
+
+
+class AppointmentPaymentReceiptListItem(BaseModel):
+    """Metadatos de un recibo PDF (sin el binario)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    appointment_id: int
+    customer_id: Optional[int] = None
+    appointment_payment_id: Optional[int] = None
+    kind: str
+    amount: float
+    total_amount_snapshot: float
+    deposit_after: float
+    pending_after: float
+    note: Optional[str] = None
+    file_name: str
     created_at: Optional[datetime | str] = None
