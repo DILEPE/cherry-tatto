@@ -4,7 +4,7 @@ import json
 import logging
 import math
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 import mysql.connector
 
@@ -14,6 +14,7 @@ from app.domain.contract_kinds import (
     service_type_to_assignee_panel_role,
 )
 from app.domain.contract_signing_guard import appointment_must_be_fully_paid_for_contract
+from app.domain.procedure_consent import PROCEDURE_CONSENT_SURVEY_QUESTION_ID
 from app.domain.service_types import resolve_service_type
 from app.domain.models import (
     AppointmentCreate,
@@ -259,6 +260,58 @@ class BusinessLogicService:
             "health_summary": data.health_data,
         }
         asyncio.create_task(self._async_notify("contract_signed", notification_payload))
+
+        consent_pdf_payload = await asyncio.to_thread(
+            self._build_contract_consent_pdf_payload,
+            data.appointment_id,
+            appointment,
+        )
+        if consent_pdf_payload:
+            asyncio.create_task(self._async_notify("contract_consent_pdf", consent_pdf_payload))
+
+    def _build_contract_consent_pdf_payload(
+        self, appointment_id: int, appointment: Any
+    ) -> Optional[dict[str, object]]:
+        """PDF de consentimiento según tipo de cita y respuesta de encuesta (pregunta id fija)."""
+        kind = appointment_to_contract_kind(appointment)
+        if kind == "tattoo":
+            label = "Tatuaje"
+        else:
+            ans = self.repository.get_survey_answer_text(
+                appointment_id, PROCEDURE_CONSENT_SURVEY_QUESTION_ID
+            )
+            label = (ans or "").strip()
+            if not label:
+                logger.warning(
+                    "Contrato piercing firmado sin respuesta de encuesta para la pregunta %s (cita %s). "
+                    "No se envía PDF de consentimiento a n8n.",
+                    PROCEDURE_CONSENT_SURVEY_QUESTION_ID,
+                    appointment_id,
+                )
+                return None
+        row = self.repository.get_procedure_consent_document(label)
+        if row is None:
+            logger.warning(
+                "No hay fila en procedure_consent_documents para %r (cita %s).",
+                label,
+                appointment_id,
+            )
+            return None
+        raw_b64 = row.get("pdf_base64")
+        if not isinstance(raw_b64, str) or not raw_b64.strip():
+            return None
+        fname = str(row.get("source_filename") or "").strip() or f"{label}.pdf"
+        return {
+            "appointment_id": appointment_id,
+            "procedure_label": label,
+            "contract_kind": kind,
+            "customer_name": str(getattr(appointment, "name", "") or ""),
+            "phone": str(getattr(appointment, "phone", "") or ""),
+            "service": str(getattr(appointment, "service", "") or ""),
+            "file_name": fname,
+            "mime_type": "application/pdf",
+            "pdf_base64": raw_b64.strip(),
+        }
 
     async def list_contracts_by_customer(self, customer_id: int) -> list[dict[str, object]]:
         return await asyncio.to_thread(self.repository.get_contracts_by_customer, customer_id)

@@ -592,6 +592,51 @@ class AppointmentRepository:
         finally:
             if conn: conn.close()
 
+    def get_survey_answer_text(self, appointment_id: int, question_id: int) -> Optional[str]:
+        """Texto en `survey_answers` (p. ej. opción elegida en radio/select)."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT sa.answer_text
+                FROM surveys s
+                INNER JOIN survey_answers sa ON sa.survey_id = s.id
+                WHERE s.appointment_id = %s AND sa.question_id = %s
+                LIMIT 1
+                """,
+                (int(appointment_id), int(question_id)),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            raw = row.get("answer_text")
+            if raw is None:
+                return None
+            t = str(raw).strip()
+            return t if t else None
+        finally:
+            if conn:
+                conn.close()
+
+    def get_procedure_consent_document(self, survey_option_label: str) -> Optional[dict[str, object]]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT survey_option_label, source_filename, pdf_base64
+                FROM procedure_consent_documents
+                WHERE survey_option_label = %s
+                LIMIT 1
+                """,
+                (survey_option_label,),
+            )
+            return cursor.fetchone()
+        finally:
+            if conn:
+                conn.close()
+
     # --- Preguntas de encuesta (configuración) ---
 
     def list_survey_questions(
