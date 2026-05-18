@@ -8,6 +8,9 @@ Si `streamlit` no se reconoce como comando, usa siempre la forma `python -m stre
 (o instala dependencias: pip install -r requirements.txt dentro del venv activado).
 
 Logo: coloca `branding.png` en `streamlit_app/assets/` o en `assets/` del proyecto.
+Si no hay branding, se usa `app/assets/receipt_rock_city_icon.png` en la barra lateral.
+Favicon del navegador: `app/assets/receipt_rock_city_icon_180.png` (generado con
+`python scripts/build_receipt_rock_city_logo.py`).
 Marca de agua opcional (fondo tipo relieve): `rock_city_watermark.png` en las mismas rutas.
 """
 from __future__ import annotations
@@ -51,6 +54,14 @@ from streamlit_app.survey_questions_admin import render_survey_questions_tab
 LOGO_CANDIDATES = [
     Path(__file__).resolve().parent / "assets" / "branding.png",
     Path(__file__).resolve().parent.parent / "assets" / "branding.png",
+    Path(__file__).resolve().parent.parent / "app" / "assets" / "receipt_rock_city_icon.png",
+    Path(__file__).resolve().parent / "assets" / "receipt_rock_city_icon.png",
+]
+
+PAGE_ICON_CANDIDATES = [
+    Path(__file__).resolve().parent.parent / "app" / "assets" / "receipt_rock_city_icon_180.png",
+    Path(__file__).resolve().parent / "assets" / "receipt_rock_city_icon_180.png",
+    Path(__file__).resolve().parent.parent / "app" / "assets" / "receipt_rock_city_icon.png",
 ]
 
 _WATERMARK_CANDIDATES = [
@@ -268,6 +279,14 @@ def _logo_path() -> Path | None:
     return None
 
 
+def _page_icon() -> str:
+    """Emoji por defecto o ruta a PNG/ICO para la pestaña del navegador."""
+    for p in PAGE_ICON_CANDIDATES:
+        if p.is_file():
+            return str(p.resolve())
+    return "🍒"
+
+
 def _api_error(payload) -> str:
     if isinstance(payload, dict):
         return str(payload.get("detail", payload))
@@ -277,7 +296,7 @@ def _api_error(payload) -> str:
 def main() -> None:
     st.set_page_config(
         page_title="Cherry Ink · Rock City — Panel API",
-        page_icon="🍒",
+        page_icon=_page_icon(),
         layout="wide",
         initial_sidebar_state="expanded",
     )

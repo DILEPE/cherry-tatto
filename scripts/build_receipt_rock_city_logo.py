@@ -4,6 +4,9 @@
 Lee `streamlit_app/assets/rock_city_watermark.png`, compone sobre fondo negro y
 remapa píxeles visibles: trazo alto/blanco en inglés, zona inferior (~纹身) en #E53E3E.
 
+Tras escribir el logo, actualiza los cuadrados ``receipt_rock_city_icon*.png`` y ``.ico``
+usados por Streamlit (favicon / sidebar si no hay ``branding.png``).
+
 Requisito: `pip install pillow` (está en requirements.txt).
 """
 from __future__ import annotations
@@ -26,6 +29,47 @@ MARK_RED = (229, 62, 62)
 # Bajo esta fracción de altura suele ir solo el bloque de caracteres chinos (p. ej. 纹身).
 # Ajustar solo si cambias el arte en rock_city_watermark.png.
 CHINESE_ZONE_TOP_FRAC = 0.793
+
+
+def write_receipt_rock_city_icons(logo_path: Path) -> None:
+    """Cuadrado centrado + ICO desde el PNG del recibo (fondo negro → transparente en iconos)."""
+    im = Image.open(logo_path).convert("RGBA")
+    w, h = im.size
+    px = im.load()
+    for yy in range(h):
+        for xx in range(w):
+            r, g, b, _a = px[xx, yy]
+            if r <= 12 and g <= 12 and b <= 12:
+                px[xx, yy] = (0, 0, 0, 0)
+
+    out_dir = logo_path.parent
+
+    def make_icon(size: int, margin_ratio: float = 0.06) -> Image.Image:
+        avail = int(size * (1 - 2 * margin_ratio))
+        scale = min(avail / w, avail / h)
+        nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+        resized = im.resize((nw, nh), Image.Resampling.LANCZOS)
+        canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        canvas.paste(resized, ((size - nw) // 2, (size - nh) // 2), resized)
+        return canvas
+
+    make_icon(512).save(out_dir / "receipt_rock_city_icon.png", optimize=True)
+    make_icon(180).save(out_dir / "receipt_rock_city_icon_180.png", optimize=True)
+    make_icon(32).save(out_dir / "receipt_rock_city_icon_32.png", optimize=True)
+    canvas_ico = make_icon(256)
+    canvas_ico.save(
+        out_dir / "receipt_rock_city_icon.ico",
+        format="ICO",
+        sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128)],
+    )
+    print(
+        "Iconos:",
+        out_dir / "receipt_rock_city_icon.png",
+        "|",
+        out_dir / "receipt_rock_city_icon_180.png",
+        "|",
+        out_dir / "receipt_rock_city_icon.ico",
+    )
 
 
 def main() -> None:
@@ -60,6 +104,7 @@ def main() -> None:
     DST.parent.mkdir(parents=True, exist_ok=True)
     out.save(DST, "PNG")
     print(f"Escrito {DST} ({w}x{h}) desde {SRC}")
+    write_receipt_rock_city_icons(DST)
 
 
 if __name__ == "__main__":
