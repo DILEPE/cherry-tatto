@@ -55,8 +55,6 @@ class ContractSignRequest(BaseModel):
             raise ValueError(
                 "La firma del cliente es obligatoria: debe dibujarse en el recuadro (o completarse en modo texto si aplica)."
             )
-        if not _is_non_empty_signature_blob(self.artist_signature):
-            raise ValueError("La firma del tatuador o perforador es obligatoria.")
         if self.is_minor:
             if not _is_non_empty_signature_blob(self.tutor_signature):
                 raise ValueError("La firma del tutor o representante es obligatoria para menores de edad.")
@@ -64,6 +62,23 @@ class ContractSignRequest(BaseModel):
                 raise ValueError("Debes adjuntar la foto del anverso del documento del tutor.")
             if not _is_document_capture(self.tutor_document_back):
                 raise ValueError("Debes adjuntar la foto del reverso del documento del tutor.")
+        return self
+
+
+class ContractArtistSignRequest(BaseModel):
+    """Completar solo la firma del profesional cuando el cliente ya firmó."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    appointment_id: int = Field(..., ge=1)
+    artist_signature: str = Field(..., min_length=1, max_length=1_000_000)
+
+    @model_validator(mode="after")
+    def artist_blob_ok(self) -> ContractArtistSignRequest:
+        if not _is_non_empty_signature_blob(self.artist_signature):
+            raise ValueError(
+                "La firma del profesional es obligatoria: debe dibujarse en el recuadro (o modo texto si aplica)."
+            )
         return self
 
 

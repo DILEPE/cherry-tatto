@@ -47,6 +47,14 @@ class AppointmentRepository:
                     SELECT a.*,
                         EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
                             AS has_signed_contract,
+                        EXISTS (
+                            SELECT 1 FROM contracts c
+                            WHERE c.appointment_id = a.id
+                              AND (
+                                  c.artist_signature IS NULL
+                                  OR CHAR_LENGTH(TRIM(c.artist_signature)) < 80
+                              )
+                        ) AS contract_pending_artist_signature,
                         pu.username AS assigned_username,
                         pu.first_name AS assigned_first_name,
                         pu.last_name AS assigned_last_name,
@@ -62,6 +70,14 @@ class AppointmentRepository:
                     SELECT a.*,
                         EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
                             AS has_signed_contract,
+                        EXISTS (
+                            SELECT 1 FROM contracts c
+                            WHERE c.appointment_id = a.id
+                              AND (
+                                  c.artist_signature IS NULL
+                                  OR CHAR_LENGTH(TRIM(c.artist_signature)) < 80
+                              )
+                        ) AS contract_pending_artist_signature,
                         pu.username AS assigned_username,
                         pu.first_name AS assigned_first_name,
                         pu.last_name AS assigned_last_name,
@@ -77,6 +93,8 @@ class AppointmentRepository:
             for row in rows:
                 raw = row.get("has_signed_contract")
                 row["has_signed_contract"] = bool(raw) if raw is not None else False
+                rawp = row.get("contract_pending_artist_signature")
+                row["contract_pending_artist_signature"] = bool(rawp) if rawp is not None else False
             return rows
         except Exception as e:
             err = str(e)
@@ -101,6 +119,14 @@ class AppointmentRepository:
                     SELECT a.*,
                         EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
                             AS has_signed_contract,
+                        EXISTS (
+                            SELECT 1 FROM contracts c
+                            WHERE c.appointment_id = a.id
+                              AND (
+                                  c.artist_signature IS NULL
+                                  OR CHAR_LENGTH(TRIM(c.artist_signature)) < 80
+                              )
+                        ) AS contract_pending_artist_signature,
                         pu.username AS assigned_username,
                         pu.first_name AS assigned_first_name,
                         pu.last_name AS assigned_last_name,
@@ -122,7 +148,15 @@ class AppointmentRepository:
                         """
                         SELECT a.*,
                             EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
-                                AS has_signed_contract
+                                AS has_signed_contract,
+                            EXISTS (
+                                SELECT 1 FROM contracts c
+                                WHERE c.appointment_id = a.id
+                                  AND (
+                                      c.artist_signature IS NULL
+                                      OR CHAR_LENGTH(TRIM(c.artist_signature)) < 80
+                                  )
+                            ) AS contract_pending_artist_signature
                         FROM appointments a
                         WHERE a.id = %s
                         LIMIT 1
@@ -136,6 +170,8 @@ class AppointmentRepository:
                 return None
             raw = row.get("has_signed_contract")
             row["has_signed_contract"] = bool(raw) if raw is not None else False
+            rawp = row.get("contract_pending_artist_signature")
+            row["contract_pending_artist_signature"] = bool(rawp) if rawp is not None else False
             return row
         finally:
             if conn:
@@ -149,7 +185,15 @@ class AppointmentRepository:
                 """
                 SELECT a.*,
                     EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
-                        AS has_signed_contract
+                        AS has_signed_contract,
+                    EXISTS (
+                        SELECT 1 FROM contracts c
+                        WHERE c.appointment_id = a.id
+                          AND (
+                              c.artist_signature IS NULL
+                              OR CHAR_LENGTH(TRIM(c.artist_signature)) < 80
+                          )
+                    ) AS contract_pending_artist_signature
                 FROM appointments a
                 ORDER BY a.created_at DESC
                 """
@@ -158,6 +202,8 @@ class AppointmentRepository:
             for row in rows:
                 raw = row.get("has_signed_contract")
                 row["has_signed_contract"] = bool(raw) if raw is not None else False
+                rawp = row.get("contract_pending_artist_signature")
+                row["contract_pending_artist_signature"] = bool(rawp) if rawp is not None else False
             return rows
         finally:
             if conn:
@@ -345,6 +391,40 @@ class AppointmentRepository:
             return cursor.fetchone() is not None
         finally:
             if conn: conn.close()
+
+    def get_latest_contract_row_for_appointment(self, appointment_id: int) -> Optional[dict[str, object]]:
+        """Último contrato de la cita (mayor id)."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT id, appointment_id, template_id, is_minor, contract_text,
+                       client_signature, tutor_signature, artist_signature
+                FROM contracts
+                WHERE appointment_id = %s
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (int(appointment_id),),
+            )
+            return cursor.fetchone()
+        finally:
+            if conn:
+                conn.close()
+
+    def update_contract_artist_signature(self, contract_id: int, artist_signature: str) -> None:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                "UPDATE contracts SET artist_signature = %s WHERE id = %s",
+                (artist_signature, int(contract_id)),
+            )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
 
     def get_contracts_by_customer(self, customer_id: int) -> list[dict[str, object]]:
         """Lista contratos firmados vinculados a un cliente."""

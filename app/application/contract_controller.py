@@ -3,7 +3,11 @@ from litestar.datastructures import State
 from litestar.exceptions import HTTPException
 
 from app.schemas.common import ApiSuccessResponse
-from app.schemas.contract import ContractSignRequest, contract_sign_to_domain
+from app.schemas.contract import (
+    ContractArtistSignRequest,
+    ContractSignRequest,
+    contract_sign_to_domain,
+)
 
 
 class ContractController(Controller):
@@ -30,6 +34,42 @@ class ContractController(Controller):
         except Exception as e:
             raise HTTPException(
                 detail=f"Error al procesar contrato: {str(e)}", status_code=500
+            ) from e
+
+    @get("/appointment/{appointment_id:int}/latest-summary")
+    async def latest_summary_for_appointment(self, appointment_id: int, state: State) -> dict:
+        """Texto guardado del contrato y si falta firma del profesional (panel interno)."""
+        try:
+            row = await state.service.get_contract_latest_summary_for_appointment(appointment_id)
+            if row is None:
+                raise HTTPException(detail="No hay contrato para esta cita", status_code=404)
+            return row
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(detail=f"Error al obtener contrato: {str(e)}", status_code=500) from e
+
+    @post("/complete-artist-signature", status_code=status_codes.HTTP_200_OK)
+    async def complete_artist_signature(
+        self, data: ContractArtistSignRequest, state: State
+    ) -> ApiSuccessResponse:
+        try:
+            await state.service.complete_contract_artist_signature(
+                data.appointment_id, data.artist_signature
+            )
+            return ApiSuccessResponse(
+                status="success",
+                message="Firma del profesional registrada. La cita quedó finalizada.",
+            )
+        except ValueError as e:
+            msg = str(e)
+            status_code404 = status_codes.HTTP_404_NOT_FOUND
+            status_code400 = status_codes.HTTP_400_BAD_REQUEST
+            code = status_code404 if "no encontrada" in msg.lower() else status_code400
+            raise HTTPException(detail=msg, status_code=code) from e
+        except Exception as e:
+            raise HTTPException(
+                detail=f"Error al registrar firma del profesional: {str(e)}", status_code=500
             ) from e
 
     @get("/customer/{customer_id:int}")

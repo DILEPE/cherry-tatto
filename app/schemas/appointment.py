@@ -102,6 +102,10 @@ class AppointmentListItem(BaseModel):
     customer_id: Optional[int] = None
     created_at: Optional[datetime | str] = None
     has_signed_contract: bool = Field(default=False, description="True si existe fila en contracts para esta cita.")
+    contract_pending_artist_signature: bool = Field(
+        default=False,
+        description="True si hay contrato pero falta una firma válida del profesional (tatuador/perforador).",
+    )
     assigned_panel_user_id: Optional[int] = None
     assigned_username: Optional[str] = None
     assigned_first_name: Optional[str] = None

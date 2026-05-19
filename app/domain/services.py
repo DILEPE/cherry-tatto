@@ -23,6 +23,7 @@ from app.domain.models import (
     Survey,
     SurveyQuestion,
 )
+from app.schemas.contract import _is_non_empty_signature_blob
 from app.domain.panel_user_profile import PANEL_ROLE_LABEL_ES
 from app.domain.panel_modules import ASSIGNABLE_PANEL_MODULE_KEYS
 from app.domain.panel_passwords import hash_password, verify_password
@@ -374,8 +375,16 @@ class BusinessLogicService:
                 pay_err or "La cita no cumple las condiciones de pago para firmar el contrato."
             )
 
+        if self.repository.has_contract_for_appointment(data.appointment_id):
+            raise ValueError(
+                "Ya existe un contrato registrado para esta cita. Si falta la firma del profesional, "
+                "complétela desde la agenda con «Completar firma del profesional»."
+            )
+
         self.repository.create_contract(data)
-        self.repository.update_status(data.appointment_id, "Finalizada")
+
+        if _is_non_empty_signature_blob(data.artist_signature):
+            self.repository.update_status(data.appointment_id, "Finalizada")
 
         notification_payload: dict[str, object] = {
             "appointment_id": data.appointment_id,
@@ -393,6 +402,51 @@ class BusinessLogicService:
         )
         if consent_pdf_payload:
             asyncio.create_task(self._async_notify("contract_consent_pdf", consent_pdf_payload))
+
+    async def get_contract_latest_summary_for_appointment(self, appointment_id: int) -> Optional[dict[str, object]]:
+        """Texto del contrato y si falta firma del profesional (sin devolver blobs completos)."""
+
+        def _load() -> Optional[dict[str, object]]:
+            row = self.repository.get_latest_contract_row_for_appointment(appointment_id)
+            if not row:
+                return None
+            return {
+                "contract_id": int(row["id"]),
+                "appointment_id": int(row["appointment_id"]),
+                "contract_text": str(row.get("contract_text") or ""),
+                "pending_artist_signature": not _is_non_empty_signature_blob(row.get("artist_signature")),
+            }
+
+        return await asyncio.to_thread(_load)
+
+    async def complete_contract_artist_signature(self, appointment_id: int, artist_signature: str) -> None:
+        """Registra la firma del tatuador/perforador y cierra la cita cuando ya firmó el cliente."""
+        if not _is_non_empty_signature_blob(artist_signature):
+            raise ValueError(
+                "La firma del profesional es obligatoria: debe dibujarse en el recuadro (o modo texto si aplica)."
+            )
+        appointment = self.repository.get_by_id(appointment_id)
+        if not appointment:
+            raise ValueError(f"Cita con ID {appointment_id} no encontrada.")
+
+        ok_pay, pay_err = appointment_must_be_fully_paid_for_contract(
+            total_amount=getattr(appointment, "total_amount", None),
+            deposit=getattr(appointment, "deposit", None),
+            pending_balance=getattr(appointment, "pending_balance", None),
+        )
+        if not ok_pay:
+            raise ValueError(
+                pay_err or "La cita no cumple las condiciones de pago para completar el contrato."
+            )
+
+        row = self.repository.get_latest_contract_row_for_appointment(appointment_id)
+        if not row:
+            raise ValueError("No hay contrato registrado para esta cita.")
+        if _is_non_empty_signature_blob(row.get("artist_signature")):
+            raise ValueError("El contrato ya tiene la firma del profesional.")
+
+        self.repository.update_contract_artist_signature(int(row["id"]), artist_signature)
+        self.repository.update_status(appointment_id, "Finalizada")
 
     def _resolve_piercing_procedure_label(
         self, appointment_id: int, preferred_answer: Optional[str]
