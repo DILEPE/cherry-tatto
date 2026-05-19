@@ -25,7 +25,11 @@ from app.domain.contract_signing_guard import appointment_must_be_fully_paid_for
 from app.domain.survey_question_helpers import question_type_label_es, question_type_supports_distribution_chart
 from app.schemas.customer import CUSTOMER_BIRTH_PENDING, CustomerCreate
 from streamlit_app import api_client, report_charts
-from streamlit_app.panel_navigation import open_contract_express_piercing, open_contract_signing
+from streamlit_app.panel_navigation import (
+    open_contract_artist_signature,
+    open_contract_express_piercing,
+    open_contract_signing,
+)
 from streamlit_app.cached_public_api import (
     get_panel_users_assignable_cached,
     get_survey_question_stats_summary_cached,
@@ -237,6 +241,53 @@ def _contract_firma_blocked_por_saldo(r: Dict[str, Any]) -> bool:
         pending_balance=r.get("pending_balance"),
     )
     return not ok
+
+
+def _firmar_contrato_disabled(r: Dict[str, Any]) -> bool:
+    """Recepción no reabre tras registrar contrato; el técnico sí puede completar su firma pendiente."""
+    appt_id = int(r.get("id", 0) or 0)
+    status = str(r.get("status") or "Agendada")
+    has_customer = r.get("customer_id") is not None
+    base = (
+        appt_id <= 0
+        or not has_customer
+        or status in {"Cancelada", "Finalizada"}
+        or not service_type_requires_contract(str(r.get("service_type") or ""))
+        or _contract_firma_blocked_por_saldo(r)
+    )
+    if base:
+        return True
+    has_contract = bool(r.get("has_signed_contract"))
+    pending_artist = bool(r.get("contract_pending_artist_signature"))
+    if _panel_is_technician_role():
+        # El técnico solo completa su firma sobre un contrato ya guardado en recepción (sin datos ni encuesta).
+        return base or not pending_artist
+    return has_contract
+
+
+def _firmar_contrato_button_label(r: Dict[str, Any]) -> str:
+    """Texto del botón según estado del contrato (requiere `contract_pending_artist_signature` en la API)."""
+    has_contract = bool(r.get("has_signed_contract"))
+    pending_artist = bool(r.get("contract_pending_artist_signature"))
+    if _panel_is_technician_role():
+        if pending_artist:
+            return "Completar firma profesional"
+        if has_contract:
+            return "Contrato firmado"
+        return "Firma pendiente en recepción"
+    if not has_contract:
+        return "Firmar contrato"
+    if pending_artist:
+        return "Pendiente firma profesional"
+    return "Contrato firmado"
+
+
+def _open_firma_contrato_nav(r: Dict[str, Any], appt_id: int) -> None:
+    if _panel_is_technician_role():
+        if bool(r.get("contract_pending_artist_signature")):
+            open_contract_artist_signature(appt_id)
+        return
+    open_contract_signing(appt_id)
 
 
 def _appointments_query_assigned_user_id() -> Optional[int]:
@@ -1010,7 +1061,15 @@ def _calendar_overflow_row_html(row: dict[str, Any], counts_by_client: dict[str,
     left_cluster = (
         "<span style='display:flex;flex-wrap:wrap;align-items:center;gap:0.35rem;flex:1 1 auto;min-width:0'>"
         f"<span style='font-weight:600'>{html_mod.escape(hm)}</span><span>·</span>"
-        f"{svc_flag}<span>·</span>{pill}{staff_el}</span>"
+        f"{svc_flag}<span>·</span>{pill}{staff_el}"
+        + (
+            "<span style='flex-shrink:0;background:#f59e0b;color:#111827;padding:0.1rem 0.42rem;"
+            "border-radius:6px;font-size:0.68rem;font-weight:700;margin-left:0.15rem'>"
+            "Firma profesional pendiente</span>"
+            if bool(row.get("contract_pending_artist_signature"))
+            else ""
+        )
+        + "</span>"
     )
     return (
         f"<div style='font-size:0.86rem;line-height:1.5;{dim}margin:0.4rem 0;padding-bottom:0.35rem;"
@@ -1301,7 +1360,7 @@ def _dialog_agendar_cita() -> None:
 
     st.markdown('<p class="dlg-appt-col-h">Verificación de documento</p>', unsafe_allow_html=True)
     st.text_input(
-        "Número de documento *",
+        "Número de documento del cliente*",
         key="ap_doc_number",
         placeholder="Sin puntos ni espacios, si es posible",
     )
@@ -1723,7 +1782,8 @@ def _dialog_calendar_day_appointments(
     st.markdown(f"**{day_date.strftime('%d/%m/%Y')}** · **{len(day_rows)}** cita(s)")
     if _panel_is_technician_role():
         st.caption(
-            "Como **tatuador / perforador** solo ves citas **desde hoy** con estado activo; aquí solo puedes usar **Firmar contrato**. "
+            "Como **tatuador / perforador** solo ves citas **desde hoy** con estado activo; aquí solo puedes "
+            "**Completar firma profesional** cuando recepción ya guardó el contrato del cliente. "
             "El agendamiento, montos y reprogramación los gestiona administración o ventas."
         )
     else:
@@ -1736,25 +1796,20 @@ def _dialog_calendar_day_appointments(
         appt_id = int(r.get("id", 0) or 0)
         status = str(r.get("status") or "Agendada")
         has_customer = r.get("customer_id") is not None
-        firmar_disabled = (
-            appt_id <= 0
-            or not has_customer
-            or status in {"Cancelada", "Finalizada"}
-            or not service_type_requires_contract(str(r.get("service_type") or ""))
-            or _contract_firma_blocked_por_saldo(r)
-        )
+        firmar_disabled = _firmar_contrato_disabled(r)
         repro_disabled = _reprogram_disabled_for_row(r)
         montos_disabled = appt_id <= 0 or status not in {"Agendada", "Reprogramada"}
         anular_disabled = appt_id <= 0 or status in {"Cancelada", "Finalizada"}
+        firma_lbl = _firmar_contrato_button_label(r)
         if _panel_is_technician_role():
             if st.button(
-                "Firmar contrato",
+                firma_lbl,
                 disabled=firmar_disabled,
                 use_container_width=True,
                 key=f"cal_dlg_firmar_{appt_id}_{y}_{m}_{d}_{idx}",
             ):
                 st.session_state.pop("_cal_overflow_day", None)
-                open_contract_signing(appt_id)
+                _open_firma_contrato_nav(r, appt_id)
         else:
             b0, b1, b2, b3, b4 = st.columns(5)
             with b0:
@@ -1765,7 +1820,7 @@ def _dialog_calendar_day_appointments(
                     key=f"cal_dlg_firmar_{appt_id}_{y}_{m}_{d}_{idx}",
                 ):
                     st.session_state.pop("_cal_overflow_day", None)
-                    open_contract_signing(appt_id)
+                    _open_firma_contrato_nav(r, appt_id)
             with b1:
                 if st.button(
                     "Reprogramar",
@@ -1877,43 +1932,38 @@ def _render_cita_row_actions(r: Dict[str, Any], *, show_firma: bool = True) -> N
     """
     Menú de acciones por fila. `show_firma=False` omite la firma en vista administrativa (p. ej. Reporte).
 
-    Tatuadores y perforadores solo ven **Firmar contrato** (ignoran `show_firma`).
+    Tatuadores y perforadores solo ven acciones de **firma profesional** (sin flujo de cliente ni encuesta).
     """
     appt_id = int(r.get("id", 0) or 0)
     status = str(r.get("status") or "Agendada")
     has_customer = r.get("customer_id") is not None
-    firmar_disabled = (
-        appt_id <= 0
-        or not has_customer
-        or status in {"Cancelada", "Finalizada"}
-        or not service_type_requires_contract(str(r.get("service_type") or ""))
-        or _contract_firma_blocked_por_saldo(r)
-    )
+    firmar_disabled = _firmar_contrato_disabled(r)
     repro_disabled = _reprogram_disabled_for_row(r)
     montos_disabled = appt_id <= 0 or status not in {"Agendada", "Reprogramada"}
     anular_disabled = appt_id <= 0 or status in {"Cancelada", "Finalizada"}
+    firma_lbl = _firmar_contrato_button_label(r)
 
     if _panel_is_technician_role():
         pop = getattr(st, "popover", None)
         if pop:
-            with pop("Firma contrato", use_container_width=True):
+            with pop("Firma profesional", use_container_width=True):
                 if appt_id > 0:
                     st.caption(f"Cita #{appt_id}")
                 if st.button(
-                    "Firmar contrato",
+                    firma_lbl,
                     disabled=firmar_disabled,
                     use_container_width=True,
                     key=f"pop_firmar_{appt_id}",
                 ):
-                    open_contract_signing(appt_id)
+                    _open_firma_contrato_nav(r, appt_id)
             return
         if st.button(
-            "Firmar contrato",
+            firma_lbl,
             disabled=firmar_disabled,
             use_container_width=True,
             key=f"fb_tech_only_{appt_id}",
         ):
-            open_contract_signing(appt_id)
+            _open_firma_contrato_nav(r, appt_id)
         return
 
     pop = getattr(st, "popover", None)
@@ -1929,7 +1979,7 @@ def _render_cita_row_actions(r: Dict[str, Any], *, show_firma: bool = True) -> N
                     use_container_width=True,
                     key=f"pop_firmar_{appt_id}",
                 ):
-                    open_contract_signing(appt_id)
+                    _open_firma_contrato_nav(r, appt_id)
             if st.button(
                 "Reprogramar cita",
                 disabled=repro_disabled,
@@ -1979,7 +2029,7 @@ def _render_cita_row_actions(r: Dict[str, Any], *, show_firma: bool = True) -> N
                 use_container_width=True,
                 key=f"fb_compact_{appt_id}",
             ):
-                open_contract_signing(appt_id)
+                _open_firma_contrato_nav(r, appt_id)
         with ln2:
             if st.button("Mover", disabled=repro_disabled, use_container_width=True, key=f"fb_repr_{appt_id}"):
                 st.session_state["_ap_reprogram_item"] = r
@@ -3098,7 +3148,11 @@ def _sync_appointments_from_api() -> None:
     """GET /appointments solo si hubo cambios, cambio de filtro API, módulo o primera carga."""
     qid = _appointments_query_assigned_user_id()
     prev_qid = st.session_state.get("_ap_last_fetch_qid")
-    if st.session_state.get("_ap_reload", True) or prev_qid != qid:
+    if (
+        st.session_state.get("_ap_reload", True)
+        or prev_qid != qid
+        or st.session_state.pop("_ap_refresh_after_contract", False)
+    ):
         with st.spinner("Actualizando citas…"):
             _fetch_appointments()
         st.session_state["_ap_reload"] = False

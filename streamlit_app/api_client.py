@@ -131,6 +131,14 @@ def post_contract(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
     return _request("POST", "/api/contracts", json_body=payload)
 
 
+def get_contract_latest_summary_for_appointment(appointment_id: int) -> Tuple[bool, int, Any]:
+    return _request("GET", f"/api/contracts/appointment/{int(appointment_id)}/latest-summary")
+
+
+def post_contract_complete_artist_signature(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
+    return _request("POST", "/api/contracts/complete-artist-signature", json_body=payload)
+
+
 def get_customer_contracts(customer_id: int) -> Tuple[bool, int, Any]:
     return _request("GET", f"/api/contracts/customer/{customer_id}")
 

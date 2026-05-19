@@ -2,6 +2,8 @@
 
 Se abre vía query params del mismo Streamlit (`?view=contract_sign&appointment_id=...`) con sesión del panel;
 usar `panel_navigation.open_contract_signing` en lugar de enlaces externos para no perder la sesión.
+
+Solo firma del profesional (cliente ya firmó): `contract_artist_only=1` — ver `open_contract_artist_signature`.
 """
 from __future__ import annotations
 
@@ -38,6 +40,17 @@ from streamlit_app.customers_management import (
     _validate_document_rules,
 )
 
+def _request_citas_list_refresh() -> None:
+    """Tras guardar contrato en API: obligar a GET /appointments en la próxima vista de citas (botones al día)."""
+    st.session_state["_ap_refresh_after_contract"] = True
+
+
+def _panel_session_is_technician() -> bool:
+    """Tatuador/perforador: mismo criterio que citas_tab (sin import circular)."""
+    role = str(st.session_state.get("_panel_user_role") or "")
+    return role in ("tatuador", "perforador")
+
+
 CONTRACT_NO_REFUND_NOTICE = (
     "Por favor, tenga en cuenta que no hay devolución de dinero por citas apartadas, tampoco por abonos. "
     "En caso de modificaciones de último momento en los diseños, su valor puede aumentar."
@@ -52,6 +65,12 @@ def _toast_ok(message: str, *, icon: str = "✅") -> None:
 
 
 _CTSIG_Q_UNSET = ""
+
+
+def _contract_artist_only_query() -> bool:
+    """Query param del panel: solo lienzo del profesional (cliente ya firmó)."""
+    return (st.query_params.get("contract_artist_only") or "").strip().lower() in ("1", "true", "yes", "on")
+
 
 def _fmt_survey_no_selection(x: str) -> str:
     return "— Selecciona —" if x == _CTSIG_Q_UNSET else str(x)
@@ -324,6 +343,7 @@ def _exit_contract_signing_to_panel() -> None:
         if isinstance(k, str) and k.startswith("ctsig_expr_"):
             st.session_state.pop(k, None)
     st.session_state.pop("ctsig_skip_init_step", None)
+    st.session_state.pop("ctsig_artist_only", None)
     leave_contract_view_to_panel()
 
 
@@ -685,7 +705,10 @@ def _render_step3_sign_contract(
     )
     st.warning(CONTRACT_NO_REFUND_NOTICE)
     if is_minor:
-        st.info("Menor de edad: firma del cliente, del tutor, fotos del documento del tutor y firma del profesional.")
+        st.info(
+            "Menor de edad: firma del cliente, del tutor, fotos del documento del tutor y firma del profesional "
+            "(esta última puede completarla el tatuador/perforador después desde la agenda)."
+        )
 
     @st.fragment
     def _fragment_firmas_y_guardado() -> None:
@@ -757,7 +780,7 @@ def _render_step3_sign_contract(
                 )
             with sig_cols[2]:
                 artist_signature = _signature_pad_b64(
-                    "Firma del tatuador/perforador",
+                    "Firma del tatuador/perforador (opcional aquí)",
                     "ctsig_artist",
                     canvas_width=_sig_w,
                     canvas_height=_sig_h,
@@ -765,7 +788,7 @@ def _render_step3_sign_contract(
         else:
             with sig_cols[1]:
                 artist_signature = _signature_pad_b64(
-                    "Firma del tatuador/perforador",
+                    "Firma del tatuador/perforador (opcional aquí)",
                     "ctsig_artist",
                     canvas_width=_sig_w,
                     canvas_height=_sig_h,
@@ -823,8 +846,6 @@ def _render_step3_sign_contract(
                 firmas_pendientes: list[str] = []
                 if not _signature_payload_acceptable(client_signature):
                     firmas_pendientes.append("**Firma del cliente** — dibuja en el primer recuadro.")
-                if not _signature_payload_acceptable(artist_signature):
-                    firmas_pendientes.append("**Firma del profesional** — dibuja en el recuadro del tatuador/perforador.")
                 if is_minor:
                     if not _signature_payload_acceptable(tutor_signature):
                         firmas_pendientes.append("**Firma del tutor** — obligatoria para menores.")
@@ -907,6 +928,7 @@ def _render_step3_sign_contract(
                 }
                 ok_s, code_s, data_s = api_client.post_contract(payload)
                 if ok_s:
+                    _request_citas_list_refresh()
                     st.session_state["_panel_pending_toast"] = "Contrato firmado y registrado correctamente."
                     _panel_principal_from_step3()
                 else:
@@ -1215,25 +1237,91 @@ def _render_step2_questionnaire(appointment_id: int, appt: dict[str, Any]) -> No
             _panel_principal_from_step3()
 
 
+def _render_step3_artist_only_signature(
+    appointment_id: int,
+    appointment: dict[str, Any],
+) -> None:
+    """Solo lienzo del profesional: sin datos del cliente, sin texto del contrato ni encuesta."""
+    st.markdown("#### Tu firma en el contrato")
+    st.caption(
+        "Recepción ya registró el contrato y la firma del cliente. "
+        "Solo debes dibujar tu firma abajo; no verás datos personales ni encuesta."
+    )
+    ok_pay, pay_err = _appointment_payment_ready_for_signature(appointment)
+    if not ok_pay:
+        st.error(pay_err or "Completa el abono antes de registrar la firma.")
+        return
+
+    ok_s, code_s, summary = api_client.get_contract_latest_summary_for_appointment(int(appointment_id))
+    if not ok_s or not isinstance(summary, dict):
+        st.error(f"No se pudo verificar el contrato (HTTP {code_s}): {_detail(summary)}")
+        return
+    if not summary.get("pending_artist_signature"):
+        st.success("Este contrato ya tiene la firma del profesional.")
+        if st.button("Volver al panel principal", type="primary", key="ctsig_ao_already"):
+            _exit_contract_signing_to_panel()
+        return
+
+    _sig_w, _sig_h = 340, 170
+    artist_signature = _signature_pad_b64(
+        "Firma del tatuador/perforador *",
+        "ctsig_artist_only_pad",
+        canvas_width=_sig_w,
+        canvas_height=_sig_h,
+    )
+
+    b1, b2 = st.columns(2)
+    with b1:
+        if st.button("← Volver al panel principal", use_container_width=True, key="ctsig_ao_cancel"):
+            _exit_contract_signing_to_panel()
+    with b2:
+        if st.button(
+            "Guardar firma profesional",
+            type="primary",
+            use_container_width=True,
+            key="ctsig_ao_save",
+        ):
+            if not _signature_payload_acceptable(artist_signature):
+                st.warning("Dibuja tu firma en el recuadro antes de guardar.")
+            else:
+                payload = {
+                    "appointment_id": int(appointment_id),
+                    "artist_signature": artist_signature,
+                }
+                ok_p, code_p, data_p = api_client.post_contract_complete_artist_signature(payload)
+                if ok_p:
+                    _request_citas_list_refresh()
+                    st.session_state["_panel_pending_toast"] = (
+                        "Firma del profesional registrada; la cita quedó finalizada."
+                    )
+                    _exit_contract_signing_to_panel()
+                else:
+                    st.error(f"No se pudo guardar (HTTP {code_p}): {_detail(data_p)}")
+
+
 def render_contract_signing_view(appointment_id: int) -> None:
     aid = int(appointment_id)
+    artist_only_q = _contract_artist_only_query()
     if st.session_state.get("ctsig_aid") != aid:
         st.session_state["ctsig_aid"] = aid
         skip_init = bool(st.session_state.pop("ctsig_skip_init_step", False))
-        st.session_state["ctsig_step"] = 2 if skip_init else 1
+        if artist_only_q:
+            st.session_state["ctsig_step"] = 3
+            st.session_state["ctsig_artist_only"] = True
+        else:
+            st.session_state["ctsig_step"] = 2 if skip_init else 1
+            st.session_state.pop("ctsig_artist_only", None)
         st.session_state.pop("_ctsig_pending_toast", None)
         _ctsig_clear_contract_caches()
 
     step = int(st.session_state.get("ctsig_step", 1))
+    if st.session_state.get("ctsig_artist_only") or artist_only_q:
+        step = 3
+        st.session_state["ctsig_step"] = 3
+        st.session_state["ctsig_artist_only"] = True
     if step not in (1, 2, 3):
         step = 1
         st.session_state["ctsig_step"] = 1
-
-    st.subheader("Firma digital de contrato")
-    _steps_progress(step)
-
-    if st.button("Volver al panel principal", key="ctsig_back"):
-        _exit_contract_signing_to_panel()
 
     ok_a, code_a, appt = api_client.get_appointment(aid)
     if not ok_a or not isinstance(appt, dict):
@@ -1243,13 +1331,46 @@ def render_contract_signing_view(appointment_id: int) -> None:
     if int(appt.get("id", 0) or 0) != aid:
         st.error("Cita no encontrada.")
         return
+
+    tech = _panel_session_is_technician()
+    pending_professional = bool(appt.get("contract_pending_artist_signature"))
+    if tech and pending_professional:
+        st.session_state["ctsig_artist_only"] = True
+        st.session_state["ctsig_step"] = 3
+
+    artist_only_ui = bool(st.session_state.get("ctsig_artist_only"))
+
+    if tech and not pending_professional and not artist_only_ui:
+        st.subheader("Firma de contrato")
+        st.caption("Tu perfil solo permite completar **tu firma** cuando recepción ya registró el contrato del cliente.")
+        if st.button("Volver al panel principal", key="ctsig_back"):
+            _exit_contract_signing_to_panel()
+        st.warning(
+            "La **firma del cliente** y la **encuesta** las gestiona **recepción**. "
+            "Cuando falte tu firma, en **Gestión de citas** verás el botón **Completar firma profesional**."
+        )
+        return
+
+    if artist_only_ui:
+        st.subheader("Firma profesional")
+        st.caption("Solo registro de tu firma; sin datos del cliente ni encuesta.")
+    else:
+        st.subheader("Firma digital de contrato")
+        _steps_progress(step)
+
+    if st.button("Volver al panel principal", key="ctsig_back"):
+        _exit_contract_signing_to_panel()
+
     pending_flow = st.session_state.pop("_ctsig_pending_toast", None)
     if pending_flow:
         _toast_ok(str(pending_flow))
-    st.caption(
-        f"Cita **#{aid}** · Artista: **{_appointment_artist_display_name(appt)}** · "
-        f"Servicio: **{appt.get('service_type', '—')}** · Cliente: **{appt.get('customer_name', '—')}**"
-    )
+    if artist_only_ui or st.session_state.get("ctsig_artist_only"):
+        st.caption(f"Cita **#{aid}** · Servicio: **{appt.get('service_type', '—')}**")
+    else:
+        st.caption(
+            f"Cita **#{aid}** · Artista: **{_appointment_artist_display_name(appt)}** · "
+            f"Servicio: **{appt.get('service_type', '—')}** · Cliente: **{appt.get('customer_name', '—')}**"
+        )
     if not service_type_requires_contract(appt.get("service_type")):
         st.info(
             "Las citas de tipo **Cambio** o **Limpieza** no requieren firma de contrato digital."
@@ -1258,6 +1379,18 @@ def render_contract_signing_view(appointment_id: int) -> None:
         if st.button("Volver al panel principal", type="primary", key="ctsig_no_contract_back"):
             _exit_contract_signing_to_panel()
         return
+    if st.session_state.get("ctsig_artist_only"):
+        if not bool(appt.get("contract_pending_artist_signature")):
+            st.warning(
+                "Esta vista es solo para completar la **firma del profesional**. "
+                "Aquí no aplica (el contrato ya está completo o el cliente aún no ha firmado)."
+            )
+            if st.button("Volver al panel principal", type="primary", key="ctsig_ao_nop"):
+                _exit_contract_signing_to_panel()
+            return
+        _render_step3_artist_only_signature(aid, appt)
+        return
+
     customer_id_raw = appt.get("customer_id")
     if not customer_id_raw:
         st.error("La cita no tiene cliente vinculado.")
@@ -1283,6 +1416,7 @@ def _leave_express_piercing_to_panel() -> None:
         if isinstance(k, str) and k.startswith("ctsig_expr_"):
             st.session_state.pop(k, None)
     st.session_state.pop("ctsig_skip_init_step", None)
+    st.session_state.pop("ctsig_artist_only", None)
     leave_contract_view_to_panel()
 
 

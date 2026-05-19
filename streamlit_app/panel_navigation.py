@@ -11,6 +11,15 @@ import streamlit as st
 def open_contract_signing(appointment_id: int) -> None:
     st.query_params["view"] = "contract_sign"
     st.query_params["appointment_id"] = str(int(appointment_id))
+    st.query_params.pop("contract_artist_only", None)
+    st.rerun()
+
+
+def open_contract_artist_signature(appointment_id: int) -> None:
+    """Solo firma del profesional: sin datos ni encuesta (cliente ya firmó)."""
+    st.query_params["view"] = "contract_sign"
+    st.query_params["appointment_id"] = str(int(appointment_id))
+    st.query_params["contract_artist_only"] = "1"
     st.rerun()
 
 
@@ -38,4 +47,5 @@ def leave_contract_view_to_panel() -> None:
     st.query_params.pop("appointment_id", None)
     st.query_params.pop("contract_id", None)
     st.query_params.pop("express_piercing", None)
+    st.query_params.pop("contract_artist_only", None)
     st.rerun()
