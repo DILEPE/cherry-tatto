@@ -40,6 +40,17 @@ from streamlit_app.cached_public_api import (
 from streamlit_app.customer_sync import fetch_customer_by_document
 from streamlit_app.validation import validate_appointment
 
+from streamlit_app.components.citas_legend import render_citas_color_legend as _render_citas_color_legend
+from streamlit_app.components.pills import (
+    client_history_key as _client_history_key,
+    client_pill_class as _client_pill_class,
+    customer_name_pill_html as _customer_name_pill_html,
+    row_is_priority as _row_is_priority,
+    status_pill_html as _status_pill_html,
+)
+from streamlit_app.components.service_flags import service_type_flag_html as _service_type_flag_html
+from streamlit_app.styles.inject import inject_via_streamlit_lazy
+
 
 def _booking_customer_create_for_existing_client(
     snap: Dict[str, Any],
@@ -1601,7 +1612,6 @@ def _week_grid_day_column_html(
         )
     for row, start_idx, vis, lane_i, n_lanes in placed:
         cls_pill = _client_pill_class(row, counts_by_client)
-        theme = _CAL_PILL_THEME.get(cls_pill, _CAL_PILL_THEME["cli-pill-new"])
         top = start_idx * slot_px
         height = max(vis * slot_px - 2, 14)
         pct_w = 100.0 / n_lanes
@@ -1612,7 +1622,7 @@ def _week_grid_day_column_html(
         staff = _assigned_staff_label(row)
         tit = html_mod.escape(f"{hm} · {nm}" + (f" · {staff}" if staff != "—" else ""))
         st_cl = str(row.get("status") or "").strip().lower()
-        opacity = "opacity:0.48;" if st_cl == "cancelada" else ""
+        soft_cls = " twg-cancelada-soft" if st_cl == "cancelada" else ""
         ap_id = int(row.get("id", 0) or 0)
         # Una sola franja (= 30 min): el alto es ~20px; sin layout horizontal no cabe nombre + botón.
         compact = vis <= 1
@@ -1641,21 +1651,17 @@ def _week_grid_day_column_html(
             )
         else:
             body = (
-                "<div style=\"display:flex;flex-direction:column;gap:1px;min-height:0;"
-                'overflow:hidden;flex:1 1 auto;width:100%">'
-                f'<span style="font-weight:700;flex-shrink:0">{html_mod.escape(hm)}</span>'
+                '<div class="twg-appt-body-stack">'
+                f'<span class="twg-appt-head-time">{html_mod.escape(hm)}</span>'
                 f'<span class="twg-appt-client">{nm_esc}</span>'
                 "</div>"
             )
+        geo = (
+            f"top:{top}px;height:{height}px;left:{left}%;width:calc({pct_w}% - 3px);margin-left:1px"
+        )
         parts.append(
-            f'<div class="twg-appt twg-{cls_pill}{cls_appt_extra}" title="{tit}" style="top:{top}px;height:{height}px;'
-            f"left:{left}%;width:calc({pct_w}% - 3px);margin-left:1px;{theme}{opacity}"
-            "border-radius:5px;box-sizing:border-box;padding:2px 4px;overflow:hidden;"
-            "position:absolute;border-width:1px;border-style:solid;"
-            "font-size:10px;line-height:1.2;display:flex;flex-direction:column;"
-            "justify-content:space-between;gap:1px;min-height:0;z-index:2;"
-            'box-shadow:0 1px 3px rgba(0,0,0,0.35);">'
-            f"{body}{link_html}</div>"
+            f'<div class="twg-appt twg-{cls_pill}{cls_appt_extra}{soft_cls}" '
+            f'title="{tit}" style="{geo}">{body}{link_html}</div>'
         )
     parts.append("</div>")
     return "".join(parts)
@@ -1840,27 +1846,6 @@ def _appointments_by_day_sorted(items: list[dict[str, Any]]) -> dict[tuple[int, 
     return buckets
 
 
-def _normalize_phone_digits(phone: Any) -> str:
-    return "".join(c for c in str(phone or "") if c.isdigit())
-
-
-def _client_history_key(row: dict[str, Any]) -> str:
-    """Clave estable para contar citas históricas por cliente (id, teléfono o nombre)."""
-    cid = row.get("customer_id")
-    if cid is not None and str(cid).strip() != "":
-        try:
-            return f"id:{int(cid)}"
-        except (TypeError, ValueError):
-            pass
-    ph = _normalize_phone_digits(row.get("phone"))
-    if ph:
-        return f"ph:{ph}"
-    nm = str(row.get("customer_name") or row.get("name") or "").strip().lower()
-    if nm:
-        return f"nm:{nm}"
-    return f"row:{row.get('id', 0)}"
-
-
 def _appointment_counts_by_client(items: list[dict[str, Any]]) -> dict[str, int]:
     """Total de citas por cliente en todo el histórico cargado (lista API)."""
     counts: dict[str, int] = {}
@@ -1870,131 +1855,36 @@ def _appointment_counts_by_client(items: list[dict[str, Any]]) -> dict[str, int]
     return counts
 
 
-def _row_is_priority(row: dict[str, Any]) -> bool:
-    v = row.get("is_priority")
-    if v is True or v == 1:
-        return True
-    if isinstance(v, str) and v.strip().lower() in ("1", "true", "yes"):
-        return True
-    return False
-
-
-def _client_pill_class(row: dict[str, Any], counts_by_client: dict[str, int]) -> str:
-    """
-    Prioridad de etiqueta: Cancelada > Reprogramada > Prioritaria >
-    Cliente recurrente (>1 cita) > Cliente nuevo.
-    """
-    stv = str(row.get("status") or "").strip().lower()
-    if stv == "cancelada":
-        return "cli-pill-cancelada"
-    if stv == "reprogramada":
-        return "cli-pill-reprogramada"
-    if _row_is_priority(row):
-        return "cli-pill-priority"
-    key = _client_history_key(row)
-    if counts_by_client.get(key, 0) > 1:
-        return "cli-pill-returning"
-    return "cli-pill-new"
-
-
-_CAL_PILL_THEME: dict[str, str] = {
-    "cli-pill-cancelada": "background:#ef4444;color:#fff;border:1px solid #dc2626;",
-    "cli-pill-reprogramada": "background:#f59e0b;color:#fff;border:1px solid #d97706;",
-    "cli-pill-priority": "background:#db2777;color:#fff;border:1px solid #be185d;",
-    "cli-pill-returning": "background:#2563eb;color:#fff;border:1px solid #1d4ed8;",
-    "cli-pill-new": "background:#7c3aed;color:#fff;border:1px solid #6d28d9;",
-}
-
-
-def _render_citas_color_legend() -> None:
-    """Franja horizontal: chip de color + texto (misma paleta que las pastillas del calendario)."""
-    chips: tuple[tuple[str, str], ...] = (
-        ("cli-pill-returning", "Activa cliente antiguo"),
-        ("cli-pill-new", "Activa cliente nuevo"),
-        ("cli-pill-priority", "Con prioridad"),
-        ("cli-pill-reprogramada", "Para reprogramar"),
-        ("cli-pill-cancelada", "Cancelada"),
-        ("cita-legend-swatch-disponible", "Disponible"),
-    )
-    parts: list[str] = ['<div class="cita-legend-strip" role="group" aria-label="Leyenda de colores">']
-    for cls, label in chips:
-        parts.append('<span class="cita-legend-item">')
-        parts.append(f'<span class="cita-legend-swatch {html_mod.escape(cls)}" aria-hidden="true"></span>')
-        parts.append(f'<span class="cita-legend-label">{html_mod.escape(label)}</span>')
-        parts.append("</span>")
-    parts.append("</div>")
-    st.markdown("".join(parts), unsafe_allow_html=True)
-
-
-def _customer_name_pill_html(row: dict[str, Any], counts_by_client: dict[str, int]) -> str:
-    name = str(row.get("customer_name") or row.get("name") or "").strip() or "—"
-    cls = _client_pill_class(row, counts_by_client)
-    base = _CAL_PILL_THEME.get(cls, _CAL_PILL_THEME["cli-pill-new"])
-    layout = "border-radius:999px;padding:0.06rem 0.4rem;font-weight:600;font-size:0.78rem;line-height:1.2;display:inline-block;"
-    return f'<span class="cli-pill {cls}" style="{base}{layout}">{html_mod.escape(name)}</span>'
-
-
-def _service_type_flag_html(row: dict[str, Any]) -> str:
-    """Insignia de tipo de servicio (diálogo citas del día)."""
-    raw = str(row.get("service_type") or "").strip()
-    if not raw:
-        return '<span class="svc-flag svc-flag-unknown" title="Tipo de servicio">—</span>'
-    key = raw.lower()
-    if "tatu" in key or key == "tattoo":
-        cls = "svc-flag-tattoo"
-    elif "pierc" in key or key == "piercing":
-        cls = "svc-flag-piercing"
-    elif "limpieza" in key:
-        cls = "svc-flag-limpieza"
-    elif "cambio" in key:
-        cls = "svc-flag-cambio"
-    else:
-        cls = "svc-flag-other"
-    return (
-        f'<span class="svc-flag {cls}" title="Tipo de servicio">'
-        f"{html_mod.escape(raw)}</span>"
-    )
-
-
 def _calendar_overflow_row_html(row: dict[str, Any], counts_by_client: dict[str, int]) -> str:
     """Línea para el diálogo de citas extra: hora + tipo de servicio + nombre con pill de cliente + total."""
     hm = _appt_time_hm(row.get("appointment_date", row.get("date")))
     st_cl = str(row.get("status") or "").strip().lower()
-    dim = "opacity:0.55;" if st_cl == "cancelada" else ""
+    muted = " cal-overflow-row--muted" if st_cl == "cancelada" else ""
     svc_flag = _service_type_flag_html(row)
     pill = _customer_name_pill_html(row, counts_by_client)
     staff_s = _assigned_artist_display_name(row)
     staff_el = ""
     if staff_s != "Sin asignar":
-        staff_el = f"<span style='opacity:0.95;font-weight:600'> · Artista: {html_mod.escape(staff_s)}</span>"
+        staff_el = (
+            '<span class="cal-overflow-artist-dash"> · Artista: '
+            f"{html_mod.escape(staff_s)}</span>"
+        )
     total_amt, _, _ = _financial_row_values(row)
     total_box = (
-        "<span style='flex-shrink:0;display:inline-block;text-align:right'>"
-        "<span style='display:inline-block;background:#ffffff;color:#111827;padding:0.32rem 0.75rem;"
-        "border-radius:8px;font-weight:700;font-size:0.8rem;line-height:1.3;white-space:nowrap;"
-        "box-shadow:0 1px 4px rgba(0,0,0,0.12);border:1px solid #e8e8ea'>"
-        "<span style='opacity:0.72;font-weight:600;font-size:0.72rem'>Total servicio</span> · "
-        f"{html_mod.escape(_format_cop(total_amt))}</span></span>"
+        '<span class="cal-overflow-total-wrap"><span class="cal-overflow-total-chip">'
+        '<span class="cal-overflow-total-label">Total servicio</span> · '
+        f'{html_mod.escape(_format_cop(total_amt))}</span></span>'
     )
+    fire = ""
+    if bool(row.get("contract_pending_artist_signature")):
+        fire = '<span class="cal-overflow-fire-pending">Firma profesional pendiente</span>'
     left_cluster = (
-        "<span style='display:flex;flex-wrap:wrap;align-items:center;gap:0.35rem;flex:1 1 auto;min-width:0'>"
-        f"<span style='font-weight:600'>{html_mod.escape(hm)}</span><span>·</span>"
+        '<span class="cal-overflow-left">'
+        f'<span class="cal-overflow-hm">{html_mod.escape(hm)}</span><span>·</span>'
         f"{svc_flag}<span>·</span>{pill}{staff_el}"
-        + (
-            "<span style='flex-shrink:0;background:#f59e0b;color:#111827;padding:0.1rem 0.42rem;"
-            "border-radius:6px;font-size:0.68rem;font-weight:700;margin-left:0.15rem'>"
-            "Firma profesional pendiente</span>"
-            if bool(row.get("contract_pending_artist_signature"))
-            else ""
-        )
-        + "</span>"
+        f"{fire}</span>"
     )
-    return (
-        f"<div style='font-size:0.86rem;line-height:1.5;{dim}margin:0.4rem 0;padding-bottom:0.35rem;"
-        "border-bottom:1px solid rgba(148,163,184,0.35);display:flex;flex-wrap:nowrap;"
-        "align-items:center;gap:0.65rem;width:100%;box-sizing:border-box'>"
-        f"{left_cluster}{total_box}</div>"
-    )
+    return f'<div class="cal-overflow-row{muted}">{left_cluster}{total_box}</div>'
 
 
 def _calendar_cell_customer_label(full_name: str, *, long_from_len: int = 18) -> str:
@@ -2087,19 +1977,12 @@ def _calendar_appt_line_html(
     short = _calendar_cell_customer_label(nm, long_from_len=long_name_from)
     cls = _client_pill_class(row, counts_by_client)
     st_cl = str(row.get("status") or "").strip().lower()
-    dim = "opacity:0.5;" if st_cl == "cancelada" else ""
+    dim_cls = " cal-appt-line--muted" if st_cl == "cancelada" else ""
     total_amt, _, _ = _financial_row_values(row)
     price_lbl = _calendar_month_value_label(total_amt)
     # Celda mensual: total en «miles» truncados, sin símbolo ni sufijo «k».
-    _pill_base = _CAL_PILL_THEME.get(cls, _CAL_PILL_THEME["cli-pill-new"])
-    _pill_layout = (
-        "display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
-        "vertical-align:middle;border-radius:6px;padding:0.05rem 0.32rem;font-weight:600;"
-        "font-size:0.65rem;line-height:1.15;"
-    )
     pill_inner = (
-        f'<span class="cli-pill {cls}" style="{_pill_base}{_pill_layout}">'
-        f"{html_mod.escape(short)}</span>"
+        f'<span class="cli-pill {cls} cli-pill--cal-cell">{html_mod.escape(short)}</span>'
     )
     t_s = html_mod.escape(hm)
     staff_lbl = _assigned_staff_label(row)
@@ -2109,7 +1992,7 @@ def _calendar_appt_line_html(
     )
     price_esc = html_mod.escape(price_lbl)
     return (
-        f"<div class='cal-appt-line' title='{title}' style='{dim}'>"
+        f"<div class='cal-appt-line{dim_cls}' title='{title}'>"
         f"<span class='cal-appt-time'>{t_s}</span>"
         f"<span class='cal-appt-pill-wrap'>{pill_inner}</span>"
         f"<span class='cal-appt-total'>{price_esc}</span>"
@@ -3415,15 +3298,7 @@ def _fetch_appointments() -> None:
         st.session_state["_ap_err"] = f"HTTP {code}: {_api_error(data)}"
 
 
-def _status_pill_html(status: str) -> str:
-    normalized = (status or "Agendada").strip().lower()
-    cls = {
-        "agendada": "pill-agendada",
-        "reprogramada": "pill-reprogramada",
-        "cancelada": "pill-cancelada",
-        "finalizada": "pill-finalizada",
-    }.get(normalized, "pill-default")
-    return f'<span class="ap-pill {cls}">{status or "Agendada"}</span>'
+
 
 
 def _render_cita_row_actions(r: Dict[str, Any], *, show_firma: bool = True) -> None:
@@ -4039,714 +3914,11 @@ def _dialog_recibos_cita() -> None:
         st.rerun()
 
 
-_CITAS_STYLES: str = """
-        <style>
-        .ap-pill {
-            display: inline-block;
-            border-radius: 999px;
-            padding: 0.18rem 0.62rem;
-            font-size: 0.78rem;
-            font-weight: 600;
-            line-height: 1.1rem;
-            border: 1px solid transparent;
-        }
-        .pill-agendada { background: #e8f1ff; color: #16406f; border-color: #bdd2f4; }
-        .pill-reprogramada { background: #fff2df; color: #7a4a03; border-color: #f5d3a0; }
-        .pill-cancelada { background: #fdeaea; color: #7f1f1f; border-color: #efbcbc; }
-        .pill-finalizada { background: #e8f8ec; color: #1f6b31; border-color: #b8e2c2; }
-        .pill-default { background: #f2f3f5; color: #374151; border-color: #d1d5db; }
-        .ap-col-title {
-            display: inline-block;
-            font-weight: 700;
-            letter-spacing: 0.02em;
-            color: #111827;
-            background: #f3f4f6;
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            padding: 0.18rem 0.45rem;
-            white-space: nowrap;
-            line-height: 1.35;
-        }
-        /* Calendario mes: sin huecos laterales (columnas Streamlit pegadas tipo rejilla) */
-        section.main div[data-testid="stHorizontalBlock"]:has(.cal-m-whcell),
-        section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell--month),
-        section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell-spacer--month) {
-            gap: 0 !important;
-        }
-        section.main div[data-testid="stHorizontalBlock"]:has(.cal-m-whcell) > div[data-testid="column"],
-        section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell--month) > div[data-testid="column"],
-        section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell-spacer--month) > div[data-testid="column"] {
-            padding-left: 0 !important;
-            padding-right: 0 !important;
-            flex: 1 1 0 !important;
-            min-width: 0 !important;
-        }
-        section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell--month),
-        section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell-spacer--month) {
-            margin-top: -0.42rem !important;
-            margin-bottom: 0 !important;
-            padding-top: 0 !important;
-            padding-bottom: 0 !important;
-        }
-        section.main div[data-testid="stHorizontalBlock"]:has(.cal-m-whcell) {
-            margin-bottom: -0.32rem !important;
-        }
-        section.main div[data-testid="stMarkdownContainer"]:has(.cal-cell--month),
-        section.main div[data-testid="stMarkdownContainer"]:has(.cal-cell-spacer--month),
-        section.main div[data-testid="stMarkdownContainer"]:has(.cal-m-whcell) {
-            margin-top: 0 !important;
-            margin-bottom: 0 !important;
-            margin-left: 0 !important;
-            margin-right: 0 !important;
-            padding-left: 0 !important;
-            padding-right: 0 !important;
-        }
-        /* Hueco inferior al hacer scroll: el contenido debe medir sólo lo visible, no «rellenar» viewport. */
-        [data-testid="stMain"]:has(.cal-cell--month),
-        section[data-testid="stMain"]:has(.cal-cell--month),
-        section.main:has(.cal-cell--month) {
-            min-height: auto !important;
-            flex-grow: 0 !important;
-            align-self: stretch !important;
-        }
-        [data-testid="stMain"]:has(.cal-cell--month) [data-testid="block-container"],
-        section.main:has(.cal-cell--month) [data-testid="block-container"] {
-            min-height: 0 !important;
-            flex-grow: 0 !important;
-            padding-bottom: 0 !important;
-        }
-        [data-testid="stMain"]:has(.cal-cell--month)
-            div[data-testid="stVerticalBlockBorderWrapper"],
-        [data-testid="stMain"]:has(.cal-cell--month) div[data-testid="stVerticalBlock"],
-        section.main:has(.cal-cell--month) div[data-testid="stVerticalBlockBorderWrapper"],
-        section.main:has(.cal-cell--month) div[data-testid="stVerticalBlock"] {
-            flex-grow: 0 !important;
-            flex-shrink: 0 !important;
-        }
-        /* components.v1.html (puente clic pie / semana): el iframe suele llevar alto mínimo y empuja el alto del documento. */
-        [data-testid="stMain"]:has(.cal-cell--month) iframe,
-        section.main:has(.cal-cell--month) iframe {
-            height: 0 !important;
-            max-height: 0 !important;
-            min-height: 0 !important;
-            opacity: 0 !important;
-            visibility: hidden !important;
-            pointer-events: none !important;
-            border: none !important;
-        }
-        [data-testid="stMain"]:has(.cal-cell--month)
-            div[data-testid="element-container"]:has(iframe),
-        section.main:has(.cal-cell--month) div[data-testid="element-container"]:has(iframe) {
-            min-height: 0 !important;
-            height: auto !important;
-            max-height: 0 !important;
-            margin-block: 0 !important;
-            padding-block: 0 !important;
-            overflow: hidden !important;
-        }
-        .cal-m-whcell {
-            box-sizing: border-box;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 2rem;
-            margin-bottom: 0;
-            padding: 0.42rem 0.06rem;
-            font-size: 0.68rem;
-            font-weight: 700;
-            letter-spacing: 0.05em;
-            text-transform: uppercase;
-            color: #f8fafc;
-            background: rgba(15, 23, 42, 0.96);
-            border: 1px solid rgba(148, 163, 184, 0.32);
-            border-radius: 0;
-        }
-        .cal-cell.cal-cell--month {
-            border: 1px solid rgba(148, 163, 184, 0.36);
-            border-radius: 0;
-            padding: 0;
-            height: 12.75rem;
-            max-height: 12.75rem;
-            margin-bottom: 0;
-            margin-right: -1px;
-            margin-top: -1px;
-            background: rgba(15, 23, 42, 0.5);
-            box-shadow: none;
-            box-sizing: border-box;
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
-        }
-        .cal-cell-today.cal-cell--month {
-            border-color: rgba(255, 0, 127, 0.58);
-            box-shadow: inset 0 0 0 1px rgba(255, 0, 127, 0.24);
-            background: rgba(15, 23, 42, 0.58);
-        }
-        .cal-cell--month .cal-cell-head {
-            flex: 0 0 auto;
-            display: flex;
-            justify-content: flex-end;
-            align-items: flex-start;
-            padding: 0.14rem 0.28rem 0.04rem 0.28rem;
-            min-height: 0.9rem;
-            line-height: 1;
-        }
-        .cal-cell--month .cal-cell-daynum {
-            font-size: 0.74rem;
-            font-weight: 700;
-            color: rgba(248, 250, 252, 0.94);
-            font-variant-numeric: tabular-nums;
-            opacity: 0.92;
-        }
-        .cal-cell-today.cal-cell--month .cal-cell-daynum {
-            color: rgba(251, 168, 210, 0.98);
-            opacity: 1;
-        }
-        /* Última columna: no arrastrar solapamiento -1px hacia fuera del bloque */
-        section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell--month) > div[data-testid="column"]:last-child .cal-cell--month,
-        section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell-spacer--month) > div[data-testid="column"]:last-child .cal-cell-spacer--month {
-            margin-right: 0;
-        }
-        .cal-day-inner {
-            border: 1px solid rgba(226, 232, 240, 0.22);
-            border-radius: 6px;
-            background: rgba(0, 0, 0, 0.32);
-            padding: 0.18rem 0.22rem 0.14rem 0.22rem;
-            margin-bottom: 0.22rem;
-            flex: 1 1 auto;
-            min-height: 0;
-            min-width: 0;
-            display: flex;
-            flex-direction: column;
-            gap: 0.12rem;
-            box-sizing: border-box;
-            overflow-y: auto;
-            overflow-x: hidden;
-        }
-        .cal-cell--month .cal-day-inner {
-            border-radius: 0;
-            margin: 0;
-            flex: 1 1 auto;
-            min-height: 0;
-            padding: 0.12rem 0.12rem;
-            border: none;
-            border-bottom: 1px solid rgba(148, 163, 184, 0.18);
-            margin-bottom: 0;
-            -webkit-overflow-scrolling: touch;
-            scrollbar-width: thin;
-        }
-        .cal-cell-footer-strip {
-            flex: 0 0 auto;
-            display: flex;
-            flex-direction: row;
-            align-items: stretch;
-            justify-content: space-between;
-            gap: 0.35rem;
-            min-height: 2.05rem;
-            padding: 0.28rem 0.35rem;
-            box-sizing: border-box;
-            background: rgba(15, 23, 42, 0.96);
-            border-top: 1px solid rgba(148, 163, 184, 0.32);
-        }
-        .cal-footer-daynum {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-            min-width: 1.55rem;
-            font-size: 0.74rem;
-            font-weight: 800;
-            line-height: 1;
-            color: rgba(248, 250, 252, 0.94);
-            font-variant-numeric: tabular-nums;
-            letter-spacing: 0.03em;
-        }
-        button.cal-footer-book {
-            flex: 1 1 auto;
-            min-width: 0;
-            appearance: none;
-            -webkit-appearance: none;
-            cursor: pointer;
-            font-family: inherit;
-            font-size: 0.62rem;
-            font-weight: 700;
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
-            padding: 0.16rem 0.28rem;
-            border-radius: 0;
-            border: 1px solid rgba(255, 0, 127, 0.55);
-            color: #fff7fb;
-            background: linear-gradient(
-                180deg,
-                rgba(255, 100, 180, 0.35) 0%,
-                rgba(255, 0, 127, 0.55) 50%,
-                rgba(217, 0, 100, 0.6) 100%
-            );
-            line-height: 1.05;
-            text-align: center;
-            box-sizing: border-box;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        button.cal-footer-book:hover {
-            filter: brightness(1.08);
-        }
-        .cal-footer-strip-disabled {
-            opacity: 0.45;
-            filter: saturate(0.75);
-            pointer-events: none;
-        }
-        .cal-cell-today.cal-cell--month .cal-footer-daynum {
-            color: rgba(251, 168, 210, 1);
-        }
-        .cal-team-block {
-            min-width: 0;
-        }
-        .cal-team-block + .cal-team-block {
-            margin-top: 0.22rem;
-            padding-top: 0.12rem;
-            border-top: 1px dashed rgba(148, 163, 184, 0.28);
-        }
-        .cal-team-label {
-            font-size: 0.58rem;
-            font-weight: 700;
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
-            color: rgba(244, 114, 182, 0.95);
-            margin-bottom: 0.12rem;
-            line-height: 1.15;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .cal-team-lines {
-            display: flex;
-            flex-direction: column;
-            gap: 0.12rem;
-            min-width: 0;
-        }
-        .cal-appt-line {
-            display: grid;
-            grid-template-columns: 2rem minmax(0, 1fr) minmax(0, auto);
-            align-items: center;
-            column-gap: 0.18rem;
-            min-width: 0;
-            font-size: 0.65rem;
-            line-height: 1.2;
-        }
-        .cal-cell--month .cal-appt-line {
-            font-size: 0.68rem;
-            line-height: 1.22;
-        }
-        .cal-appt-time {
-            font-weight: 700;
-            font-variant-numeric: tabular-nums;
-            flex-shrink: 0;
-            opacity: 0.95;
-        }
-        .cal-appt-pill-wrap {
-            min-width: 0;
-            overflow: hidden;
-        }
-        .cal-appt-total {
-            font-weight: 800;
-            font-variant-numeric: tabular-nums;
-            font-size: 0.58rem;
-            letter-spacing: -0.03em;
-            opacity: 0.88;
-            white-space: nowrap;
-            justify-self: end;
-            padding: 0.04rem 0.14rem;
-            border-radius: 4px;
-            background: rgba(255, 255, 255, 0.08);
-            border: 1px solid rgba(255, 255, 255, 0.14);
-        }
-        .cal-cell--month .cal-appt-total {
-            font-size: 0.72rem;
-            font-weight: 800;
-            letter-spacing: 0.02em;
-            opacity: 1;
-            padding: 0.08rem 0.2rem;
-            color: rgba(254, 249, 195, 0.98);
-            background: rgba(255, 0, 127, 0.16);
-            border-color: rgba(251, 113, 182, 0.45);
-            box-shadow: 0 0 0 1px rgba(236, 72, 153, 0.12);
-        }
-        .cal-day-empty {
-            flex: 1 1 auto;
-            min-height: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 0.68rem;
-            opacity: 0.5;
-            letter-spacing: 0.06em;
-        }
-        .cal-cell-today.cal-cell--month .cal-day-inner {
-            border-top-color: rgba(255, 0, 127, 0.38);
-            background: rgba(255, 0, 127, 0.05);
-        }
-        /* Casilla vacía: alto alineado a la celda con pie (solo espaciador superior, sin footer) */
-        .cal-cell-spacer.cal-cell-spacer--month {
-            height: 12.75rem;
-            max-height: 12.75rem;
-            margin-bottom: 0;
-            margin-right: -1px;
-            margin-top: -1px;
-            box-sizing: border-box;
-            border: 1px solid rgba(148, 163, 184, 0.22);
-            border-radius: 0;
-            background: rgba(15, 23, 42, 0.22);
-            opacity: 1;
-        }
-        .cli-pill {
-            display: inline-block;
-            border-radius: 999px;
-            padding: 0.06rem 0.4rem;
-            font-weight: 600;
-            line-height: 1.2;
-            vertical-align: middle;
-            border: 1px solid transparent;
-        }
-        /* Streamlit aplica color claro al markdown; forzamos pills en calendario y tablas */
-        /* Pastillas nombre cliente (paleta tipo leyenda: antiguo azul, nuevo violeta, etc.) */
-        .cal-cell span.cli-pill.cli-pill-cancelada,
-        span.cli-pill.cli-pill-cancelada {
-            background: #ef4444 !important;
-            color: #ffffff !important;
-            border: 1px solid #dc2626 !important;
-        }
-        .cal-cell span.cli-pill.cli-pill-reprogramada,
-        span.cli-pill.cli-pill-reprogramada {
-            background: #f59e0b !important;
-            color: #ffffff !important;
-            border: 1px solid #d97706 !important;
-        }
-        .cal-cell span.cli-pill.cli-pill-priority,
-        span.cli-pill.cli-pill-priority {
-            background: #db2777 !important;
-            color: #ffffff !important;
-            border: 1px solid #be185d !important;
-        }
-        .cal-cell span.cli-pill.cli-pill-returning,
-        span.cli-pill.cli-pill-returning {
-            background: #2563eb !important;
-            color: #ffffff !important;
-            border: 1px solid #1d4ed8 !important;
-        }
-        .cal-cell span.cli-pill.cli-pill-new,
-        span.cli-pill.cli-pill-new {
-            background: #7c3aed !important;
-            color: #ffffff !important;
-            border: 1px solid #6d28d9 !important;
-        }
-        .cal-cell span.cli-pill {
-            border-radius: 6px !important;
-            padding: 0.05rem 0.32rem !important;
-            font-weight: 600 !important;
-            font-size: 0.65rem !important;
-            line-height: 1.15 !important;
-            display: inline-block !important;
-            border-style: solid !important;
-            border-width: 1px !important;
-            vertical-align: middle !important;
-            max-width: 100% !important;
-        }
-        .svc-flag {
-            display: inline-block;
-            font-size: 0.68rem;
-            font-weight: 700;
-            letter-spacing: 0.02em;
-            padding: 0.1rem 0.42rem;
-            border-radius: 5px;
-            border: 1px solid transparent;
-            white-space: nowrap;
-        }
-        .svc-flag-tattoo { background: #1e293b; color: #f8fafc; border-color: #334155; }
-        .svc-flag-piercing { background: #ede9fe; color: #5b21b6; border-color: #c4b5fd; }
-        .svc-flag-limpieza { background: #ecfeff; color: #0e7490; border-color: #67e8f9; }
-        .svc-flag-cambio { background: #fef9c3; color: #854d0e; border-color: #fde047; }
-        .svc-flag-other { background: #f3f4f6; color: #374151; border-color: #d1d5db; }
-        .svc-flag-unknown { background: #f9fafb; color: #9ca3af; border-color: #e5e7eb; }
-        .cita-legend-strip {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 0.65rem 1.15rem;
-            padding: 0.6rem 0.9rem;
-            background: rgba(15, 23, 42, 0.72);
-            border: 1px solid rgba(255, 0, 127, 0.38);
-            border-radius: 10px;
-            margin: 0.15rem 0 0.35rem;
-            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 2px 8px rgba(0, 0, 0, 0.22);
-            box-sizing: border-box;
-        }
-        .cita-legend-item {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.38rem;
-        }
-        .cita-legend-swatch {
-            display: inline-block;
-            width: 0.82rem;
-            height: 0.82rem;
-            border-radius: 4px;
-            flex-shrink: 0;
-            box-sizing: border-box;
-            border: 1px solid;
-            vertical-align: middle;
-        }
-        .cita-legend-swatch.cli-pill-returning {
-            background: #2563eb;
-            border-color: #1d4ed8;
-        }
-        .cita-legend-swatch.cli-pill-new {
-            background: #7c3aed;
-            border-color: #6d28d9;
-        }
-        .cita-legend-swatch.cli-pill-priority {
-            background: #db2777;
-            border-color: #be185d;
-        }
-        .cita-legend-swatch.cli-pill-reprogramada {
-            background: #f59e0b;
-            border-color: #d97706;
-        }
-        .cita-legend-swatch.cli-pill-cancelada {
-            background: #ef4444;
-            border-color: #dc2626;
-        }
-        .cita-legend-swatch.cita-legend-swatch-disponible {
-            background: #22c55e;
-            border-color: #16a34a;
-        }
-        .cita-legend-label {
-            font-size: 0.8rem;
-            font-weight: 500;
-            color: #e2e8f0;
-            white-space: nowrap;
-        }
-        /* Vista semanal tipo Teams/Outlook */
-        .twg-shell {
-            width: 100%;
-            margin: 0.35rem 0 0.5rem;
-        }
-        .twg-scroll-x {
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-        }
-        .twg-grid-wrap {
-            min-width: 680px;
-            background: rgba(15, 23, 42, 0.45);
-            border: 1px solid rgba(255, 0, 127, 0.32);
-            border-radius: 10px;
-            padding: 0.45rem 0.42rem 0.55rem;
-            box-sizing: border-box;
-        }
-        .twg-head {
-            display: flex;
-            flex-direction: row;
-            align-items: stretch;
-            margin-bottom: 0.28rem;
-            min-width: 0;
-        }
-        .twg-h-spacer {
-            flex: 0 0 46px;
-            min-width: 46px;
-        }
-        .twg-h-days {
-            flex: 1 1 auto;
-            display: grid;
-            grid-template-columns: repeat(7, minmax(0, 1fr));
-            gap: 3px;
-            min-width: 0;
-        }
-        .twg-h-day {
-            text-align: center;
-            padding: 0.28rem 0.15rem;
-            border-radius: 8px;
-            background: rgba(0, 0, 0, 0.28);
-            border: 1px solid rgba(148, 163, 184, 0.28);
-            box-sizing: border-box;
-        }
-        .twg-h-today {
-            border-color: rgba(255, 0, 127, 0.55);
-            box-shadow: inset 0 0 0 1px rgba(244, 114, 182, 0.22);
-        }
-        .twg-h-wd {
-            font-size: 0.62rem;
-            font-weight: 700;
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
-            color: #cbd5e1;
-            opacity: 0.92;
-        }
-        .twg-h-num {
-            font-size: 1rem;
-            font-weight: 700;
-            color: #f1f5f9;
-            line-height: 1.15;
-        }
-        .twg-body {
-            display: flex;
-            flex-direction: row;
-            align-items: stretch;
-            min-width: 0;
-        }
-        .twg-times {
-            flex: 0 0 46px;
-            min-width: 46px;
-            box-sizing: border-box;
-        }
-        .twg-tick {
-            box-sizing: border-box;
-            border-top: 1px solid rgba(148, 163, 184, 0.22);
-            font-size: 0.58rem;
-            color: #94a3b8;
-            padding-right: 3px;
-            text-align: right;
-            display: flex;
-            align-items: flex-start;
-            justify-content: flex-end;
-        }
-        .twg-tick-minor span {
-            opacity: 0;
-        }
-        .twg-tick-major span {
-            margin-top: -0.35rem;
-            font-weight: 600;
-            color: #cbd5e1;
-        }
-        .twg-day-columns {
-            flex: 1 1 auto;
-            display: grid;
-            grid-template-columns: repeat(7, minmax(0, 1fr));
-            gap: 3px;
-            min-width: 0;
-        }
-        .twg-col {
-            position: relative;
-            background: rgba(0, 0, 0, 0.26);
-            border-radius: 8px;
-            border: 1px solid rgba(148, 163, 184, 0.22);
-            box-sizing: border-box;
-        }
-        .twg-col-today {
-            border-color: rgba(255, 0, 127, 0.42);
-            background: rgba(255, 0, 127, 0.05);
-        }
-        .twg-slot-line {
-            position: absolute;
-            left: 0;
-            right: 0;
-            border-top: 1px solid rgba(148, 163, 184, 0.14);
-            pointer-events: none;
-            box-sizing: border-box;
-        }
-        .twg-appt-client {
-            font-weight: 600;
-            font-size: 0.62rem;
-            line-height: 1.12;
-            color: rgba(248, 250, 252, 0.96);
-            white-space: normal;
-            word-break: break-word;
-            overflow: hidden;
-            display: -webkit-box;
-            -webkit-box-orient: vertical;
-            -webkit-line-clamp: 8;
-            min-height: 0;
-            flex: 1 1 auto;
-        }
-        .twg-appt--compact {
-            flex-direction: row !important;
-            align-items: center !important;
-            justify-content: flex-start !important;
-            gap: 4px !important;
-            padding: 1px 3px !important;
-        }
-        .twg-appt-time-compact {
-            flex-shrink: 0;
-            font-weight: 700;
-            font-size: 9px;
-            line-height: 1.05;
-            color: rgba(248, 250, 252, 0.98);
-        }
-        .twg-appt-client-compact {
-            flex: 1 1 auto;
-            min-width: 0;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            font-weight: 600;
-            font-size: 8.5px;
-            line-height: 1.05;
-            color: rgba(248, 250, 252, 0.95);
-        }
-        .twg-appt-link--compact {
-            flex-shrink: 0 !important;
-            align-self: center !important;
-            width: auto !important;
-            min-height: 0 !important;
-            padding: 0 3px !important;
-            margin-top: 0 !important;
-            gap: 0 !important;
-        }
-        .twg-appt-link {
-            flex-shrink: 0;
-            align-self: stretch;
-            text-align: center;
-            font-size: 0.58rem;
-            font-weight: 700;
-            padding: 2px 4px 1px;
-            margin-top: 2px;
-            border-radius: 4px;
-            background: rgba(0, 0, 0, 0.38);
-            color: #f8fafc !important;
-            text-decoration: none !important;
-            border: 1px solid rgba(255, 255, 255, 0.28);
-            line-height: 1.1;
-            font-family: inherit;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 3px;
-            box-sizing: border-box;
-        }
-        button.twg-appt-link {
-            width: 100%;
-            appearance: none;
-            -webkit-appearance: none;
-        }
-        .twg-appt-link-play {
-            font-size: 0.55rem;
-            line-height: 1;
-            opacity: 0.95;
-            flex-shrink: 0;
-        }
-        .twg-appt-link:hover {
-            background: rgba(255, 255, 255, 0.18);
-            color: #ffffff !important;
-        }
-        .twg-appt {
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
-        }
-        /* Botones primary en área principal (p. ej. Cita express): relleno rosa marca */
-        [data-testid="stMain"] button[data-testid="baseButton-primary"] {
-            background-image: linear-gradient(180deg, #ff5fb8 0%, #ff007f 52%, #d90064 100%) !important;
-            background-color: #ff007f !important;
-            color: #ffffff !important;
-            border: 1px solid rgba(255, 210, 235, 0.92) !important;
-            box-shadow: 0 0 18px rgba(255, 0, 127, 0.38) !important;
-        }
-        </style>
-"""
 
 
 def _inject_citas_shared_styles() -> None:
-    """Emite el CSS del módulo: constante evaluada una sola vez al importar."""
-    st.markdown(_CITAS_STYLES, unsafe_allow_html=True)
+    """CSS consolidado desde `streamlit_app/styles/` (arquitectura del tab Citas)."""
+    inject_via_streamlit_lazy()
 
 
 def _init_appt_tab_session_state() -> None:

@@ -34,7 +34,8 @@ import html
 import streamlit as st
 
 from streamlit_app import api_client
-from streamlit_app.citas_tab import render_citas_tab, render_reporte_citas_tab
+from streamlit_app.citas_tab import render_citas_tab
+from streamlit_app.reporte_tab import render_reporte_citas_tab
 from streamlit_app.contract_read_view import render_contract_read_view
 from streamlit_app.contract_signing import render_contract_express_piercing_view, render_contract_signing_view
 from streamlit_app.contracts_admin import render_contract_admin_tab
