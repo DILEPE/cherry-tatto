@@ -12,7 +12,11 @@ import streamlit as st
 from app.domain.appointment_money import format_cop
 from streamlit_app import api_client
 from streamlit_app.appointment_agenda_slots import MIN_BOOKING_DURATION_SLOTS, duration_slots_for_existing_appointment
-from streamlit_app.appointment_dates import combine_appointment_datetime, format_appointment_created_at_display
+from streamlit_app.appointment_dates import (
+    appointment_time_hm,
+    combine_appointment_datetime,
+    format_appointment_created_at_display,
+)
 from streamlit_app.appointment_staff_labels import assigned_artist_display_name
 from streamlit_app.appointment_slots import (
     appointment_last_start_slot,
@@ -568,6 +572,7 @@ def dialog_calendar_day_appointments(
     buckets: dict[tuple[int, int, int], list[dict[str, Any]]],
     hist_counts: dict[str, int],
 ) -> None:
+    """Lista del día: tarjetas HTML en un solo bloque + botones en pasada aparte (menos flash al scroll)."""
     tup = st.session_state.get("_cal_overflow_day")
     if not tup:
         return
@@ -581,26 +586,107 @@ def dialog_calendar_day_appointments(
             deps.clear_calendar_dialog_focus()
             st.rerun()
         return
+
     st.markdown(f"**{day_date.strftime('%d/%m/%Y')}** · **{len(day_rows)}** cita(s)")
     if deps.panel_is_technician_role():
         st.caption(
-            "Como **tatuador / perforador** solo ves citas **desde hoy** con estado activo; aquí solo puedes "
-            "**Completar firma profesional** cuando recepción ya guardó el contrato del cliente. "
+            "Como **tatuador / perforador** solo puedes usar **Completar firma profesional**. "
             "El agendamiento, montos y reprogramación los gestiona administración o ventas."
         )
     else:
         st.caption(
-            "Resumen de cada bloque **Cita**. Abre **Ficha completa** para ver datos del cliente, horario, montos y abonos."
+            "**Firmar contrato** abre la vista de firma. "
+            "Reprogramar, Montos o Recibos cierran este panel y abren el formulario correspondiente."
         )
+
+    all_cards = "".join(
+        f'<div class="appt-card-wrap">{calendar_overflow_row_html(r, hist_counts)}</div>'
+        for r in day_rows
+    )
+    st.markdown(f'<div class="appt-cards-block">{all_cards}</div>', unsafe_allow_html=True)
+
+    st.markdown("---")
+    tech = deps.panel_is_technician_role()
+
     for idx, r in enumerate(day_rows):
         appt_id = int(r.get("id", 0) or 0)
-        _calendar_overflow_day_sheet_link_row(
-            r,
-            hist_counts,
-            key_suffix=f"{appt_id}_{y}_{m}_{d}_{idx}",
-        )
+        status = str(r.get("status") or "Agendada")
+        nm = str(r.get("customer_name") or r.get("name") or "").strip() or "—"
+        hm = appointment_time_hm(r.get("appointment_date", r.get("date")))
+        st.caption(f"{hm} · {nm}")
+
+        firmar_disabled = deps.firmar_contrato_disabled(r)
+        repro_disabled = deps.reprogram_disabled_for_row(r)
+        montos_disabled = appt_id <= 0 or status not in {"Agendada", "Reprogramada"}
+        anular_disabled = appt_id <= 0 or status in {"Cancelada", "Finalizada"}
+        key_base = f"{appt_id}_{y}_{m}_{d}_{idx}"
+
+        if tech:
+            lbl = deps.firmar_contrato_button_label(r)
+            if st.button(
+                lbl,
+                disabled=firmar_disabled,
+                use_container_width=True,
+                key=f"cal_dlg_firmar_{key_base}",
+            ):
+                deps.clear_calendar_dialog_focus()
+                deps.open_firma_contrato_nav(r, appt_id)
+        else:
+            b0, b1, b2, b3, b4 = st.columns(5)
+            with b0:
+                if st.button(
+                    "Firmar contrato",
+                    disabled=firmar_disabled,
+                    use_container_width=True,
+                    key=f"cal_dlg_firmar_{key_base}",
+                ):
+                    deps.clear_calendar_dialog_focus()
+                    deps.open_firma_contrato_nav(r, appt_id)
+            with b1:
+                if st.button(
+                    "Reprogramar",
+                    disabled=repro_disabled,
+                    use_container_width=True,
+                    key=f"cal_dlg_repr_{key_base}",
+                ):
+                    deps.clear_calendar_dialog_focus()
+                    st.session_state["_ap_reprogram_item"] = r
+                    st.rerun()
+            with b2:
+                if st.button(
+                    "Montos",
+                    disabled=montos_disabled,
+                    use_container_width=True,
+                    key=f"cal_dlg_fin_{key_base}",
+                ):
+                    deps.clear_calendar_dialog_focus()
+                    st.session_state["_ap_fin_item"] = r
+                    st.rerun()
+            with b3:
+                if st.button(
+                    "Recibos",
+                    disabled=appt_id <= 0,
+                    use_container_width=True,
+                    key=f"cal_dlg_rec_{key_base}",
+                ):
+                    deps.clear_calendar_dialog_focus()
+                    st.session_state["_ap_receipts_item"] = r
+                    st.rerun()
+            with b4:
+                if st.button(
+                    "Anular",
+                    disabled=anular_disabled,
+                    use_container_width=True,
+                    key=f"cal_dlg_can_{key_base}",
+                ):
+                    deps.clear_calendar_dialog_focus()
+                    st.session_state["_ap_cancel_item"] = r
+                    st.rerun()
+
         if idx < len(day_rows) - 1:
-            st.divider()
+            st.markdown('<div class="cal-day-action-sep"></div>', unsafe_allow_html=True)
+
+    st.markdown("---")
     if st.button("Cerrar", key="cal_dlg_close", use_container_width=True):
         deps.clear_calendar_dialog_focus()
         st.rerun()
