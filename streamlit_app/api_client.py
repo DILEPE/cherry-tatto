@@ -8,6 +8,9 @@ import requests
 
 DEFAULT_BASE = "http://127.0.0.1:5000"
 
+# Sentinel para PATCH de abono: campo omitido (no se sobrescribe en API).
+_PAY_PATCH_OMIT = object()
+
 
 def base_url() -> str:
     return os.getenv("API_BASE_URL", DEFAULT_BASE).rstrip("/")
@@ -74,6 +77,25 @@ def patch_appointment_reschedule(
     )
 
 
+def patch_appointment_meta(
+    appointment_id: int,
+    *,
+    assigned_panel_user_id: Optional[int],
+    is_priority: bool,
+    detail: Optional[str],
+) -> Tuple[bool, int, Any]:
+    body: Dict[str, Any] = {"is_priority": bool(is_priority)}
+    if assigned_panel_user_id is not None:
+        body["assigned_panel_user_id"] = int(assigned_panel_user_id)
+    if detail is not None:
+        body["detail"] = detail
+    return _request(
+        "PATCH",
+        f"/api/appointments/{int(appointment_id)}/meta",
+        json_body=body,
+    )
+
+
 def patch_appointment_financials(
     appointment_id: int,
     total_amount: float,
@@ -96,12 +118,42 @@ def get_appointment_payments(appointment_id: int) -> Tuple[bool, int, Any]:
 
 
 def post_appointment_payment(
-    appointment_id: int, amount: float, note: Optional[str] = None
+    appointment_id: int,
+    amount: float,
+    note: Optional[str] = None,
+    paid_on: Optional[str] = None,
 ) -> Tuple[bool, int, Any]:
+    body: Dict[str, Any] = {"amount": float(amount)}
+    if note is not None:
+        body["note"] = note
+    if paid_on is not None:
+        body["paid_on"] = paid_on
     return _request(
         "POST",
         f"/api/appointments/{appointment_id}/payments",
-        json_body={"amount": float(amount), "note": note},
+        json_body=body,
+    )
+
+
+def patch_appointment_payment(
+    appointment_id: int,
+    payment_id: int,
+    *,
+    amount: Optional[float] = None,
+    note: Any = _PAY_PATCH_OMIT,
+    paid_on: Any = _PAY_PATCH_OMIT,
+) -> Tuple[bool, int, Any]:
+    payload: Dict[str, Any] = {}
+    if amount is not None:
+        payload["amount"] = float(amount)
+    if note is not _PAY_PATCH_OMIT:
+        payload["note"] = note
+    if paid_on is not _PAY_PATCH_OMIT:
+        payload["paid_on"] = paid_on
+    return _request(
+        "PATCH",
+        f"/api/appointments/{int(appointment_id)}/payments/{int(payment_id)}",
+        json_body=payload,
     )
 
 

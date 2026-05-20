@@ -57,6 +57,7 @@ db_mgr = DatabaseManager(
 )
 db_mgr.ensure_appointment_date_datetime()
 db_mgr.ensure_appointment_is_priority_column()
+db_mgr.ensure_appointment_payment_paid_on_column()
 
 repo = AppointmentRepository(db_mgr)
 customer_repo = CustomerRepository(db_mgr)

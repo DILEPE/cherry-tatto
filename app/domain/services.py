@@ -3,7 +3,7 @@ import base64
 import json
 import logging
 import math
-from datetime import datetime
+from datetime import datetime, date
 from typing import Any, Optional
 
 import mysql.connector
@@ -36,7 +36,7 @@ from app.domain.survey_question_helpers import (
     QUESTION_TYPES_NEEDING_OPTIONS,
     parse_options_json,
 )
-from app.schemas.appointment import AppointmentListItem
+from app.schemas.appointment import AppointmentListItem, AppointmentPaymentPatchRequest
 from app.schemas.customer import (
     CustomerCreate,
     CustomerListResponse,
@@ -770,13 +770,52 @@ class BusinessLogicService:
             float(pending_balance),
         )
 
+    async def patch_appointment_meta_details(
+        self,
+        appointment_id: int,
+        *,
+        assigned_panel_user_id: Optional[int],
+        is_priority: bool,
+        detail: Optional[str],
+    ) -> None:
+        appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
+        if appointment is None:
+            raise ValueError("Cita no encontrada")
+        status = str(getattr(appointment, "status", "") or "")
+        if status not in {"Agendada", "Reprogramada"}:
+            raise ValueError("Solo puedes editar estos datos en citas Agendadas o Reprogramadas")
+        if assigned_panel_user_id is not None:
+            has_signed = await asyncio.to_thread(self.repository.has_contract_for_appointment, appointment_id)
+            if has_signed:
+                raise ValueError("No se puede cambiar el artista cuando la cita ya tiene contrato firmado.")
+            pu = await asyncio.to_thread(self.panel_user_repo.get_by_id, int(assigned_panel_user_id))
+            if pu is None:
+                raise ValueError("Usuario del panel del artista no encontrado")
+        dnorm: Optional[str] = None
+        if detail is not None:
+            dnorm = detail.strip()
+
+        await asyncio.to_thread(
+            self.repository.patch_appointment_meta,
+            appointment_id,
+            is_priority=is_priority,
+            assigned_panel_user_id=assigned_panel_user_id,
+            detail=dnorm,
+        )
+
     async def list_appointment_payments(self, appointment_id: int) -> list[dict[str, object]]:
         appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
         if appointment is None:
             raise ValueError("Cita no encontrada")
         return await asyncio.to_thread(self.repository.list_payments_by_appointment, appointment_id)
 
-    async def add_appointment_payment(self, appointment_id: int, amount: float, note: Optional[str] = None) -> int:
+    async def add_appointment_payment(
+        self,
+        appointment_id: int,
+        amount: float,
+        note: Optional[str] = None,
+        paid_on: Optional[date] = None,
+    ) -> int:
         appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
         if appointment is None:
             raise ValueError("Cita no encontrada")
@@ -791,7 +830,12 @@ class BusinessLogicService:
             raise ValueError("El abono adicional excede el valor total del trabajo")
 
         def _pay() -> int:
-            return self.repository.create_payment(appointment_id, float(amount), note)
+            return self.repository.create_payment(
+                appointment_id,
+                float(amount),
+                note,
+                paid_on,
+            )
 
         pay_id = await asyncio.to_thread(_pay)
         try:
@@ -827,6 +871,52 @@ class BusinessLogicService:
             )
             self._schedule_n8n_notify("payment_receipt_pdf", receipt_payload)
         return pay_id
+
+    async def patch_appointment_payment_row(
+        self, appointment_id: int, payment_id: int, data: AppointmentPaymentPatchRequest
+    ) -> None:
+        row = await asyncio.to_thread(self.repository.get_payment_by_id, payment_id)
+        if not row:
+            raise ValueError("Abono no encontrado")
+        if int(row.get("appointment_id") or 0) != int(appointment_id):
+            raise ValueError("El abono no pertenece a esta cita")
+        appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
+        if appointment is None:
+            raise ValueError("Cita no encontrada")
+        status = str(getattr(appointment, "status", "") or "")
+        if status not in {"Agendada", "Reprogramada"}:
+            raise ValueError("Solo puedes editar abonos en citas Agendadas o Reprogramadas")
+        total_amount = float(getattr(appointment, "total_amount", 0) or 0)
+        old_amt = float(row.get("amount") or 0)
+        amt_new = float(data.amount) if data.amount is not None else old_amt
+        payments = await asyncio.to_thread(self.repository.list_payments_by_appointment, appointment_id)
+        s = 0.0
+        for p in payments:
+            pid = int(p.get("id") or 0)
+            a = float(p.get("amount") or 0)
+            if pid == int(payment_id):
+                s += amt_new
+            else:
+                s += a
+        if round(s, 2) > round(total_amount, 2) + 0.005:
+            raise ValueError("La suma de abonos excede el valor total del trabajo.")
+
+        note_kw: Any = "__NO_NOTE_CHANGE__"
+        paid_kw: Any = "__NO_PAID_CHANGE__"
+        if "note" in data.model_fields_set:
+            note_kw = data.note
+        if "paid_on" in data.model_fields_set:
+            paid_kw = data.paid_on
+
+        def _patch() -> int:
+            return self.repository.patch_payment_row(
+                int(payment_id),
+                amount=data.amount,
+                note=note_kw,
+                paid_on=paid_kw,
+            )
+
+        await asyncio.to_thread(_patch)
 
     async def list_appointment_payment_receipts(self, appointment_id: int) -> list[dict[str, object]]:
         appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)

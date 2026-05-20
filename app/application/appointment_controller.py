@@ -14,8 +14,10 @@ from app.schemas.appointment import (
     AppointmentListItem,
     AppointmentPaymentCreateRequest,
     AppointmentPaymentItem,
+    AppointmentPaymentPatchRequest,
     AppointmentPaymentReceiptListItem,
     AppointmentRescheduleRequest,
+    AppointmentMetaPatchRequest,
     AppointmentStatusUpdateRequest,
     appointment_request_to_domain,
 )
@@ -113,6 +115,26 @@ class AppointmentController(Controller):
         except Exception as e:
             raise HTTPException(detail=f"Error al reprogramar cita: {str(e)}", status_code=400) from e
 
+    @patch("/{appointment_id:int}/meta")
+    async def patch_meta(
+        self,
+        appointment_id: int,
+        data: AppointmentMetaPatchRequest,
+        state: State,
+    ) -> MessageResponse:
+        try:
+            await state.service.patch_appointment_meta_details(
+                appointment_id,
+                assigned_panel_user_id=data.assigned_panel_user_id,
+                is_priority=bool(data.is_priority),
+                detail=data.detail,
+            )
+            return MessageResponse(status="success", message="Datos de la cita actualizados.")
+        except ValueError as e:
+            raise HTTPException(detail=str(e), status_code=400) from e
+        except Exception as e:
+            raise HTTPException(detail=f"Error al actualizar datos: {str(e)}", status_code=400) from e
+
     @patch("/{appointment_id:int}/financials")
     async def update_financials(
         self,
@@ -151,7 +173,9 @@ class AppointmentController(Controller):
         state: State,
     ) -> AppointmentPaymentCreatedResponse:
         try:
-            pid = await state.service.add_appointment_payment(appointment_id, data.amount, data.note)
+            pid = await state.service.add_appointment_payment(
+                appointment_id, data.amount, data.note, data.paid_on
+            )
             return AppointmentPaymentCreatedResponse(
                 status="success",
                 message="Abono registrado correctamente",
@@ -161,6 +185,22 @@ class AppointmentController(Controller):
             raise HTTPException(detail=str(e), status_code=400) from e
         except Exception as e:
             raise HTTPException(detail=f"Error al registrar abono: {str(e)}", status_code=400) from e
+
+    @patch("/{appointment_id:int}/payments/{payment_id:int}")
+    async def patch_payment(
+        self,
+        appointment_id: int,
+        payment_id: int,
+        data: AppointmentPaymentPatchRequest,
+        state: State,
+    ) -> MessageResponse:
+        try:
+            await state.service.patch_appointment_payment_row(appointment_id, payment_id, data)
+            return MessageResponse(status="success", message="Abono actualizado.")
+        except ValueError as e:
+            raise HTTPException(detail=str(e), status_code=400) from e
+        except Exception as e:
+            raise HTTPException(detail=f"Error al actualizar el abono: {str(e)}", status_code=400) from e
 
     @get("/{appointment_id:int}/receipts")
     async def list_receipts(

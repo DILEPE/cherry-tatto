@@ -784,6 +784,8 @@ _BOOKING_WORK_KIND_META: Dict[str, Dict[str, Any]] = {
 
 _MIN_BOOKING_DURATION_SLOTS = 1
 _MAX_BOOKING_DURATION_SLOTS = 16
+# Valor mínimo COP para total del trabajo **y** abono inicial al agendar (enteros).
+_MIN_APPOINTMENT_TOTAL_COP = 50000.0
 # Sufijo en `detail` al crear desde este panel (Streamlit) para saber cuántas franjas de 30 min ocupó la cita.
 _AGENDA_SLOTS_DETAIL_PATTERN = re.compile(r"\s*\[agenda_slots:(\d+)\]\s*$", re.IGNORECASE)
 
@@ -793,6 +795,18 @@ def _append_agenda_slots_marker(detail: Optional[str], slots: int) -> str:
     n = max(_MIN_BOOKING_DURATION_SLOTS, min(_MAX_BOOKING_DURATION_SLOTS, int(slots)))
     base = (detail or "").strip()
     return (f"{base} [agenda_slots:{n}]").strip() if base else f"[agenda_slots:{n}]"
+
+
+def _booking_observations_and_design_for_api() -> str:
+    """Combina descripción del diseño y observaciones previas envío a `_service_and_detail_for_work_kind`."""
+    dz = str(st.session_state.get("ap_design") or "").strip()
+    nt = str(st.session_state.get("ap_det") or "").strip()
+    parts: list[str] = []
+    if dz:
+        parts.append(dz)
+    if nt:
+        parts.append(nt)
+    return "\n".join(parts)
 
 
 def _booking_duration_slots_from_session() -> int:
@@ -833,6 +847,101 @@ def _duration_slots_for_existing_appointment(row: dict[str, Any]) -> int:
     if "other" in svc or "otro" in svc:
         return 1
     return 2
+
+
+# Separador explícito entre descripción de diseño y observaciones al editar detalle de cita existente.
+_APPT_DESIGN_OBS_DETAIL_SEP = "\n---\n"
+_DETAIL_LEADING_BRACKET_TAG = re.compile(r"^\s*\[([^\]\n]{1,64})\]\s*", re.IGNORECASE)
+
+
+def _appointment_detail_plain_body(detail_full: str) -> str:
+    """Quita marcador [agenda_slots:N] y la primera etiqueta tipo [Tatuaje]."""
+    d = detail_full or ""
+    m = _AGENDA_SLOTS_DETAIL_PATTERN.search(d)
+    core = (d[: m.start()] if m else d).strip()
+    tm = _DETAIL_LEADING_BRACKET_TAG.match(core)
+    if tm:
+        core = core[tm.end() :].strip()
+    return core
+
+
+def _split_design_obs_plain(core: str) -> tuple[str, str]:
+    if _APPT_DESIGN_OBS_DETAIL_SEP in core:
+        a, _, b = core.partition(_APPT_DESIGN_OBS_DETAIL_SEP)
+        return a.strip(), b.strip()
+    return core.strip(), ""
+
+
+def _merge_design_obs_plain(design: str, obs: str) -> str:
+    dz, nt = design.strip(), obs.strip()
+    if dz and nt:
+        return f"{dz}{_APPT_DESIGN_OBS_DETAIL_SEP}{nt}"
+    return dz or nt
+
+
+def _work_kind_infer_from_existing_row(row: dict[str, Any]) -> str:
+    svc = str(row.get("service_type") or row.get("service") or "").strip().lower()
+    det = str(row.get("detail") or "").lower()
+    combined = f"{svc} {det}"
+    if "limpieza" in det:
+        return "limpieza_piercing"
+    if "cambio" in det and "pierc" in combined:
+        return "cambio_piercing"
+    if "tatu" in combined or "tattoo" in svc:
+        return "tatuaje"
+    if "pierc" in combined or svc == "piercing":
+        return "piercing"
+    return "piercing"
+
+
+def _rebuild_detail_for_patch(
+    row: dict[str, Any],
+    design: str,
+    obs: str,
+    *,
+    agenda_slots_override: Optional[int] = None,
+) -> str:
+    slots = (
+        int(agenda_slots_override)
+        if agenda_slots_override is not None
+        else _duration_slots_for_existing_appointment(row)
+    )
+    slots = max(_MIN_BOOKING_DURATION_SLOTS, min(_MAX_BOOKING_DURATION_SLOTS, slots))
+    wk = _work_kind_infer_from_existing_row(row)
+    merged = _merge_design_obs_plain(design, obs)
+    _, detail_for_api = _service_and_detail_for_work_kind(wk, merged)
+    return _append_agenda_slots_marker(detail_for_api, slots)
+
+
+def _appointment_last_start_slot(start_hm: str, dur_slots: int, slot_opts: list[str]) -> str:
+    try:
+        si = slot_opts.index(start_hm)
+    except ValueError:
+        return start_hm
+    last_i = min(si + max(int(dur_slots), 1) - 1, len(slot_opts) - 1)
+    return slot_opts[last_i]
+
+
+def _duration_slots_from_start_last(start_hm: str, last_slot_hm: str, slot_opts: list[str]) -> int:
+    try:
+        si = slot_opts.index(start_hm)
+        ei = slot_opts.index(last_slot_hm)
+    except ValueError:
+        return _MIN_BOOKING_DURATION_SLOTS
+    if ei < si:
+        return _MIN_BOOKING_DURATION_SLOTS
+    return max(_MIN_BOOKING_DURATION_SLOTS, min(_MAX_BOOKING_DURATION_SLOTS, ei - si + 1))
+
+
+def _format_appt_created_at(val: Any) -> str:
+    if val is None:
+        return "—"
+    if isinstance(val, datetime):
+        return val.strftime("%d/%m/%Y %H:%M")
+    s = str(val).strip()
+    if len(s) >= 16:
+        return s[:16].replace("T", " ")
+    return s or "—"
 
 
 def _appointments_same_day_raw(items: list[dict[str, Any]], day: date) -> list[dict[str, Any]]:
@@ -1093,52 +1202,62 @@ def _calendar_month_footer_strip_html(
 def _render_calendar_month_hidden_book_widgets(y: int, m: int, weeks_grid: list[list[int]]) -> None:
     """Botones ocultos (uno por día) para poder agendar desde el pie HTML mediante JS."""
     allow_book_role = not _panel_is_technician_role()
-    keys: list[str] = []
+    booked: list[int] = []
     for row in weeks_grid:
         for d in row:
             if d > 0:
-                keys.append(f"cal_main_day_{y}_{m}_{d}")
-    if not keys:
+                booked.append(d)
+    if not booked:
         return
     css_chunks = [
         "section.main button[data-testid^=\"baseButton\"][class*=\"cal_main_day_\"] "
         "{position:absolute!important;left:-9999px!important;width:1px!important;"
         "height:1px!important;opacity:0!important;margin:0!important;padding:0!important;}",
         'section.main div[data-testid="element-container"]:has(button[class*="cal_main_day_"]) '
-        "{min-height:0!important;margin:0!important;padding:0!important;}",
+        "{min-height:0!important;max-height:0!important;margin:0!important;padding:0!important;"
+        "border:none!important;overflow:hidden!important;}",
+        "section.main div[data-testid=\"stHorizontalBlock\"]:has(button[class*=\"cal_main_day_\"]) "
+        "{min-height:0!important;margin:0!important;padding:0!important;gap:0!important;}",
+        "section.main div[data-testid=\"stHorizontalBlock\"]:has(button[class*=\"cal_main_day_\"]) "
+        "> div[data-testid=\"column\"] {min-height:0!important;padding:0!important;flex:0 0 auto!important;}",
+        "section.main div[data-testid=\"stVerticalBlock\"]:has(div[data-testid=\"stHorizontalBlock\"] button[class*=\"cal_main_day_\"]) "
+        "{gap:0!important;}",
     ]
     st.markdown("<style>" + "\n".join(css_chunks) + "</style>", unsafe_allow_html=True)
     today_d = date.today()
-    for row in weeks_grid:
-        for d in row:
-            if d <= 0:
-                continue
-            picked_cell = date(y, m, d)
-            bk = f"cal_main_day_{y}_{m}_{d}"
-            is_past = picked_cell < today_d
-            disabled = is_past or not allow_book_role
-            book_help = (
-                "Los tatuadores y perforadores no pueden agendar desde el calendario"
-                if not allow_book_role
-                else (
-                    "No se pueden agendar citas en fechas pasadas"
-                    if is_past
-                    else f"Agendar cita · {picked_cell.strftime('%d/%m/%Y')}"
+    # En filas de 7 como la rejilla mensual para no encadenar docenas de filas Streamlit ocultando el scroll útil del calendario.
+    chunk = 7
+    for i in range(0, len(booked), chunk):
+        row_days = booked[i : i + chunk]
+        row_cols = st.columns(len(row_days), gap=None)
+        for ci, d in enumerate(row_days):
+            with row_cols[ci]:
+                picked_cell = date(y, m, d)
+                bk = f"cal_main_day_{y}_{m}_{d}"
+                is_past = picked_cell < today_d
+                disabled = is_past or not allow_book_role
+                book_help = (
+                    "Los tatuadores y perforadores no pueden agendar desde el calendario"
+                    if not allow_book_role
+                    else (
+                        "No se pueden agendar citas en fechas pasadas"
+                        if is_past
+                        else f"Agendar cita · {picked_cell.strftime('%d/%m/%Y')}"
+                    )
                 )
-            )
-            if st.button(
-                "\u200b",
-                key=bk,
-                type="tertiary",
-                width=1,
-                disabled=disabled,
-                help=book_help,
-            ):
-                _clear_calendar_dialog_focus()
-                _pop_booking_document_session()
-                st.session_state["ap_ad"] = date(y, m, d)
-                st.session_state["_ap_dlg"] = "create"
-                st.rerun()
+                if st.button(
+                    "\u200b",
+                    key=bk,
+                    type="tertiary",
+                    width=1,
+                    disabled=disabled,
+                    help=book_help,
+                ):
+                    _clear_calendar_dialog_focus()
+                    _pop_booking_document_session()
+                    st.session_state["ap_ad"] = date(y, m, d)
+                    st.session_state["_ap_dlg"] = "create"
+                    st.rerun()
 
 
 def _inject_calendar_month_footer_bridge() -> None:
@@ -1487,34 +1606,55 @@ def _week_grid_day_column_html(
         pct_w = 100.0 / n_lanes
         left = lane_i * pct_w
         nm = str(row.get("customer_name") or row.get("name") or "").strip() or "—"
-        short = html_mod.escape(_calendar_cell_customer_label(nm, long_from_len=14))
+        nm_esc = html_mod.escape(nm)
         hm = _appt_time_hm(row.get("appointment_date", row.get("date")))
         staff = _assigned_staff_label(row)
         tit = html_mod.escape(f"{hm} · {nm}" + (f" · {staff}" if staff != "—" else ""))
         st_cl = str(row.get("status") or "").strip().lower()
         opacity = "opacity:0.48;" if st_cl == "cancelada" else ""
         ap_id = int(row.get("id", 0) or 0)
+        # Una sola franja (= 30 min): el alto es ~20px; sin layout horizontal no cabe nombre + botón.
+        compact = vis <= 1
         link_html = ""
         if ap_id > 0:
-            link_html = (
-                f'<button type="button" class="twg-appt-link" data-cal-appt-id="{ap_id}" '
-                'aria-label="Ver cita">'
-                '<span class="twg-appt-link-play" aria-hidden="true">▶</span>'
-                "<span>Ver cita</span>"
-                "</button>"
+            if compact:
+                link_html = (
+                    f'<button type="button" class="twg-appt-link twg-appt-link--compact" '
+                    f'data-cal-appt-id="{ap_id}" aria-label="Ver cita">'
+                    '<span class="twg-appt-link-play" aria-hidden="true">▶</span>'
+                    "</button>"
+                )
+            else:
+                link_html = (
+                    f'<button type="button" class="twg-appt-link" data-cal-appt-id="{ap_id}" '
+                    'aria-label="Ver cita">'
+                    '<span class="twg-appt-link-play" aria-hidden="true">▶</span>'
+                    "<span>Ver cita</span>"
+                    "</button>"
+                )
+        cls_appt_extra = " twg-appt--compact" if compact else ""
+        if compact:
+            body = (
+                f'<span class="twg-appt-time-compact">{html_mod.escape(hm)}</span>'
+                f'<span class="twg-appt-client-compact">{nm_esc}</span>'
+            )
+        else:
+            body = (
+                "<div style=\"display:flex;flex-direction:column;gap:1px;min-height:0;"
+                'overflow:hidden;flex:1 1 auto;width:100%">'
+                f'<span style="font-weight:700;flex-shrink:0">{html_mod.escape(hm)}</span>'
+                f'<span class="twg-appt-client">{nm_esc}</span>'
+                "</div>"
             )
         parts.append(
-            f'<div class="twg-appt twg-{cls_pill}" title="{tit}" style="top:{top}px;height:{height}px;'
+            f'<div class="twg-appt twg-{cls_pill}{cls_appt_extra}" title="{tit}" style="top:{top}px;height:{height}px;'
             f"left:{left}%;width:calc({pct_w}% - 3px);margin-left:1px;{theme}{opacity}"
             "border-radius:5px;box-sizing:border-box;padding:2px 4px;overflow:hidden;"
             "position:absolute;border-width:1px;border-style:solid;"
             "font-size:10px;line-height:1.2;display:flex;flex-direction:column;"
             "justify-content:space-between;gap:1px;min-height:0;z-index:2;"
             'box-shadow:0 1px 3px rgba(0,0,0,0.35);">'
-            "<div style=\"display:flex;flex-direction:column;gap:1px;min-height:0;overflow:hidden\">"
-            f'<span style="font-weight:700;flex-shrink:0">{html_mod.escape(hm)}</span>'
-            f'<span style="opacity:0.95;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{short}</span>'
-            f"</div>{link_html}</div>"
+            f"{body}{link_html}</div>"
         )
     parts.append("</div>")
     return "".join(parts)
@@ -2023,8 +2163,9 @@ def _init_appt_form_state_once() -> None:
         "ap_ad": date.today(),
         "ap_slot": default_slot,
         "ap_det": "",
-        "ap_dep": 0.0,
-        "ap_total": 0.0,
+        "ap_design": "",
+        "ap_dep": float(_MIN_APPOINTMENT_TOTAL_COP),
+        "ap_total": float(_MIN_APPOINTMENT_TOTAL_COP),
         "ap_priority": False,
         "ap_duration_slots": 1,
     }
@@ -2049,6 +2190,7 @@ def _pop_booking_document_session() -> None:
         "_ap_verify_msg",
         "_ap_verify_level",
         "_ap_verified_doc_number",
+        "_ap_pending_doc_type_sync",
         "ap_doc_number",
     ):
         st.session_state.pop(k, None)
@@ -2063,6 +2205,7 @@ def _reset_appointment_form_state() -> None:
         "ap_ad",
         "ap_slot",
         "ap_det",
+        "ap_design",
         "ap_dep",
         "ap_total",
         "ap_priority",
@@ -2077,26 +2220,23 @@ def _reset_appointment_form_state() -> None:
     _pop_booking_document_session()
 
 
-def _initial_receipt_success_message(dep_created: float, service_str: str) -> str:
-    """Texto tras crear cita: piercing no envía recibo PDF inicial aunque haya abono."""
-    dep_created = max(0.0, round(float(dep_created or 0), 2))
-    if dep_created <= 0:
-        return "**Cita creada.** No hubo abono al agendar; no se emitió recibo PDF."
-    resolved = resolve_service_type((service_str or "").strip())
-    if service_type_to_contract_kind(resolved) == "piercing":
-        return (
-            "**Cita creada.** Servicio de **piercing**: el abono quedó registrado; **no se envía recibo PDF** "
-            "al agendar (solo la notificación de la cita). Los abonos adicionales pueden generar recibo."
-        )
-    return (
-        "**Cita creada.** Se generó el recibo inicial (PDF); puedes descargarlo desde "
-        "**Recibos** en el menú de la cita."
-    )
+def _initial_receipt_success_message(_dep_created: float, _service_str: str) -> str:
+    """Notificación tras crear cita desde el panel (solo confirmación)."""
+    return "La cita ha sido agendada."
 
 
 @st.dialog("Agendar cita", width="large", dismissible=False)
 def _dialog_agendar_cita() -> None:
     _init_appt_form_state_once()
+    if float(st.session_state.get("ap_total") or 0) < float(_MIN_APPOINTMENT_TOTAL_COP):
+        st.session_state["ap_total"] = float(_MIN_APPOINTMENT_TOTAL_COP)
+    if float(st.session_state.get("ap_dep") or 0) < float(_MIN_APPOINTMENT_TOTAL_COP):
+        st.session_state["ap_dep"] = float(_MIN_APPOINTMENT_TOTAL_COP)
+    # Tras Verificar cliente: el tipo llega desde la API en el rerun siguiente (no escribir ap_doc_type
+    # después de crear el widget con esa key — StreamlitAPIException).
+    pending_doc_ty = st.session_state.pop("_ap_pending_doc_type_sync", None)
+    if pending_doc_ty in ("CC", "TI", "CE", "PAS"):
+        st.session_state["ap_doc_type"] = pending_doc_ty
 
     picked_raw = st.session_state.get("ap_ad")
     if picked_raw is None:
@@ -2141,144 +2281,75 @@ def _dialog_agendar_cita() -> None:
         unsafe_allow_html=True,
     )
 
-    st.markdown('<p class="dlg-appt-col-h">Tipo de trabajo</p>', unsafe_allow_html=True)
-    st.radio(
-        "¿Qué se va a realizar? *",
-        options=list(_BOOKING_WORK_KIND_ORDER),
-        key="ap_work_kind",
-        format_func=lambda k: str(_BOOKING_WORK_KIND_META[k]["label"]),
-        help="Define el servicio y el profesional (tatuador o perforador). La ocupación en agenda se elige aparte.",
-    )
-
-    st.markdown('<p class="dlg-appt-col-h">Duración en agenda</p>', unsafe_allow_html=True)
-    st.number_input(
-        "Franjas de 30 min a reservar *",
-        min_value=_MIN_BOOKING_DURATION_SLOTS,
-        max_value=_MAX_BOOKING_DURATION_SLOTS,
-        step=1,
-        key="ap_duration_slots",
-        help="Desde la hora de inicio se bloquean tantas franjas de media hora. No está ligada al tipo de trabajo.",
-    )
-
+    c_wk, c_art = st.columns(2)
+    with c_wk:
+        st.markdown('<p class="dlg-appt-col-h">Tipo de trabajo</p>', unsafe_allow_html=True)
+        st.selectbox(
+            "¿Qué se va a realizar? *",
+            options=list(_BOOKING_WORK_KIND_ORDER),
+            key="ap_work_kind",
+            format_func=lambda k: str(_BOOKING_WORK_KIND_META[k]["label"]),
+            help="Define el servicio y qué profesional se listará (tatuador o perforador).",
+        )
     wk_sel = str(st.session_state.get("ap_work_kind") or "piercing")
     if wk_sel not in _BOOKING_WORK_KIND_META:
         wk_sel = "piercing"
     need_role = _work_kind_to_assignee_role(wk_sel)
     staff_opts = [s for s in _ensure_assignable_staff() if str(s.get("role")) == need_role]
 
-    st.markdown('<p class="dlg-appt-col-h">Profesional asignado</p>', unsafe_allow_html=True)
-    from streamlit_app.panel_auth import panel_auth_enabled
+    with c_art:
+        st.markdown('<p class="dlg-appt-col-h">Profesional asignado</p>', unsafe_allow_html=True)
+        from streamlit_app.panel_auth import panel_auth_enabled
 
-    assigned_id: Optional[int] = None
-    role_me = str(st.session_state.get("_panel_user_role") or "")
-    uid_me = st.session_state.get("_panel_user_id")
-    locked_self = (
-        panel_auth_enabled()
-        and not st.session_state.get("_panel_session_full_access")
-        and role_me == need_role
-        and uid_me is not None
-    )
-    if locked_self:
-        assigned_id = int(uid_me)
-        st.session_state["ap_assigned_staff_id"] = assigned_id
-        st.caption(
-            "Las franjas horarias se calculan con tu disponibilidad; la cita quedará asignada a **tu usuario** del panel."
+        assigned_id: Optional[int] = None
+        role_me = str(st.session_state.get("_panel_user_role") or "")
+        uid_me = st.session_state.get("_panel_user_id")
+        locked_self = (
+            panel_auth_enabled()
+            and not st.session_state.get("_panel_session_full_access")
+            and role_me == need_role
+            and uid_me is not None
         )
-    elif not staff_opts:
-        st.error(
-            f"No hay ningún usuario activo con rol **{need_role}** en el panel. "
-            "Da de alta al profesional en **Gestión de usuarios** antes de agendar."
-        )
-    else:
-        labels_p = [
-            f"{s.get('first_name', '')} {s.get('last_name', '')} (@{s.get('username', '')})"
-            for s in staff_opts
-        ]
-        pick_key = "ap_assigned_staff_pick"
-        if pick_key not in st.session_state or st.session_state[pick_key] not in labels_p:
-            st.session_state[pick_key] = labels_p[0]
-        choice_p = st.selectbox(
-            "Tatuador o perforador (según el tipo de trabajo) *",
-            options=labels_p,
-            key=pick_key,
-            help="Cada profesional tiene su propia ocupación por día; elige quién atenderá.",
-        )
-        idx_p = labels_p.index(choice_p)
-        assigned_id = int(staff_opts[idx_p]["id"])
-        st.session_state["ap_assigned_staff_id"] = assigned_id
-
-    st.markdown('<p class="dlg-appt-col-h">Verificación de documento</p>', unsafe_allow_html=True)
-    st.text_input(
-        "Número de documento del cliente*",
-        key="ap_doc_number",
-        placeholder="Sin puntos ni espacios, si es posible",
-    )
-    if st.button("Verificar documento", type="secondary", use_container_width=True, key="ap_btn_verify_doc"):
-        doc_in = (st.session_state.get("ap_doc_number") or "").strip()
-        if len(doc_in) < 5:
-            st.session_state["_ap_verify_level"] = "error"
-            st.session_state["_ap_verify_msg"] = "Ingresa un documento válido (mínimo 5 caracteres)."
-            st.session_state["_ap_doc_verified"] = False
+        if locked_self:
+            assigned_id = int(uid_me)
+            st.session_state["ap_assigned_staff_id"] = assigned_id
+            st.caption(
+                "Las franjas horarias se calculan con tu disponibilidad; la cita quedará asignada a **tu usuario** del panel."
+            )
+        elif not staff_opts:
+            st.error(
+                f"No hay ningún usuario activo con rol **{need_role}** en el panel. "
+                "Da de alta al profesional en **Gestión de usuarios** antes de agendar."
+            )
         else:
-            ok_f, msg_f, row_f = fetch_customer_by_document(doc_in)
-            if not ok_f:
-                st.session_state["_ap_verify_level"] = "error"
-                st.session_state["_ap_verify_msg"] = msg_f
-                st.session_state["_ap_doc_verified"] = False
-            elif msg_f == "not_found":
-                st.session_state["_ap_booking_customer_id"] = None
-                st.session_state["_ap_need_new_customer"] = True
-                st.session_state["_ap_doc_verified"] = True
-                st.session_state["_ap_verified_doc_number"] = doc_in
-                st.session_state["_ap_verify_level"] = "warning"
-                st.session_state["_ap_verify_msg"] = (
-                    "Cliente no registrado. Elige tipo de documento y completa nombre, apellido, celular y correo. "
-                    "La fecha de nacimiento y el tutor (si aplica) se registran al firmar el contrato o en la ficha del cliente."
-                )
-            else:
-                st.session_state["_ap_booking_customer_id"] = int(row_f["id"])
-                st.session_state["_ap_need_new_customer"] = False
-                st.session_state["_ap_doc_verified"] = True
-                st.session_state["_ap_verified_doc_number"] = doc_in
-                st.session_state["_ap_booking_customer_snapshot"] = dict(row_f)
-                st.session_state["ap_fn"] = str(row_f.get("first_name") or "")
-                st.session_state["ap_ln"] = str(row_f.get("last_name") or "")
-                st.session_state["ap_phone"] = str(row_f.get("phone_number") or "")
-                st.session_state["ap_email"] = str(row_f.get("email") or "")
-                st.session_state["_ap_verify_level"] = "success"
-                st.session_state["_ap_verify_msg"] = f"Cliente encontrado (id {row_f['id']}). Datos cargados."
-        st.rerun()
+            labels_p = [
+                f"{s.get('first_name', '')} {s.get('last_name', '')} (@{s.get('username', '')})"
+                for s in staff_opts
+            ]
+            pick_key = "ap_assigned_staff_pick"
+            if pick_key not in st.session_state or st.session_state[pick_key] not in labels_p:
+                st.session_state[pick_key] = labels_p[0]
+            choice_p = st.selectbox(
+                "Artista / profesional *",
+                options=labels_p,
+                key=pick_key,
+                help="Cada profesional tiene su propia ocupación por día; elige quién atenderá.",
+            )
+            idx_p = labels_p.index(choice_p)
+            assigned_id = int(staff_opts[idx_p]["id"])
+            st.session_state["ap_assigned_staff_id"] = assigned_id
 
-    v_lvl = st.session_state.get("_ap_verify_level")
-    v_msg = st.session_state.get("_ap_verify_msg")
-    if v_msg and v_lvl:
-        if v_lvl == "error":
-            st.error(v_msg)
-        elif v_lvl == "success":
-            st.success(v_msg)
-        else:
-            st.warning(v_msg)
-
-    if st.session_state.get("_ap_need_new_customer"):
-        st.caption(
-            "**Tarjeta de identidad (TI)** u otros documentos: se admite al agendar. "
-            "La fecha de nacimiento y el estado de menor/tutor se definen al completar la ficha o en la firma del contrato."
+    c_dur, c_hr = st.columns(2)
+    with c_dur:
+        st.markdown('<p class="dlg-appt-col-h">Duración en agenda</p>', unsafe_allow_html=True)
+        st.number_input(
+            "Franjas de 30 min a reservar *",
+            min_value=_MIN_BOOKING_DURATION_SLOTS,
+            max_value=_MAX_BOOKING_DURATION_SLOTS,
+            step=1,
+            key="ap_duration_slots",
+            help="Desde la hora de inicio se bloquean tantas franjas de media hora. No está ligada al tipo de trabajo.",
         )
-        st.selectbox(
-            "Tipo de documento *",
-            options=["CC", "TI", "CE", "PAS"],
-            format_func=lambda x: {
-                "CC": "CC — Cédula",
-                "TI": "TI — Tarjeta de identidad",
-                "CE": "CE — Extranjería",
-                "PAS": "PAS — Pasaporte",
-            }[x],
-            key="ap_doc_type",
-        )
-
-    st.markdown(
-        f"**Fecha de la cita:** {picked.strftime('%d/%m/%Y')} _(elegida en el calendario)_"
-    )
 
     slot_opts = _time_slot_options()
     wk = str(st.session_state.get("ap_work_kind") or "piercing")
@@ -2308,46 +2379,152 @@ def _dialog_agendar_cita() -> None:
     if avail_slots and cur_slot not in avail_slots:
         st.session_state["ap_slot"] = avail_slots[0]
 
-    if not avail_slots:
-        st.warning(
-            "No quedan franjas libres ese día para esta duración. Prueba otro día o revisa las citas ya cargadas."
-        )
-        slot = None
-    else:
-        slot = st.selectbox(
-            "Franja de inicio *",
-            options=avail_slots,
-            key="ap_slot",
-            help=f"Se reservan {need_slots} franja(s) de 30 min desde esta hora.",
-        )
-        st.caption(f"Inicio **{slot}** hora local (duración **{need_slots * 30}** min).")
+    with c_hr:
+        st.markdown('<p class="dlg-appt-col-h">Hora de inicio</p>', unsafe_allow_html=True)
+        if not avail_slots:
+            st.warning(
+                "No quedan franjas libres ese día para esta duración. Prueba otro día o revisa las citas ya cargadas."
+            )
+            slot = None
+        else:
+            slot = st.selectbox(
+                "Franja de inicio *",
+                options=avail_slots,
+                key="ap_slot",
+                help=f"Se reservan {need_slots} franja(s) de 30 min desde esta hora.",
+            )
+            st.caption(f"Inicio **{slot}** hora local (duración **{need_slots * 30}** min).")
 
-    col_left, col_right = st.columns(2)
-    with col_left:
-        st.markdown('<p class="dlg-appt-col-h">Cliente</p>', unsafe_allow_html=True)
+    st.markdown(
+        f"**Fecha de la cita:** {picked.strftime('%d/%m/%Y')} _(elegida en el calendario)_"
+    )
+
+    st.markdown('<p class="dlg-appt-col-h">Verificación de documento</p>', unsafe_allow_html=True)
+    c_doc_l, c_doc_r = st.columns(2)
+    with c_doc_l:
+        st.selectbox(
+            "Tipo de documento *",
+            options=["CC", "TI", "CE", "PAS"],
+            format_func=lambda x: {
+                "CC": "CC — Cédula",
+                "TI": "TI — Tarjeta de identidad",
+                "CE": "CE — Extranjería",
+                "PAS": "PAS — Pasaporte",
+            }[x],
+            key="ap_doc_type",
+            help="Para clientes nuevos y como tipo de documento al verificar o registrar.",
+        )
+        st.text_input(
+            "Número de documento *",
+            key="ap_doc_number",
+            placeholder="Sin puntos ni espacios, si es posible",
+        )
+    with c_doc_r:
+        st.markdown("<div style='height:4.5rem'></div>", unsafe_allow_html=True)
+        if st.button("Verificar documento", type="secondary", use_container_width=True, key="ap_btn_verify_doc"):
+            doc_in = (st.session_state.get("ap_doc_number") or "").strip()
+            if len(doc_in) < 5:
+                st.session_state["_ap_verify_level"] = "error"
+                st.session_state["_ap_verify_msg"] = "Ingresa un documento válido (mínimo 5 caracteres)."
+                st.session_state["_ap_doc_verified"] = False
+            else:
+                ok_f, msg_f, row_f = fetch_customer_by_document(doc_in)
+                if not ok_f:
+                    st.session_state["_ap_verify_level"] = "error"
+                    st.session_state["_ap_verify_msg"] = msg_f
+                    st.session_state["_ap_doc_verified"] = False
+                elif msg_f == "not_found":
+                    st.session_state["_ap_booking_customer_id"] = None
+                    st.session_state["_ap_need_new_customer"] = True
+                    st.session_state["_ap_doc_verified"] = True
+                    st.session_state["_ap_verified_doc_number"] = doc_in
+                    st.session_state["_ap_verify_level"] = "warning"
+                    st.session_state["_ap_verify_msg"] = (
+                        "Cliente no registrado. Completa nombre, apellido, celular y correo. "
+                        "La fecha de nacimiento y el tutor (si aplica) se registran al firmar el contrato o en la ficha del cliente."
+                    )
+                else:
+                    st.session_state["_ap_booking_customer_id"] = int(row_f["id"])
+                    st.session_state["_ap_need_new_customer"] = False
+                    st.session_state["_ap_doc_verified"] = True
+                    st.session_state["_ap_verified_doc_number"] = doc_in
+                    st.session_state["_ap_booking_customer_snapshot"] = dict(row_f)
+                    st.session_state["ap_fn"] = str(row_f.get("first_name") or "")
+                    st.session_state["ap_ln"] = str(row_f.get("last_name") or "")
+                    st.session_state["ap_phone"] = str(row_f.get("phone_number") or "")
+                    st.session_state["ap_email"] = str(row_f.get("email") or "")
+                    raw_dt = str(row_f.get("document_type") or "").strip().upper()
+                    if raw_dt in ("CC", "TI", "CE", "PAS"):
+                        st.session_state["_ap_pending_doc_type_sync"] = raw_dt
+                    st.session_state["_ap_verify_level"] = "success"
+                    st.session_state["_ap_verify_msg"] = f"Cliente encontrado (id {row_f['id']}). Datos cargados."
+            st.rerun()
+
+    v_lvl = st.session_state.get("_ap_verify_level")
+    v_msg = st.session_state.get("_ap_verify_msg")
+    if v_msg and v_lvl:
+        if v_lvl == "error":
+            st.error(v_msg)
+        elif v_lvl == "success":
+            st.success(v_msg)
+        else:
+            st.warning(v_msg)
+
+    if st.session_state.get("_ap_need_new_customer"):
+        st.caption(
+            "**Tarjeta de identidad (TI)** u otros documentos: se admite al agendar. "
+            "La fecha de nacimiento y el estado de menor/tutor se definen al completar la ficha o en la firma del contrato."
+        )
+
+    st.markdown('<p class="dlg-appt-col-h">Cliente</p>', unsafe_allow_html=True)
+    cl1, cl2 = st.columns(2)
+    with cl1:
         fn = st.text_input("Nombre *", key="ap_fn")
-        ln = st.text_input("Apellido *", key="ap_ln")
         phone = st.text_input(
             "Celular *",
             key="ap_phone",
             help="10 dígitos; puedes incluir espacios o prefijo, se cuentan solo los números.",
         )
+    with cl2:
+        ln = st.text_input("Apellido *", key="ap_ln")
         st.text_input("Correo electrónico *", key="ap_email")
-    with col_right:
-        st.markdown('<p class="dlg-appt-col-h">Cita y montos</p>', unsafe_allow_html=True)
-        detail = st.text_area(
+
+    st.markdown('<p class="dlg-appt-col-h">Cita y montos</p>', unsafe_allow_html=True)
+    cm1, cm2 = st.columns(2)
+    with cm1:
+        st.text_area(
+            "Descripción del diseño (opcional)",
+            height=68,
+            key="ap_design",
+            help="Se guarda en el detalle de la cita junto con las observaciones.",
+        )
+        st.text_area(
             "Notas u observaciones (opcional)",
-            height=80,
+            height=68,
             key="ap_det",
-            help="Se guardan junto al tipo de trabajo (piercing, limpieza, cambio, tatuaje).",
+            help="Texto adicional (indicaciones, zona, etc.).",
         )
         st.checkbox(
             "Cita prioritaria",
             key="ap_priority",
             help="Se muestra con etiqueta roja en calendario y listado (prevalece sobre cliente nuevo/recurrente salvo reprogramación).",
         )
-        total_amount = st.number_input("Valor total del trabajo (COP) *", min_value=0.0, step=10000.0, key="ap_total")
-        deposit = st.number_input("Saldo abonado (COP) *", min_value=0.0, step=10000.0, key="ap_dep")
+    with cm2:
+        total_amount = st.number_input(
+            "Valor total del trabajo (COP) *",
+            min_value=float(_MIN_APPOINTMENT_TOTAL_COP),
+            step=5000.0,
+            format="%.0f",
+            key="ap_total",
+        )
+        deposit = st.number_input(
+            "Saldo abonado (COP) *",
+            min_value=float(_MIN_APPOINTMENT_TOTAL_COP),
+            step=5000.0,
+            format="%.0f",
+            key="ap_dep",
+            help=f"Mínimo {_format_cop(_MIN_APPOINTMENT_TOTAL_COP)}.",
+        )
         pending_balance = round(float(total_amount) - float(deposit), 2)
         st.caption(f"Saldo pendiente calculado: {_format_cop(max(pending_balance, 0))}")
 
@@ -2391,7 +2568,9 @@ def _dialog_agendar_cita() -> None:
             if slot_str not in avail_chk:
                 st.error("La franja elegida ya no está libre. Vuelve a seleccionar la hora.")
                 return
-            detail_raw = str(st.session_state.get("ap_det") or "")
+            detail_raw = _booking_observations_and_design_for_api()
+            total_amount = float(int(round(float(st.session_state.get("ap_total") or 0))))
+            deposit = float(int(round(float(st.session_state.get("ap_dep") or 0))))
             service, detail_for_api = _service_and_detail_for_work_kind(wk_submit, detail_raw)
             detail_for_api = _append_agenda_slots_marker(detail_for_api, need_slots_submit)
             full_name = f"{(fn or '').strip()} {(ln or '').strip()}".strip()
@@ -2412,11 +2591,22 @@ def _dialog_agendar_cita() -> None:
             if deposit > total_amount:
                 st.error("El saldo abonado no puede ser mayor que el valor total del trabajo.")
                 return
+            if deposit < float(_MIN_APPOINTMENT_TOTAL_COP):
+                st.error(
+                    f"El saldo abonado debe ser al menos {_format_cop(_MIN_APPOINTMENT_TOTAL_COP)}."
+                )
+                return
             if picked < today_d:
                 st.error("La fecha de la cita no puede ser anterior a hoy.")
                 return
 
-            dep_norm = max(0.0, round(float(deposit), 2))
+            dep_norm = max(0.0, float(int(round(float(deposit)))))
+            total_int = float(int(round(float(total_amount))))
+            if total_int < float(_MIN_APPOINTMENT_TOTAL_COP):
+                st.error(
+                    f"El valor total del trabajo debe ser al menos {_format_cop(_MIN_APPOINTMENT_TOTAL_COP)}."
+                )
+                return
             appt_payload: Dict[str, Any] = {
                 "name": full_name,
                 "phone": (phone or "").strip(),
@@ -2424,8 +2614,8 @@ def _dialog_agendar_cita() -> None:
                 "date": dt_str,
                 "detail": detail_for_api,
                 "deposit": dep_norm,
-                "total_amount": float(total_amount),
-                "pending_balance": float(max(round(float(total_amount) - dep_norm, 2), 0)),
+                "total_amount": total_int,
+                "pending_balance": float(max(round(total_int - dep_norm, 2), 0)),
                 "is_priority": bool(st.session_state.get("ap_priority")),
                 "assigned_panel_user_id": aid_int,
             }
@@ -2597,85 +2787,498 @@ def _render_main_calendar(
     _inject_calendar_month_footer_bridge()
 
 
-def _calendar_appt_row_dialog_actions(
+def _calendar_overflow_day_sheet_link_row(
     r: dict[str, Any],
     hist_counts: dict[str, int],
     *,
     key_suffix: str,
 ) -> None:
-    """Resumen HTML + botones de acción (misma lógica que el listado del día o una cita aislada)."""
+    """Resumen rápido + acceso al panel único de ficha/detalle."""
     st.markdown(_calendar_overflow_row_html(r, hist_counts), unsafe_allow_html=True)
-    appt_id = int(r.get("id", 0) or 0)
-    status = str(r.get("status") or "Agendada")
+    aid = int(r.get("id", 0) or 0)
+    c1, c2 = st.columns([1, 4])
+    with c1:
+        if st.button("Ficha completa", use_container_width=True, key=f"cal_day_open_sheet_{key_suffix}"):
+            st.session_state["_cal_focus_appt_id"] = aid
+            st.session_state.pop("_cal_overflow_day", None)
+            st.rerun()
+
+
+def _render_calendar_focus_appointment_body(r: dict[str, Any], hist_counts: dict[str, int]) -> None:
+    """Formulario único para ver/editar cita desde calendario (rejilla día / semana)."""
+    aid = int(r.get("id", 0) or 0)
+    if aid <= 0:
+        return
+    status_l = str(r.get("status") or "Agendada").strip()
+    montos_locked = aid <= 0 or status_l not in {"Agendada", "Reprogramada"}
     firmar_disabled = _firmar_contrato_disabled(r)
-    repro_disabled = _reprogram_disabled_for_row(r)
-    montos_disabled = appt_id <= 0 or status not in {"Agendada", "Reprogramada"}
-    anular_disabled = appt_id <= 0 or status in {"Cancelada", "Finalizada"}
     firma_lbl = _firmar_contrato_button_label(r)
-    if _panel_is_technician_role():
-        if st.button(
-            firma_lbl,
-            disabled=firmar_disabled,
-            use_container_width=True,
-            key=f"cal_row_firmar_{key_suffix}",
-        ):
+    tech = _panel_is_technician_role()
+    aid_s = str(aid)
+
+    if tech:
+        st.markdown(_calendar_overflow_row_html(r, hist_counts), unsafe_allow_html=True)
+        if st.button(firma_lbl, use_container_width=True, key=f"fcd_tech_{aid_s}_firma", disabled=firmar_disabled):
             _clear_calendar_dialog_focus()
-            _open_firma_contrato_nav(r, appt_id)
+            _open_firma_contrato_nav(r, aid)
+        return
+
+    seed_k = "_fcd_seed_appt_id"
+    slot_opts = _time_slot_options()
+    today_d = date.today()
+    if st.session_state.get(seed_k) != aid:
+        st.session_state[seed_k] = aid
+        _, sl0 = _parse_existing_slot(r.get("appointment_date", r.get("date")))
+        if sl0 not in slot_opts and slot_opts:
+            sl0 = slot_opts[0]
+        dur0 = _duration_slots_for_existing_appointment(r)
+        last0 = _appointment_last_start_slot(sl0, dur0, slot_opts)
+        if last0 not in slot_opts:
+            last0 = sl0
+        plain = _appointment_detail_plain_body(str(r.get("detail") or ""))
+        dz0, obs0 = _split_design_obs_plain(plain)
+        st.session_state[f"fcd_start_{aid_s}"] = sl0
+        st.session_state[f"fcd_last_{aid_s}"] = last0
+        st.session_state[f"fcd_pri_{aid_s}"] = bool(_row_is_priority(r))
+        st.session_state[f"fcd_tot_{aid_s}"] = max(
+            int(_MIN_APPOINTMENT_TOTAL_COP), int(round(float(r.get("total_amount") or 0)))
+        )
+        st.session_state[f"fcd_dz_{aid_s}"] = dz0
+        st.session_state[f"fcd_obs_{aid_s}"] = obs0
+        wk_here = _work_kind_infer_from_existing_row(r)
+        role_need = _work_kind_to_assignee_role(wk_here)
+        staff_opts = [s for s in _ensure_assignable_staff() if str(s.get("role")) == role_need]
+        if not staff_opts:
+            staff_opts = list(_ensure_assignable_staff())
+        lbls_o: dict[int, str] = {}
+        opt_ids_o: list[int] = []
+        for s in staff_opts:
+            try:
+                oid = int(s.get("id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if oid <= 0:
+                continue
+            opt_ids_o.append(oid)
+            fn = str(s.get("first_name") or "").strip()
+            ln = str(s.get("last_name") or "").strip()
+            lab = (fn + " " + ln).strip() or str(s.get("username") or f"#{oid}")
+            lbls_o[oid] = lab + f" (@{s.get('username') or oid})"
+        cur_id: Optional[int] = None
+        raw_as = r.get("assigned_panel_user_id")
+        if raw_as not in (None, "", 0):
+            try:
+                cur_id = int(raw_as)
+            except (TypeError, ValueError):
+                cur_id = None
+        if cur_id is not None and cur_id > 0 and cur_id not in lbls_o:
+            lbls_o[cur_id] = _assigned_artist_display_name(r) + " (historial)"
+            opt_ids_o = [cur_id] + [x for x in opt_ids_o if x != cur_id]
+        pick_art = cur_id if cur_id is not None and cur_id in lbls_o else (opt_ids_o[0] if opt_ids_o else None)
+        st.session_state[f"fcd_artpick_{aid_s}"] = int(pick_art) if pick_art is not None else 0
+
+        day_appt, hm_orig = _parse_existing_slot(r.get("appointment_date", r.get("date")))
+        hm_eff = hm_orig if hm_orig != "—" else "09:00"
+        dt_orig = _combine_appointment_datetime(day_appt, hm_eff)
+        base = {
+            "start": sl0,
+            "last": last0,
+            "prio": bool(_row_is_priority(r)),
+            "tot": max(int(_MIN_APPOINTMENT_TOTAL_COP), int(round(float(r.get("total_amount") or 0)))),
+            "artist": pick_art,
+            "dz": dz0,
+            "obs": obs0,
+            "dt_orig": dt_orig,
+            "dur": dur0,
+        }
+        st.session_state[f"fcd_base_{aid_s}"] = base
+
+    hdr_l, hdr_r = st.columns([3, 2])
+    with hdr_l:
+        st.markdown("### Cita")
+    with hdr_r:
+        st.markdown(
+            f"<div style='text-align:right'>{_format_appt_created_at(r.get('created_at'))}<br>"
+            f"{_status_pill_html(status_l)}</div>",
+            unsafe_allow_html=True,
+        )
+
+    cust: Optional[dict[str, Any]] = None
+    try:
+        cid_raw = r.get("customer_id")
+        if cid_raw:
+            cid = int(cid_raw)
+            ok_c, _, cdata = api_client.get_customer(cid)
+            if ok_c and isinstance(cdata, dict):
+                cust = cdata
+    except (TypeError, ValueError):
+        cust = None
+
+    if cust:
+        nm = (
+            str(cust.get("first_name") or "").strip() + " " + str(cust.get("last_name") or "").strip()
+        ).strip() or str(r.get("customer_name") or "").strip()
+        doc_lbl = str(cust.get("document_type") or "CC")
+        doc_n = str(cust.get("document_number") or "—").strip()
+        em = str(cust.get("email") or "—").strip()
+        cel = str(cust.get("phone_number") or r.get("phone") or "—").strip()
+        st.markdown(f"**Cliente:** {html_mod.escape(nm or '—')}")
+        st.caption(f"{doc_lbl} {doc_n} · ✉ {em} · 📱 {cel}")
     else:
-        b0, b1, b2, b3, b4 = st.columns(5)
-        with b0:
+        nm2 = str(r.get("customer_name") or r.get("name") or "—").strip()
+        cel2 = str(r.get("phone") or "—").strip()
+        st.markdown(f"**Cliente:** {html_mod.escape(nm2)} _(sin cliente vinculado o no cargado)_")
+        st.caption(f"📱 Teléfono en cita: **{cel2}**")
+
+    st.divider()
+
+    repro_lock = _reprogram_disabled_for_row(r) or status_l in {"Cancelada", "Finalizada"}
+    t1a, t1b = st.columns(2)
+    with t1a:
+        st.selectbox(
+            "Desde (inicio)",
+            options=slot_opts,
+            disabled=repro_lock,
+            key=f"fcd_start_{aid_s}",
+        )
+    with t1b:
+        st.selectbox(
+            "Hasta (última franja ocupada)",
+            options=slot_opts,
+            disabled=repro_lock,
+            key=f"fcd_last_{aid_s}",
+        )
+    if repro_lock:
+        st.caption("Horario bloqueado: estado cerrado o la cita no admite cambio de franja desde aquí.")
+
+    st.divider()
+
+    srv_l, srv_r = st.columns([4, 2])
+    with srv_l:
+        st.markdown("### Cita · servicio")
+    rc_key = f"{_AP_RECEIPTS_CACHE_PREFIX}{aid}"
+    cached_r = st.session_state.get(rc_key)
+    if not isinstance(cached_r, tuple) or len(cached_r) != 3:
+        cached_r = api_client.get_appointment_receipts(aid)
+        st.session_state[rc_key] = cached_r
+    ok_rr, _, rrows = cached_r
+    rec_txt = "—"
+    if ok_rr and isinstance(rrows, list):
+        ids_r = sorted(
+            int(x.get("id") or 0) for x in rrows if isinstance(x, dict) and int(x.get("id") or 0)
+        )
+        if ids_r:
+            rec_txt = ", ".join(str(x) for x in ids_r)
+    with srv_r:
+        st.caption(f"**Recibo id(s)** — solo lectura: {rec_txt}")
+
+    artist_locked = bool(r.get("has_signed_contract"))
+    lbls_reload = {}
+    role_need_r = _work_kind_to_assignee_role(_work_kind_infer_from_existing_row(r))
+    staff_reload = [s for s in _ensure_assignable_staff() if str(s.get("role")) == role_need_r] or list(
+        _ensure_assignable_staff()
+    )
+    opt_ids_reload: list[int] = []
+    for s in staff_reload:
+        try:
+            oid = int(s.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if oid <= 0:
+            continue
+        fn = str(s.get("first_name") or "").strip()
+        ln = str(s.get("last_name") or "").strip()
+        lab = ((fn + " " + ln).strip() or str(s.get("username") or oid)) + f" (@{s.get('username') or oid})"
+        lbls_reload[oid] = lab
+        opt_ids_reload.append(oid)
+
+    sel_art = int(st.session_state.get(f"fcd_artpick_{aid_s}") or 0)
+    if sel_art not in lbls_reload and sel_art > 0:
+        lbls_reload[sel_art] = _assigned_artist_display_name(r)
+        opt_ids_reload = [sel_art] + [x for x in opt_ids_reload if x != sel_art]
+    ix_def = (
+        opt_ids_reload.index(sel_art)
+        if sel_art in opt_ids_reload
+        else 0
+    )
+    if not opt_ids_reload:
+        st.warning("No hay artistas configurados en el panel para este tipo de servicio.")
+    else:
+        st.selectbox(
+            "Artista",
+            options=opt_ids_reload,
+            index=min(ix_def, max(0, len(opt_ids_reload) - 1)),
+            format_func=lambda i: lbls_reload.get(int(i), str(i)),
+            disabled=montos_locked or artist_locked,
+            key=f"fcd_artpick_{aid_s}",
+        )
+
+    tot_min = max(int(_MIN_APPOINTMENT_TOTAL_COP), 1)
+    st.number_input(
+        "Valor del tatuaje / trabajo (COP, entero)",
+        min_value=float(tot_min),
+        step=10000.0,
+        disabled=montos_locked,
+        key=f"fcd_tot_{aid_s}",
+        format="%.0f",
+    )
+
+    _ = st.checkbox("Cita prioritaria", disabled=montos_locked, key=f"fcd_pri_{aid_s}")
+
+    _ = st.text_area("Descripción del diseño", disabled=montos_locked, height=90, key=f"fcd_dz_{aid_s}")
+    _ = st.text_area("Observaciones", disabled=montos_locked, height=80, key=f"fcd_obs_{aid_s}")
+
+    if artist_locked:
+        st.caption("El artista no se puede cambiar si ya existe contrato firmado en esta cita.")
+
+    st.divider()
+    st.markdown("##### Abonos")
+    okp, pcode, pays_raw = _get_appointment_payments_cached(aid)
+    if okp and isinstance(pays_raw, list) and pays_raw:
+        rows_view: list[dict[str, str]] = []
+        for pr in pays_raw:
+            pid = int(pr.get("id") or 0)
+            amt = float(pr.get("amount") or 0)
+            pon = pr.get("paid_on")
+            if hasattr(pon, "isoformat"):
+                d_show = pon.isoformat()[:10]  # type: ignore[attr-defined]
+            elif isinstance(pon, str) and len(pon) >= 10:
+                d_show = pon[:10]
+            else:
+                ca = pr.get("created_at")
+                ds = str(ca or "")[:10]
+                d_show = ds if ds else "—"
+            rows_view.append({"id": pid, "fecha_abono": d_show, "valor": _format_cop(amt), "nota": str(pr.get("note") or "")})
+        st.dataframe(rows_view, use_container_width=True, hide_index=True)
+    elif not okp:
+        st.warning(f"No se cargaron abonos (HTTP {pcode}).")
+    else:
+        st.caption("Aún no hay filas en el historial de abonos.")
+
+    if montos_locked is False:
+        new_pd, ncol = st.columns([2, 2])
+        with new_pd:
+            st.date_input("Fecha en que abona", min_value=today_d, format="DD/MM/YYYY", key=f"fcd_newpay_dt_{aid_s}")
+        with ncol:
+            st.number_input(
+                "Valor nuevo abono (COP)",
+                min_value=float(_MIN_APPOINTMENT_TOTAL_COP),
+                step=5000.0,
+                key=f"fcd_newpay_am_{aid_s}",
+                format="%.0f",
+            )
+        if st.button("➕ Agregar abono", key=f"fcd_newpay_btn_{aid_s}"):
+            paid_date = st.session_state.get(f"fcd_newpay_dt_{aid_s}")
+            amt_add = float(int(st.session_state.get(f"fcd_newpay_am_{aid_s}") or 0))
+            if amt_add < float(_MIN_APPOINTMENT_TOTAL_COP):
+                st.toast("El abono debe ser al menos el mínimo configurado.", icon="⚠️")
+            else:
+                iso = paid_date.isoformat() if hasattr(paid_date, "isoformat") else None
+                with st.spinner("Registrando abono…"):
+                    ok_pay, cd_pay, body_pay = api_client.post_appointment_payment(
+                        aid, amt_add, note=None, paid_on=iso
+                    )
+                if ok_pay:
+                    _purge_appointment_payment_caches()
+                    st.session_state.pop(f"{_AP_FIN_PAYMENTS_CACHE_PREFIX}{aid}", None)
+                    st.session_state.pop(seed_k, None)
+                    st.session_state["_ap_reload"] = True
+                    _queue_appointment_action_success(
+                        "**Abono registrado.** Revisa PDF en **Recibos** cuando corresponda."
+                    )
+                    st.rerun()
+                else:
+                    st.toast(f"Error HTTP {cd_pay}: {_api_error(body_pay)}", icon="❌")
+
+        pay_ids = []
+        if okp and isinstance(pays_raw, list):
+            pay_ids = [int(p.get("id") or 0) for p in pays_raw if int(p.get("id") or 0)]
+        lbl_pay = {"—": 0}
+        for pr in pays_raw if isinstance(pays_raw, list) else []:
+            pid = int(pr.get("id") or 0)
+            if pid <= 0:
+                continue
+            amt = float(pr.get("amount") or 0)
+            lbl_pay[f"#{pid} · {_format_cop(amt)}"] = pid
+        pick_lbl = st.selectbox("Editar un abono", options=list(lbl_pay.keys()), key=f"fcd_paypicklbl_{aid_s}")
+        pid_edit = lbl_pay[pick_lbl]
+        if pid_edit:
+            pr_hit = next(
+                (
+                    z
+                    for z in pays_raw
+                    if isinstance(z, dict) and int(z.get("id") or 0) == int(pid_edit)
+                ),
+                None,
+            )
+            if isinstance(pr_hit, dict):
+                st.number_input(
+                    "Nuevo valor (COP)",
+                    min_value=1.0,
+                    step=1000.0,
+                    key=f"fcd_patched_am_{aid_s}_{pid_edit}",
+                    format="%.0f",
+                )
+                st.date_input("Fecha efectiva abono", min_value=today_d, format="DD/MM/YYYY", key=f"fcd_patched_dt_{aid_s}_{pid_edit}")  # type: ignore[arg-type]
+                if st.button(f"Actualizar abono #{pid_edit}", key=f"fcd_patched_sv_{aid_s}_{pid_edit}"):
+                    n_am = float(int(st.session_state.get(f"fcd_patched_am_{aid_s}_{pid_edit}") or 0))
+                    nd_dt = st.session_state.get(f"fcd_patched_dt_{aid_s}_{pid_edit}")
+                    nd_iso = nd_dt.isoformat()[:10] if hasattr(nd_dt, "isoformat") else None
+                    ok_u, cu, bu = api_client.patch_appointment_payment(
+                        aid,
+                        pid_edit,
+                        amount=n_am,
+                        paid_on=nd_iso,
+                    )
+                    if ok_u:
+                        _purge_appointment_payment_caches()
+                        st.session_state.pop(f"{_AP_FIN_PAYMENTS_CACHE_PREFIX}{aid}", None)
+                        st.session_state.pop(seed_k, None)
+                        st.session_state["_ap_reload"] = True
+                        _queue_appointment_action_success("**Abono actualizado.**")
+                        st.rerun()
+                    else:
+                        st.toast(f"Error HTTP {cu}: {_api_error(bu)}", icon="❌")
+
+    b_now = dict(st.session_state.get(f"fcd_base_{aid_s}") or {})
+    cur_start_s = str(st.session_state.get(f"fcd_start_{aid_s}") or "")
+    cur_last_s = str(st.session_state.get(f"fcd_last_{aid_s}") or "")
+    cur_pri_b = bool(st.session_state.get(f"fcd_pri_{aid_s}") or False)
+    cur_tot_f = float(st.session_state.get(f"fcd_tot_{aid_s}") or 0)
+    cur_art_i = int(st.session_state.get(f"fcd_artpick_{aid_s}") or 0)
+    dz_cur = str(st.session_state.get(f"fcd_dz_{aid_s}") or "")
+    obs_cur = str(st.session_state.get(f"fcd_obs_{aid_s}") or "")
+    dur_now = (
+        _duration_slots_from_start_last(cur_start_s, cur_last_s, slot_opts)
+        if cur_start_s in slot_opts and cur_last_s in slot_opts
+        else int(b_now.get("dur") or _MIN_BOOKING_DURATION_SLOTS)
+    )
+    ds_day_appt, hm_row = _parse_existing_slot(r.get("appointment_date", r.get("date")))
+    new_booking_dt = (
+        _combine_appointment_datetime(ds_day_appt, cur_start_s) if cur_start_s != "—" else str(b_now.get("dt_orig") or "")
+    )
+    base_dur = int(b_now.get("dur") or _MIN_BOOKING_DURATION_SLOTS)
+    sched_need = montos_locked is False and (
+        (cur_start_s, cur_last_s) != (b_now.get("start"), b_now.get("last"))
+        or dur_now != base_dur
+        or (new_booking_dt and new_booking_dt != str(b_now.get("dt_orig") or ""))
+    )
+    text_dirty = dz_cur != str(b_now.get("dz") or "") or obs_cur != str(b_now.get("obs") or "")
+    art_dirty = cur_art_i != int(b_now.get("artist") or 0)
+    prio_dirty = cur_pri_b != bool(b_now.get("prio"))
+    tot_dirty_cop = (
+        montos_locked is False and int(round(cur_tot_f)) != int(b_now.get("tot") or 0)
+    )
+    form_dirty = bool(b_now) and (
+        sched_need or text_dirty or art_dirty or prio_dirty or tot_dirty_cop
+    )
+
+    st.divider()
+    st.markdown("##### Acciones")
+
+    leave_confirm = bool(st.session_state.get(f"fcd_confirm_leave_{aid_s}"))
+    if leave_confirm:
+        st.warning("Hay cambios sin guardar. Si sales ahora se descartan en esta pantalla (no en el servidor).")
+        cx1, cx2 = st.columns(2)
+        with cx1:
+            if st.button("Salir sin guardar", use_container_width=True, key=f"fcd_lvy_{aid_s}"):
+                st.session_state.pop(f"fcd_confirm_leave_{aid_s}", None)
+                st.session_state.pop(seed_k, None)
+                _clear_calendar_dialog_focus()
+                st.rerun()
+        with cx2:
+            if st.button("Seguir editando", use_container_width=True, key=f"fcd_lvn_{aid_s}"):
+                st.session_state.pop(f"fcd_confirm_leave_{aid_s}", None)
+                st.rerun()
+        return
+
+    detail_for_save = _rebuild_detail_for_patch(r, dz_cur, obs_cur, agenda_slots_override=dur_now)
+    detail_meta_only = detail_for_save if (not sched_need and text_dirty) else None
+
+    if montos_locked is False:
+
+        def _fcd_save_all() -> None:
+            if tot_dirty_cop:
+                nf = _find_appointment_row_by_id(aid) or r
+                dep_live = float(nf.get("deposit") or 0)
+                ttot = float(int(round(cur_tot_f)))
+                if dep_live > ttot + 0.01:
+                    st.toast("El valor total no puede ser menor que lo ya abonado.", icon="⚠️")
+                    return
+                pend = round(ttot - dep_live, 2)
+                ok_t, ct, bt = api_client.patch_appointment_financials(aid, ttot, dep_live, pend)
+                if not ok_t:
+                    st.toast(f"Montos (HTTP {ct}): {_api_error(bt)}", icon="❌")
+                    return
+            if sched_need:
+                ok_s, cs, bs = api_client.patch_appointment_reschedule(aid, new_booking_dt, detail_for_save)
+                if not ok_s:
+                    st.toast(f"Horario (HTTP {cs}): {_api_error(bs)}", icon="❌")
+                    return
+            meta_need = art_dirty or prio_dirty or detail_meta_only is not None
+            if meta_need:
+                ok_m, cm, bm = api_client.patch_appointment_meta(
+                    aid,
+                    assigned_panel_user_id=(cur_art_i if art_dirty else None),
+                    is_priority=cur_pri_b,
+                    detail=detail_meta_only,
+                )
+                if not ok_m:
+                    st.toast(f"Servicio/meta (HTTP {cm}): {_api_error(bm)}", icon="❌")
+                    return
+            st.session_state.pop(seed_k, None)
+            st.session_state["_ap_reload"] = True
+            _queue_appointment_action_success("**Cambios guardados en la cita.**")
+            st.rerun()
+
+        ba1, ba2, ba3, ba4 = st.columns(4)
+        with ba1:
+            if st.button("Guardar cambios", type="primary", use_container_width=True, key=f"fcd_sv_{aid_s}"):
+                _fcd_save_all()
+        with ba2:
+            anular_disabled = aid <= 0 or status_l in {"Cancelada", "Finalizada"}
             if st.button(
-                "Firmar contrato",
+                "Cancelar cita",
+                use_container_width=True,
+                disabled=anular_disabled,
+                key=f"fcd_can_{aid_s}",
+            ):
+                st.session_state.pop(seed_k, None)
+                st.session_state.pop("_cal_focus_appt_id", None)
+                st.session_state["_ap_cancel_item"] = dict(r)
+                st.rerun()
+        with ba3:
+            if st.button(
+                "Enviar recibo",
+                use_container_width=True,
+                key=f"fcd_rc_{aid_s}",
+            ):
+                st.session_state["_ap_receipts_item"] = dict(r)
+                st.session_state.pop(seed_k, None)
+                st.session_state.pop("_cal_focus_appt_id", None)
+                st.rerun()
+        with ba4:
+            if st.button(
+                firma_lbl,
                 disabled=firmar_disabled,
                 use_container_width=True,
-                key=f"cal_row_firmar_{key_suffix}",
+                key=f"fcd_fr_{aid_s}",
             ):
                 _clear_calendar_dialog_focus()
-                _open_firma_contrato_nav(r, appt_id)
-        with b1:
-            if st.button(
-                "Reprogramar",
-                key=f"cal_row_repr_{key_suffix}",
-                disabled=repro_disabled,
-                use_container_width=True,
-                help="Solo citas agendadas/reprogramadas sin contrato firmado",
-            ):
-                _clear_calendar_dialog_focus()
-                st.session_state["_ap_reprogram_item"] = r
+                _open_firma_contrato_nav(dict(r), aid)
+
+        if st.button("Cerrar", use_container_width=True, key=f"fcd_close_{aid_s}"):
+            if form_dirty:
+                st.session_state[f"fcd_confirm_leave_{aid_s}"] = True
                 st.rerun()
-        with b2:
-            if st.button(
-                "Montos",
-                key=f"cal_row_fin_{key_suffix}",
-                disabled=montos_disabled,
-                use_container_width=True,
-                help="Valor total, pendiente y abonos",
-            ):
-                _clear_calendar_dialog_focus()
-                st.session_state["_ap_fin_item"] = r
-                st.rerun()
-        with b3:
-            rec_disabled = appt_id <= 0
-            if st.button(
-                "Recibos",
-                key=f"cal_row_rec_{key_suffix}",
-                disabled=rec_disabled,
-                use_container_width=True,
-                help="Ver y descargar recibos PDF de esta cita",
-            ):
-                _clear_calendar_dialog_focus()
-                st.session_state["_ap_receipts_item"] = r
-                st.rerun()
-        with b4:
-            if st.button(
-                "Anular",
-                key=f"cal_row_can_{key_suffix}",
-                disabled=anular_disabled,
-                use_container_width=True,
-            ):
-                _clear_calendar_dialog_focus()
-                st.session_state["_ap_cancel_item"] = r
-                st.rerun()
+            st.session_state.pop(seed_k, None)
+            _clear_calendar_dialog_focus()
+            st.rerun()
+    else:
+        if st.button("Cerrar", use_container_width=True, key=f"fcd_close_ro_{aid_s}"):
+            st.session_state.pop(seed_k, None)
+            _clear_calendar_dialog_focus()
+            st.rerun()
 
 
 @st.dialog("Citas del día", width="large", dismissible=False)
@@ -2704,12 +3307,11 @@ def _dialog_calendar_day_appointments(
         )
     else:
         st.caption(
-            "Mismas etiquetas de cliente que en el calendario. **Firmar contrato** abre la vista de firma; "
-            "Reprogramar, Montos o Recibos cierran este panel y abren el formulario correspondiente."
+            "Resumen de cada bloque **Cita**. Abre **Ficha completa** para ver datos del cliente, horario, montos y abonos."
         )
     for idx, r in enumerate(day_rows):
         appt_id = int(r.get("id", 0) or 0)
-        _calendar_appt_row_dialog_actions(
+        _calendar_overflow_day_sheet_link_row(
             r,
             hist_counts,
             key_suffix=f"{appt_id}_{y}_{m}_{d}_{idx}",
@@ -2754,14 +3356,8 @@ def _dialog_calendar_single_appointment(
             "**Completar firma profesional** cuando recepción ya guardó el contrato del cliente."
         )
     else:
-        st.caption(
-            "**Firmar contrato** abre la vista de firma; Reprogramar, Montos o Recibos cierran este panel "
-            "y abren el formulario correspondiente."
-        )
-    _calendar_appt_row_dialog_actions(r, hist_counts, key_suffix=f"one_{aid}")
-    if st.button("Cerrar", key=f"cal_single_close_{aid}", use_container_width=True):
-        _clear_calendar_dialog_focus()
-        st.rerun()
+        st.caption("Edita horario (reprogramación), prioridad (pill), artista y abonos. **Guardar** aplica contra la API.")
+    _render_calendar_focus_appointment_body(r, hist_counts)
 
 
 _AP_FIN_PAYMENTS_CACHE_PREFIX = "_ap_fin_payments_"
@@ -3498,6 +4094,49 @@ def _inject_citas_shared_styles() -> None:
             padding-left: 0 !important;
             padding-right: 0 !important;
         }
+        /* Hueco inferior al hacer scroll: el contenido debe medir sólo lo visible, no «rellenar» viewport. */
+        [data-testid="stMain"]:has(.cal-cell--month),
+        section[data-testid="stMain"]:has(.cal-cell--month),
+        section.main:has(.cal-cell--month) {
+            min-height: auto !important;
+            flex-grow: 0 !important;
+            align-self: stretch !important;
+        }
+        [data-testid="stMain"]:has(.cal-cell--month) [data-testid="block-container"],
+        section.main:has(.cal-cell--month) [data-testid="block-container"] {
+            min-height: 0 !important;
+            flex-grow: 0 !important;
+            padding-bottom: 0 !important;
+        }
+        [data-testid="stMain"]:has(.cal-cell--month)
+            div[data-testid="stVerticalBlockBorderWrapper"],
+        [data-testid="stMain"]:has(.cal-cell--month) div[data-testid="stVerticalBlock"],
+        section.main:has(.cal-cell--month) div[data-testid="stVerticalBlockBorderWrapper"],
+        section.main:has(.cal-cell--month) div[data-testid="stVerticalBlock"] {
+            flex-grow: 0 !important;
+            flex-shrink: 0 !important;
+        }
+        /* components.v1.html (puente clic pie / semana): el iframe suele llevar alto mínimo y empuja el alto del documento. */
+        [data-testid="stMain"]:has(.cal-cell--month) iframe,
+        section.main:has(.cal-cell--month) iframe {
+            height: 0 !important;
+            max-height: 0 !important;
+            min-height: 0 !important;
+            opacity: 0 !important;
+            visibility: hidden !important;
+            pointer-events: none !important;
+            border: none !important;
+        }
+        [data-testid="stMain"]:has(.cal-cell--month)
+            div[data-testid="element-container"]:has(iframe),
+        section.main:has(.cal-cell--month) div[data-testid="element-container"]:has(iframe) {
+            min-height: 0 !important;
+            height: auto !important;
+            max-height: 0 !important;
+            margin-block: 0 !important;
+            padding-block: 0 !important;
+            overflow: hidden !important;
+        }
         .cal-m-whcell {
             box-sizing: border-box;
             display: flex;
@@ -3998,6 +4637,54 @@ def _inject_citas_shared_styles() -> None:
             pointer-events: none;
             box-sizing: border-box;
         }
+        .twg-appt-client {
+            font-weight: 600;
+            font-size: 0.62rem;
+            line-height: 1.12;
+            color: rgba(248, 250, 252, 0.96);
+            white-space: normal;
+            word-break: break-word;
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 8;
+            min-height: 0;
+            flex: 1 1 auto;
+        }
+        .twg-appt--compact {
+            flex-direction: row !important;
+            align-items: center !important;
+            justify-content: flex-start !important;
+            gap: 4px !important;
+            padding: 1px 3px !important;
+        }
+        .twg-appt-time-compact {
+            flex-shrink: 0;
+            font-weight: 700;
+            font-size: 9px;
+            line-height: 1.05;
+            color: rgba(248, 250, 252, 0.98);
+        }
+        .twg-appt-client-compact {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-weight: 600;
+            font-size: 8.5px;
+            line-height: 1.05;
+            color: rgba(248, 250, 252, 0.95);
+        }
+        .twg-appt-link--compact {
+            flex-shrink: 0 !important;
+            align-self: center !important;
+            width: auto !important;
+            min-height: 0 !important;
+            padding: 0 3px !important;
+            margin-top: 0 !important;
+            gap: 0 !important;
+        }
         .twg-appt-link {
             flex-shrink: 0;
             align-self: stretch;
@@ -4422,7 +5109,6 @@ def _invoke_citas_tab_dialogs(
     if (
         st.session_state.get("_ap_fin_item")
         or st.session_state.get("_ap_reprogram_item")
-        or st.session_state.get("_ap_cancel_item")
         or st.session_state.get("_ap_receipts_item")
     ):
         _clear_calendar_dialog_focus()
