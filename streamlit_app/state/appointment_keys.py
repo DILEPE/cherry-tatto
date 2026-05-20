@@ -22,6 +22,7 @@ _KEY_SVC_VALUES = "_ap_svc_values"
 # Cachés abonos / recibos (prefijo + id numérico)
 _KEY_FIN_PAYMENTS_PFX = "_ap_fin_payments_"
 _KEY_RECEIPTS_LIST_PFX = "_ap_receipts_list_"
+_KEY_RECEIPT_PDF_PFX = "_ap_receipt_pdf_"
 
 # Export para imports explícitos
 KEY_LIST = _KEY_LIST
@@ -32,6 +33,7 @@ KEY_HIST_COUNTS = _KEY_HIST_COUNTS
 KEY_SVC_VALUES = _KEY_SVC_VALUES
 KEY_FIN_PAYMENTS_PFX = _KEY_FIN_PAYMENTS_PFX
 KEY_RECEIPTS_LIST_PFX = _KEY_RECEIPTS_LIST_PFX
+KEY_RECEIPT_PDF_PFX = _KEY_RECEIPT_PDF_PFX
 
 __all__ = [
     "KEY_ERR",
@@ -40,6 +42,7 @@ __all__ = [
     "KEY_LAST_FETCH_QID",
     "KEY_LIST",
     "KEY_RECEIPTS_LIST_PFX",
+    "KEY_RECEIPT_PDF_PFX",
     "KEY_RELOAD",
     "KEY_SVC_VALUES",
 ]

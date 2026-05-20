@@ -25,11 +25,22 @@ streamlit_app/
 │   ├── pills.py             # pills de estado/cliente (`status_pill_html`, `client_pill_class`, …)
 │   ├── citas_legend.py      # render_citas_color_legend()
 │   ├── service_flags.py     # service_type_flag_html()
-│   └── calendar_cells.py    # Pendiente extraer líneas/overlow desde citas_tab.py
+│   ├── calendar_cells.py     # HTML de líneas/agrupación día e inner body calendario (overflow)
+│   ├── calendar_focus_dialogs.py # @st.dialog ficha/edición desde calendario (+ overflow día); deps vía sesión
+│   ├── calendar_week_schedule.py # Rejilla semanal (Outlook/Teams), bridge JS `twg_*`
+│   ├── calendar_month_footer.py  # Pie mes + botones ocultos agendar + bridge `.cal-footer-book`
+│   └── calendar_main_month.py # `@st.fragment` calendario mensual (rejilla + `MONTHS_ES`)
 ├── state/
 │   ├── appointment_keys.py  # Contrato `_ap_*` (documentación hasta mover sync/form)
+│   ├── appointment_cache.py # purge_appointment_payment_caches / purge_appointment_receipt_caches
 │   ├── appointments.py      # Pendiente: fetch / sync
 │   └── form_state.py        # Pendiente: formulario nueva cita
+├── appointment_dates.py       # fecha/hora normalizada desde filas API (`appointment_row_date`, …)
+├── appointment_agenda_slots.py  # marcador `[agenda_slots:N]`, duración en franjas 30 min
+├── appointment_slots.py       # opciones HH:MM, ocupación/agenda disponible (`time_slot_options`, …)
+├── appointment_filters.py     # `filter_appointment_rows` (sin `session_state`; orquestador aplica filtros)
+├── appointment_staff_labels.py  # etiquetas artista/asignado
+├── citas_financial_export.py  # XLSX financiero del panel Citas (`citas_filtered_to_excel_bytes`)
 ├── citas_tab.py             # Orquestador principal + diálogos hasta Fase 5
 └── reporte_tab.py           # Reexport hasta separar vistas de informe financiero
 ```
@@ -442,38 +453,48 @@ c7.write(fin.pending_fmt)
 
 ## Regla 8 — Filtros de vista son funciones puras
 
-Los filtros no acceden a `st.session_state` directamente. Reciben los valores como parámetros.
+La **lógica** de filtrado no debe leer `st.session_state`; recibe valores como parámetros (`filter_appointment_rows` en `appointment_filters.py`). El tab puede exponer `_apply_*` solo como **orquestador** que lee claves de sesión y delega.
 
 ```python
-# ❌ Lee session_state internamente — difícil de testear
+# ❌ Bucle de filtro embebido en el tab — duplicación y sin tests unitarios claros
 def _apply_appointment_filters(items):
-    text = str(st.session_state.get("_ap_f_name") or "")
-    ...
+    for row in items:
+        if text and text not in str(row.get("customer_name")).lower():
+            ...
+```
 
+```python
 # ✅ Función pura — testeable sin Streamlit
-def filter_appointments(
+def filter_appointment_rows(
     items: list[dict[str, Any]],
     *,
-    name: str = "",
+    name_substr: str = "",
     service: str = "Todos",
     status: str = "Todos",
     from_date: Optional[date] = None,
     to_date: Optional[date] = None,
 ) -> list[dict[str, Any]]:
-    text = name.strip().lower()
-    return [
-        r for r in items
-        if (not text or text in _name(r).lower())
-        and (service == "Todos" or _service(r) == service)
-        and (status == "Todos" or _status(r) == status)
-        and (from_date is None or _date(r) >= from_date)
-        and (to_date is None or _date(r) <= to_date)
-    ]
+    ...
+```
 
-# En el render — session_state solo se lee aquí
-cal_filtered = filter_appointments(
+```python
+# En el tab — session_state sólo aquí + delegación
+def _apply_appointment_filters(items, *, name_key="_ap_f_name", ...):
+    return filter_appointment_rows(
+        items,
+        name_substr=str(st.session_state.get(name_key) or ""),
+        service=str(st.session_state.get(service_key) or "Todos"),
+        status=str(st.session_state.get(status_key) or "Todos"),
+        from_date=st.session_state.get("_ap_f_from") if use_date_range else None,
+        to_date=st.session_state.get("_ap_f_to") if use_date_range else None,
+    )
+```
+
+```python
+# En el render (calendario) — mismo patrón: leer estado arriba, pasar a la función pura
+cal_filtered = filter_appointment_rows(
     items,
-    name=st.session_state.get("_ap_cal_f_name", ""),
+    name_substr=st.session_state.get("_ap_cal_f_name", ""),
     service=st.session_state.get("_ap_cal_f_service", "Todos"),
     status=st.session_state.get("_ap_cal_f_status", "Todos"),
 )
