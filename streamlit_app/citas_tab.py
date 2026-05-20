@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import calendar
+import hashlib
 import html as html_mod
 import json
 import re
@@ -2693,6 +2694,15 @@ def _dialog_agendar_cita() -> None:
             st.rerun()
 
 
+def _calendar_fragment_rerun() -> None:
+    """Reejecutar solo el fragment del calendario si la versión de Streamlit lo permite."""
+    try:
+        st.rerun(scope="fragment")
+    except TypeError:
+        st.rerun()
+
+
+@st.fragment
 def _render_main_calendar(
     buckets: dict[tuple[int, int, int], list[dict[str, Any]]],
     counts_by_client: dict[str, int],
@@ -2716,7 +2726,7 @@ def _render_main_calendar(
                 st.session_state[ym_key] = (y - 1, 12)
             else:
                 st.session_state[ym_key] = (y, m - 1)
-            st.rerun()
+            _calendar_fragment_rerun()
     with n2:
         st.markdown(
             f"<div style='text-align:center;font-weight:600;font-size:1.05rem'>{_MONTHS_ES[m]} {y}</div>",
@@ -2729,7 +2739,7 @@ def _render_main_calendar(
                 st.session_state[ym_key] = (y + 1, 1)
             else:
                 st.session_state[ym_key] = (y, m + 1)
-            st.rerun()
+            _calendar_fragment_rerun()
 
     hdr_cells = st.columns(7, gap=None)
     for i, lab in enumerate(_weekday_headers_es()):
@@ -4029,10 +4039,7 @@ def _dialog_recibos_cita() -> None:
         st.rerun()
 
 
-def _inject_citas_shared_styles() -> None:
-    """Se emite en cada rerun del módulo: al cambiar de pestaña el árbol anterior se desmonta y el CSS debe reaplicarse."""
-    st.markdown(
-        """
+_CITAS_STYLES: str = """
         <style>
         .ap-pill {
             display: inline-block;
@@ -4734,9 +4741,12 @@ def _inject_citas_shared_styles() -> None:
             box-shadow: 0 0 18px rgba(255, 0, 127, 0.38) !important;
         }
         </style>
-        """,
-        unsafe_allow_html=True,
-    )
+"""
+
+
+def _inject_citas_shared_styles() -> None:
+    """Emite el CSS del módulo: constante evaluada una sola vez al importar."""
+    st.markdown(_CITAS_STYLES, unsafe_allow_html=True)
 
 
 def _init_appt_tab_session_state() -> None:
@@ -4971,6 +4981,35 @@ def _render_survey_question_stats_report() -> None:
             st.caption("Sin respuestas todavía.")
 
 
+def _excel_fingerprint(rows: list[dict[str, Any]]) -> str:
+    """Hash estable de los IDs de las filas filtradas (no del contenido completo)."""
+    ids = sorted(int(r.get("id") or 0) for r in rows)
+    return hashlib.md5(json.dumps(ids, separators=(",", ":")).encode()).hexdigest()[:16]
+
+
+def _get_excel_cached(rows: list[dict[str, Any]]) -> bytes:
+    """
+    Excel del filtro actual desde session_state si el conjunto de IDs no cambió;
+    lo regenera y cachea si no hay hit. Elimina otros buffers _ap_xlsx_* previos.
+    """
+    fp = _excel_fingerprint(rows)
+    cache_key = f"_ap_xlsx_{fp}"
+    hit = st.session_state.get(cache_key)
+    if isinstance(hit, bytes) and len(hit) > 0:
+        return hit
+
+    for k in [
+        k
+        for k in st.session_state
+        if isinstance(k, str) and k.startswith("_ap_xlsx_") and k != cache_key
+    ]:
+        st.session_state.pop(k, None)
+
+    data = _citas_filtered_to_excel_bytes(rows, generated_at=datetime.now())
+    st.session_state[cache_key] = data
+    return data
+
+
 def _render_reporte_financiero_citas_body(
     items: list[dict[str, Any]],
     svc_values: list[str],
@@ -4990,7 +5029,11 @@ def _render_reporte_financiero_citas_body(
     with f5:
         st.date_input("Hasta", key="_ap_f_to")
 
-    hist_counts = _appointment_counts_by_client(items)
+    hist_counts_raw = st.session_state.get("_ap_hist_counts")
+    hist_counts = dict(hist_counts_raw) if isinstance(hist_counts_raw, dict) else {}
+    if not hist_counts and items:
+        hist_counts = _appointment_counts_by_client(items)
+
     filtered_items = _apply_appointment_filters(items)
 
     total_trabajo = 0.0
@@ -5014,7 +5057,7 @@ def _render_reporte_financiero_citas_body(
 
     _informe_dt = datetime.now()
     try:
-        _xlsx_agenda = _citas_filtered_to_excel_bytes(filtered_items, generated_at=_informe_dt)
+        _xlsx_agenda = _get_excel_cached(filtered_items)
     except Exception as e:
         _xlsx_agenda = b""
         if filtered_items:
@@ -5129,18 +5172,50 @@ def _invoke_citas_tab_dialogs(
 
 
 def _sync_appointments_from_api() -> None:
-    """GET /appointments solo si hubo cambios, cambio de filtro API, módulo o primera carga."""
+    """
+    GET /appointments solo si hubo cambios, cambio de filtro o primera carga.
+    Precalcula hist_counts y svc_values cuando se refrescan datos.
+    """
     qid = _appointments_query_assigned_user_id()
     prev_qid = st.session_state.get("_ap_last_fetch_qid")
-    if (
+    fetch_needed = (
         st.session_state.get("_ap_reload", True)
         or prev_qid != qid
         or st.session_state.pop("_ap_refresh_after_contract", False)
-    ):
-        with st.spinner("Actualizando citas…"):
-            _fetch_appointments()
-        st.session_state["_ap_reload"] = False
-        st.session_state["_ap_last_fetch_qid"] = qid
+    )
+    if not fetch_needed:
+        items_miss = st.session_state.get("_ap_list") or []
+        if items_miss:
+            if "_ap_hist_counts" not in st.session_state:
+                st.session_state["_ap_hist_counts"] = _appointment_counts_by_client(items_miss)
+            if "_ap_svc_values" not in st.session_state:
+                st.session_state["_ap_svc_values"] = sorted(
+                    {
+                        str(i.get("service_type", i.get("service", "")) or "").strip()
+                        for i in items_miss
+                        if str(i.get("service_type", i.get("service", "")) or "").strip()
+                    }
+                )
+        return
+
+    with st.spinner("Actualizando citas…"):
+        _fetch_appointments()
+
+    items_post: list[Any] = st.session_state.get("_ap_list") or []
+    st.session_state["_ap_hist_counts"] = _appointment_counts_by_client(items_post)
+    st.session_state["_ap_svc_values"] = sorted(
+        {
+            str(i.get("service_type", i.get("service", "")) or "").strip()
+            for i in items_post
+            if str(i.get("service_type", i.get("service", "")) or "").strip()
+        }
+    )
+
+    for k in [k for k in st.session_state if isinstance(k, str) and k.startswith("_ap_xlsx_")]:
+        st.session_state.pop(k, None)
+
+    st.session_state["_ap_reload"] = False
+    st.session_state["_ap_last_fetch_qid"] = qid
 
 
 def render_reporte_citas_tab() -> None:
@@ -5155,13 +5230,7 @@ def render_reporte_citas_tab() -> None:
     _render_appointment_action_feedback()
 
     items = list(st.session_state.get("_ap_list") or [])
-    svc_values = sorted(
-        {
-            str(i.get("service_type", i.get("service", "")) or "").strip()
-            for i in items
-            if str(i.get("service_type", i.get("service", "")) or "").strip()
-        }
-    )
+    svc_values = list(st.session_state.get("_ap_svc_values") or [])
     status_values = ["Agendada", "Reprogramada", "Finalizada", "Cancelada"]
 
     if st.session_state.get("_ap_reprogram_item"):
@@ -5200,13 +5269,7 @@ def render_citas_tab() -> None:
     _render_appointment_action_feedback()
 
     items = list(st.session_state.get("_ap_list") or [])
-    svc_values = sorted(
-        {
-            str(i.get("service_type", i.get("service", "")) or "").strip()
-            for i in items
-            if str(i.get("service_type", i.get("service", "")) or "").strip()
-        }
-    )
+    svc_values = list(st.session_state.get("_ap_svc_values") or [])
     status_values = ["Agendada", "Reprogramada", "Finalizada", "Cancelada"]
 
     st.markdown("##### Gestión citas — calendario")
@@ -5332,7 +5395,10 @@ def render_citas_tab() -> None:
         service_key="_ap_cal_f_service",
         status_key="_ap_cal_f_status",
     )
-    hist_counts = _appointment_counts_by_client(items)
+    hc_raw = st.session_state.get("_ap_hist_counts")
+    hist_counts: dict[str, int] = dict(hc_raw) if isinstance(hc_raw, dict) else {}
+    if not hist_counts and items:
+        hist_counts = _appointment_counts_by_client(items)
     by_day = _appointments_by_day_sorted(cal_filtered)
 
     _invoke_citas_tab_dialogs(by_day, hist_counts)
