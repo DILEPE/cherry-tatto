@@ -1,4 +1,9 @@
-"""Genera streamlit_app/components/calendar_focus_dialogs.py desde citas_tab.py."""
+"""Genera streamlit_app/components/calendar_focus_dialogs.py desde citas_tab.py.
+
+Anclas: _render_calendar_focus_appointment_body, @st.dialog("Citas del día", _get_appointment_payments_cached.
+Si el tab cambió, actualiza índices en main() antes de ejecutar.
+Ver también scripts/README-citas-tab-refactor.md.
+"""
 from __future__ import annotations
 
 import re
