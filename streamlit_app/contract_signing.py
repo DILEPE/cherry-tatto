@@ -1427,24 +1427,31 @@ def _format_cop_express(value: float | int) -> str:
 
 def render_contract_express_piercing_view() -> None:
     """Flujo piercing: agenda → alta cliente (POST) → cita (POST) → misma vista de firma (pasos 2 y 3)."""
-    from streamlit_app.citas_tab import (
-        _MAX_BOOKING_DURATION_SLOTS,
-        _MIN_BOOKING_DURATION_SLOTS,
-        _append_agenda_slots_marker,
-        _appointments_for_artist_schedule,
-        _appointments_same_day_schedule_kind,
-        _available_start_slots,
-        _busy_slot_indices_for_day,
-        _combine_appointment_datetime,
-        _ensure_assignable_staff,
-        _initial_receipt_success_message,
-        _panel_is_technician_role,
-        _queue_appointment_action_success,
-        _service_and_detail_for_work_kind,
-        _show_validation_errors,
-        _time_slot_options,
-        _work_kind_to_assignee_role,
-        _work_kind_to_schedule_kind,
+    from streamlit_app.appointment_agenda_slots import (
+        MAX_BOOKING_DURATION_SLOTS as _MAX_BOOKING_DURATION_SLOTS,
+        MIN_BOOKING_DURATION_SLOTS as _MIN_BOOKING_DURATION_SLOTS,
+        append_agenda_slots_marker as _append_agenda_slots_marker,
+    )
+    from streamlit_app.appointment_dates import combine_appointment_datetime as _combine_appointment_datetime
+    from streamlit_app.appointment_slots import (
+        available_start_slots as _available_start_slots,
+        busy_slot_indices_for_day as _busy_slot_indices_for_day,
+        time_slot_options as _time_slot_options,
+    )
+    from streamlit_app.citas_agendar_helpers import (
+        initial_receipt_success_message as _initial_receipt_success_message,
+        show_validation_errors as _show_validation_errors,
+    )
+    from streamlit_app.citas_agendar_state import queue_appointment_action_success as _queue_appointment_action_success
+    from streamlit_app.citas_booking_meta import (
+        service_and_detail_for_work_kind as _service_and_detail_for_work_kind,
+        work_kind_to_assignee_role as _work_kind_to_assignee_role,
+        work_kind_to_schedule_kind as _work_kind_to_schedule_kind,
+    )
+    from streamlit_app.citas_panel_staff import ensure_assignable_staff as _ensure_assignable_staff
+    from streamlit_app.citas_schedule_queries import (
+        appointments_for_artist_schedule as _appointments_for_artist_schedule,
+        appointments_same_day_schedule_kind as _appointments_same_day_schedule_kind,
     )
     from streamlit_app.panel_auth import panel_auth_enabled
 
@@ -1457,7 +1464,7 @@ def render_contract_express_piercing_view() -> None:
         _leave_express_piercing_to_panel()
         return
 
-    if _panel_is_technician_role():
+    if _panel_session_is_technician():
         st.warning(
             "Tu rol (**tatuador** / **perforador**) no puede iniciar citas express desde aquí. "
             "Pide a recepción que registre la cita o usa una cuenta con permiso de agenda."
