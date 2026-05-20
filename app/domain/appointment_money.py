@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+# Mínimo COP para total/abono inicial al crear cita desde panel Streamlit y validaciones relacionadas.
+MIN_APPOINTMENT_TOTAL_COP = 50000.0
+
 
 def coerce_float(value: Any, default: float = 0.0) -> float:
     try:
@@ -61,6 +64,7 @@ def format_cop(value: float | int) -> str:
 
 
 __all__ = [
+    "MIN_APPOINTMENT_TOTAL_COP",
     "appointment_financial_totals",
     "calendar_month_compact_label",
     "coerce_float",

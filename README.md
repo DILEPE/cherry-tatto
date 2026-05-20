@@ -144,6 +144,8 @@ En la **raíz del repositorio** puedes levantar la API, el panel y (opcionalment
 | [`Install-Cherry-Desktop-Shortcut.bat`](Install-Cherry-Desktop-Shortcut.bat) | Windows | Ejecutar **una vez** desde el repo: crea en el escritorio el acceso directo **Cherry Tattoo Dev** y `Cherry-Tattoo-Iniciar.bat`, que invocan el lanzador por ruta absoluta. |
 | [`scripts/install-desktop-shortcut.ps1`](scripts/install-desktop-shortcut.ps1) | Windows | Lo usa el instalador anterior; también puedes llamarlo con `-RepoRoot "ruta\al\repo"`. |
 
+**Refactor del tab Citas (mantenimiento):** si necesitas regenerar o podar bloques desde `citas_tab.py`, consulta [`scripts/README-citas-tab-refactor.md`](scripts/README-citas-tab-refactor.md) (`_extract_modules.py`, `prune_citas_tab_ranges.py`, etc.). No son necesarios para desarrollo habitual.
+
 **Entorno virtual:** los scripts buscan Python en `.venv\Scripts\python.exe` o `venv\Scripts\python.exe` (en ese orden). Opcional: variable `CHERRY_PYTHON` con la ruta absoluta a `python.exe`.
 
 **n8n:** por defecto el modo es **`auto`**: intenta **Node.js (`npx n8n`)** primero (sin Docker); si no hay `npx`, intenta **Docker**. Variables útiles:
