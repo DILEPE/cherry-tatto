@@ -60,6 +60,8 @@ streamlit_app/
 └── reporte_tab.py           # Reexport hasta separar vistas de informe financiero
 ```
 
+Scripts puntuales de extracción/podado desde `citas_tab.py`: ver `scripts/README-citas-tab-refactor.md` (no usar en el flujo diario de la app).
+
 ---
 
 ## Regla 1 — NUNCA uses estilos inline en HTML generado
