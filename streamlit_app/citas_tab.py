@@ -1,14 +1,12 @@
 """Streamlit: Citas con calendario, franjas horarias y formulario mínimo."""
 from __future__ import annotations
 
-import calendar
 import hashlib
 import html as html_mod
 import json
 import re
 import unicodedata
 from datetime import date, datetime, time, timedelta
-from io import BytesIO
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
@@ -43,13 +41,58 @@ from streamlit_app.validation import validate_appointment
 from streamlit_app.components.citas_legend import render_citas_color_legend as _render_citas_color_legend
 from streamlit_app.components.pills import (
     client_history_key as _client_history_key,
-    client_pill_class as _client_pill_class,
     customer_name_pill_html as _customer_name_pill_html,
     row_is_priority as _row_is_priority,
     status_pill_html as _status_pill_html,
 )
 from streamlit_app.components.service_flags import service_type_flag_html as _service_type_flag_html
 from streamlit_app.styles.inject import inject_via_streamlit_lazy
+
+from app.domain.appointment_money import (
+    appointment_financial_totals as _financial_row_values,
+    calendar_month_compact_label as _calendar_month_value_label,
+    coerce_float as _to_float,
+    customer_credit_from_row as _customer_credit_value,
+    format_cop as _format_cop,
+)
+from streamlit_app.appointment_dates import appointment_row_date as _parse_date
+from streamlit_app.appointment_dates import appointment_time_hm as _appt_time_hm
+from streamlit_app.appointment_filters import filter_appointment_rows
+from streamlit_app.appointment_staff_labels import assigned_artist_display_name as _assigned_artist_display_name
+from streamlit_app.components.calendar_cells import (
+    calendar_appt_line_html as _calendar_appt_line_html,
+    calendar_overflow_row_html as _calendar_overflow_row_html,
+)
+from streamlit_app.components.calendar_focus_dialogs import (
+    CalendarFocusDeps,
+    clear_calendar_focus_session_deps,
+    dialog_calendar_day_appointments,
+    dialog_calendar_single_appointment,
+    set_calendar_focus_session_deps,
+)
+from streamlit_app.components.calendar_week_schedule import render_week_schedule_grid, week_monday as _monday_of_week
+from streamlit_app.components.calendar_main_month import render_main_calendar as _render_main_calendar_impl
+from streamlit_app.state.appointment_cache import (
+    purge_appointment_payment_caches as _purge_appointment_payment_caches,
+    purge_appointment_receipt_caches as _purge_appointment_receipt_caches,
+)
+from streamlit_app.state.appointment_keys import KEY_FIN_PAYMENTS_PFX as _AP_FIN_PAYMENTS_CACHE_PREFIX
+from streamlit_app.state.appointment_keys import KEY_RECEIPT_PDF_PFX as _AP_RECEIPT_PDF_PFX
+from streamlit_app.state.appointment_keys import KEY_RECEIPTS_LIST_PFX as _AP_RECEIPTS_CACHE_PREFIX
+
+from streamlit_app.appointment_agenda_slots import (
+    AGENDA_SLOTS_DETAIL_PATTERN as _AGENDA_SLOTS_DETAIL_PATTERN,
+    MAX_BOOKING_DURATION_SLOTS as _MAX_BOOKING_DURATION_SLOTS,
+    MIN_BOOKING_DURATION_SLOTS as _MIN_BOOKING_DURATION_SLOTS,
+    append_agenda_slots_marker as _append_agenda_slots_marker,
+    duration_slots_for_existing_appointment as _duration_slots_for_existing_appointment,
+)
+from streamlit_app.appointment_slots import (
+    available_start_slots as _available_start_slots,
+    busy_slot_indices_for_day as _busy_slot_indices_for_day,
+    time_slot_options as _time_slot_options,
+)
+from streamlit_app.citas_financial_export import citas_filtered_to_excel_bytes as _citas_filtered_to_excel_bytes
 
 
 def _booking_customer_create_for_existing_client(
@@ -399,33 +442,6 @@ def _appointments_same_day_schedule_kind(
     return out
 
 
-def _assigned_staff_label(row: dict[str, Any]) -> str:
-    fn = str(row.get("assigned_first_name") or "").strip()
-    ln = str(row.get("assigned_last_name") or "").strip()
-    un = str(row.get("assigned_username") or "").strip()
-    if not fn and not ln and not un:
-        return "—"
-    name = f"{fn} {ln}".strip()
-    if name and un:
-        return f"{name} (@{un})"
-    if name:
-        return name
-    return f"@{un}" if un else "—"
-
-
-def _assigned_artist_display_name(row: dict[str, Any]) -> str:
-    """Nombre del artista/profesional asignado (nombre y apellido; si no hay, usuario de panel)."""
-    fn = str(row.get("assigned_first_name") or "").strip()
-    ln = str(row.get("assigned_last_name") or "").strip()
-    name = f"{fn} {ln}".strip()
-    if name:
-        return name
-    un = str(row.get("assigned_username") or "").strip()
-    if un:
-        return f"@{un}"
-    return "Sin asignar"
-
-
 def _artist_filter_labels_and_map() -> tuple[list[str], dict[str, int]]:
     from app.domain.panel_user_profile import PANEL_ROLE_LABEL_ES
 
@@ -499,242 +515,6 @@ def _show_validation_errors(errors: List[Any]) -> None:
         )
 
 
-def _format_cop(value: float | int) -> str:
-    amount = int(round(float(value or 0)))
-    return f"COP ${amount:,.0f}".replace(",", ".")
-
-
-def _to_float(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return float(default)
-
-
-def _financial_row_values(row: dict[str, Any]) -> tuple[float, float, float]:
-    """
-    Normaliza montos para UI y resumen:
-    - total nunca menor que abonado (fallback datos legacy)
-    - pendiente: si viene `pending_balance` de la API/MySQL es la fuente de verdad
-      (ej. tras anular con saldo ya puesto en 0 y crédito en otra columna);
-      si no, pendiente = max(total − abonado − saldo a favor, 0) para no ignorar créditos.
-    """
-    abonado = max(_to_float(row.get("deposit"), 0.0), 0.0)
-    total_raw = max(_to_float(row.get("total_amount"), 0.0), 0.0)
-    total = max(total_raw, abonado)
-    cred = max(_to_float(row.get("customer_credit"), 0.0), 0.0)
-    raw_pb = row.get("pending_balance")
-    if raw_pb is not None and raw_pb != "":
-        pendiente = max(round(_to_float(raw_pb, 0.0), 2), 0.0)
-    else:
-        pendiente = max(round(total - abonado - cred, 2), 0.0)
-    return total, abonado, pendiente
-
-
-def _calendar_month_value_label(total: float) -> str:
-    """
-    Total en celda del calendario mensual: solo dígitos (sin símbolo $ ni sufijo tipo «k»).
-    Por debajo de mil se muestra el valor tal cual (unidades hasta 999).
-    A partir de 1.000 se trunca quitando los tres últimos dígitos (− unidades/decenas/centenas),
-    de modo que el número mostrado queda «en miles de pesos» sin escribir esos tres ceros.
-    Si ese número tiene 4+ dígitos, se agrupa con punto como miles (p. ej. 5_678).
-    Para montos ≥ 1.000.000 el mismo //1000 deja también fuera los tres dígitos de menores orden.
-    """
-    v = int(round(max(float(total or 0), 0)))
-    if v <= 0:
-        return "—"
-    if v < 1000:
-        return str(v)
-    n = v // 1000
-    if n < 1000:
-        return str(n)
-    return f"{n:,.0f}".replace(",", ".")
-
-
-def _customer_credit_value(row: dict[str, Any]) -> float:
-    """Saldo a favor del cliente asociado a esta cita (p. ej. traslado de abono al anular)."""
-    return max(_to_float(row.get("customer_credit"), 0.0), 0.0)
-
-
-def _xlsx_border_thin() -> Any:
-    from openpyxl.styles import Border, Side
-
-    s = Side(style="thin", color="FF9CA3AF")
-    return Border(left=s, right=s, top=s, bottom=s)
-
-
-def _excel_set_cell(ws: Any, row: int, col: int, value: Any, *, font=None, alignment=None, border=None, fill=None) -> None:
-    """Asignación de celda compatible con coordenadas 1-based tipo Excel."""
-    cell = ws.cell(row=row, column=col, value=value)
-    if font is not None:
-        cell.font = font
-    if alignment is not None:
-        cell.alignment = alignment
-    if border is not None:
-        cell.border = border
-    if fill is not None:
-        cell.fill = fill
-
-
-def _excel_apply_border_block(ws: Any, row_min: int, row_max: int, col_min: int, col_max: int, border: Any) -> None:
-    for r in range(row_min, row_max + 1):
-        for c in range(col_min, col_max + 1):
-            ws.cell(row=r, column=c).border = border
-
-
-def _citas_filtered_to_excel_bytes(rows: list[dict[str, Any]], *, generated_at: Optional[datetime] = None) -> bytes:
-    """Genera .xlsx financiero estilizado: título, encabezados en negrita y tablas demarcadas."""
-    from openpyxl import Workbook
-    from openpyxl.styles import Alignment, Font, PatternFill
-    from openpyxl.utils import get_column_letter
-
-    gen_dt = generated_at or datetime.now()
-    fecha_etiqueta = gen_dt.strftime("%d/%m/%Y %H:%M")
-
-    datos: list[list[Any]] = []
-    for r in rows:
-        tot, abo, pend = _financial_row_values(r)
-        cred = _customer_credit_value(r)
-        nombre = str(r.get("customer_name") or r.get("name") or "").strip()
-        artista = _assigned_artist_display_name(r)
-        datos.append(
-            [
-                nombre,
-                artista,
-                round(tot, 2),
-                round(abo, 2),
-                round(pend, 2),
-                round(cred, 2),
-            ]
-        )
-
-    headers = [
-        "Cliente",
-        "Artista / profesional",
-        "Valor total (COP)",
-        "Abonado (COP)",
-        "Pendiente (COP)",
-        "Saldo a favor (COP)",
-    ]
-    ncol = len(headers)
-
-    wb = Workbook()
-    bd = _xlsx_border_thin()
-    font_title = Font(bold=True, size=14, color="FF111827")
-    font_sub = Font(size=10, color="FF4B5563")
-    font_header = Font(bold=True, size=11, color="FF111827")
-    font_body = Font(size=10, color="FF374151")
-    fill_header = PatternFill(fill_type="solid", fgColor="FFE5E7EB")
-    align_center = Alignment(horizontal="center", vertical="center", wrap_text=False)
-    align_left = Alignment(horizontal="left", vertical="center", wrap_text=True)
-    align_right_num = Alignment(horizontal="right", vertical="center")
-
-    # --- Hoja detalle ---
-    ws1 = wb.active
-    ws1.title = "Datos financieros"
-    ws1.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
-    ws1.cell(1, 1, "Informe financiero — Citas Cherry Ink · Rock City")
-    ws1.cell(1, 1).font = font_title
-    ws1.cell(1, 1).alignment = align_center
-
-    ws1.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncol)
-    ws1.cell(2, 1, f"Generado: {fecha_etiqueta}")
-    ws1.cell(2, 1).font = font_sub
-    ws1.cell(2, 1).alignment = align_center
-
-    header_row = 4
-    for col in range(1, ncol + 1):
-        _excel_set_cell(
-            ws1,
-            header_row,
-            col,
-            headers[col - 1],
-            font=font_header,
-            fill=fill_header,
-            alignment=align_left if col <= 2 else align_right_num,
-            border=bd,
-        )
-
-    row_start_body = header_row + 1
-    if datos:
-        for i, row_vals in enumerate(datos):
-            r = row_start_body + i
-            for col in range(1, ncol + 1):
-                v = row_vals[col - 1]
-                align = align_left if col <= 2 else align_right_num
-                _excel_set_cell(ws1, r, col, v, font=font_body, alignment=align, border=bd)
-            rmax = r
-        _excel_apply_border_block(ws1, header_row, rmax, 1, ncol, bd)
-    else:
-        ws1.merge_cells(start_row=row_start_body, start_column=1, end_row=row_start_body, end_column=ncol)
-        c_msg = ws1.cell(row=row_start_body, column=1, value="Sin filas para los filtros actuales.")
-        c_msg.font = font_body
-        c_msg.alignment = align_left
-        _excel_apply_border_block(ws1, header_row, row_start_body, 1, ncol, bd)
-
-    for col in range(1, ncol + 1):
-        letter = get_column_letter(col)
-        w = 18
-        if col == 1:
-            w = 34
-        elif col == 2:
-            w = 28
-        ws1.column_dimensions[letter].width = w
-
-    # --- Resumen ---
-    ws2 = wb.create_sheet("Resumen financiero", 1)
-    rtot = rabo = rpend = rfav = 0.0
-    for rr in rows:
-        t, a, p = _financial_row_values(rr)
-        rtot += t
-        rabo += a
-        rpend += p
-        rfav += _customer_credit_value(rr)
-
-    ws2.merge_cells(start_row=1, start_column=1, end_row=1, end_column=2)
-    ws2.cell(1, 1, "Resumen financiero — mismos filtros que el panel")
-    ws2.cell(1, 1).font = font_title
-    ws2.cell(1, 1).alignment = align_center
-    ws2.merge_cells(start_row=2, start_column=1, end_row=2, end_column=2)
-    ws2.cell(2, 1, f"Generado: {fecha_etiqueta}")
-    ws2.cell(2, 1).font = font_sub
-    ws2.cell(2, 1).alignment = align_center
-
-    resumen_labels = ["Total valor trabajo (COP)", "Total abonado (COP)", "Total pendiente (COP)", "Total saldo a favor (COP)", "Cantidad de citas"]
-    resumen_vals: list[Any] = [
-        round(rtot, 2),
-        round(rabo, 2),
-        round(rpend, 2),
-        round(rfav, 2),
-        len(rows) if rows else 0,
-    ]
-    hdr_r = 4
-    _excel_set_cell(ws2, hdr_r, 1, "Concepto", font=font_header, fill=fill_header, alignment=align_left, border=bd)
-    _excel_set_cell(ws2, hdr_r, 2, "Valor", font=font_header, fill=fill_header, alignment=align_right_num, border=bd)
-    for i, lab in enumerate(resumen_labels):
-        r = hdr_r + 1 + i
-        _excel_set_cell(ws2, r, 1, lab, font=font_body, alignment=align_left, border=bd)
-        _excel_set_cell(ws2, r, 2, resumen_vals[i], font=font_body, alignment=align_right_num, border=bd)
-    _excel_apply_border_block(ws2, hdr_r, hdr_r + len(resumen_labels), 1, 2, bd)
-    ws2.column_dimensions["A"].width = 44
-    ws2.column_dimensions["B"].width = 22
-
-    bio = BytesIO()
-    wb.save(bio)
-    bio.seek(0)
-    return bio.getvalue()
-
-
-def _parse_date(val: Any) -> date:
-    if isinstance(val, datetime):
-        return val.date()
-    if isinstance(val, date):
-        return val
-    if isinstance(val, str) and val:
-        s = val.strip().replace("T", " ")
-        return datetime.strptime(s[:10], "%Y-%m-%d").date()
-    return date(1990, 1, 1)
-
 
 def _format_appt_when(val: Any) -> str:
     if val is None:
@@ -756,18 +536,6 @@ def _format_appt_when(val: Any) -> str:
             except ValueError:
                 pass
     return s[:16]
-
-
-def _time_slot_options() -> List[str]:
-    """Franjas cada 30 min entre 08:00 y 20:00 inclusive."""
-    slots: List[str] = []
-    minutes = 8 * 60
-    last = 20 * 60
-    while minutes <= last:
-        h, mm = divmod(minutes, 60)
-        slots.append(f"{h:02d}:{mm:02d}")
-        minutes += 30
-    return slots
 
 
 _BOOKING_WORK_KIND_ORDER = ("piercing", "limpieza_piercing", "cambio_piercing", "tatuaje")
@@ -794,19 +562,8 @@ _BOOKING_WORK_KIND_META: Dict[str, Dict[str, Any]] = {
     },
 }
 
-_MIN_BOOKING_DURATION_SLOTS = 1
-_MAX_BOOKING_DURATION_SLOTS = 16
 # Valor mínimo COP para total del trabajo **y** abono inicial al agendar (enteros).
 _MIN_APPOINTMENT_TOTAL_COP = 50000.0
-# Sufijo en `detail` al crear desde este panel (Streamlit) para saber cuántas franjas de 30 min ocupó la cita.
-_AGENDA_SLOTS_DETAIL_PATTERN = re.compile(r"\s*\[agenda_slots:(\d+)\]\s*$", re.IGNORECASE)
-
-
-def _append_agenda_slots_marker(detail: Optional[str], slots: int) -> str:
-    """Añade marcador al final del detalle para calcular ocupación real en agenda."""
-    n = max(_MIN_BOOKING_DURATION_SLOTS, min(_MAX_BOOKING_DURATION_SLOTS, int(slots)))
-    base = (detail or "").strip()
-    return (f"{base} [agenda_slots:{n}]").strip() if base else f"[agenda_slots:{n}]"
 
 
 def _booking_observations_and_design_for_api() -> str:
@@ -831,34 +588,6 @@ def _booking_duration_slots_from_session() -> int:
     except (TypeError, ValueError):
         return 1
     return max(_MIN_BOOKING_DURATION_SLOTS, min(_MAX_BOOKING_DURATION_SLOTS, n))
-
-
-def _duration_slots_for_existing_appointment(row: dict[str, Any]) -> int:
-    """Franjas de 30 min ocupadas por una cita: prioridad al marcador [agenda_slots:N] en detail; si no, heurística."""
-    det_full = str(row.get("detail") or "")
-    m = _AGENDA_SLOTS_DETAIL_PATTERN.search(det_full)
-    if m:
-        try:
-            return max(
-                _MIN_BOOKING_DURATION_SLOTS,
-                min(_MAX_BOOKING_DURATION_SLOTS, int(m.group(1))),
-            )
-        except ValueError:
-            pass
-    svc = str(row.get("service_type") or row.get("service") or "").strip().lower()
-    det = det_full.strip().lower()
-    combined = f"{svc} {det}"
-    if "limpieza" in det:
-        return 1
-    if "cambio" in det and "pierc" in combined:
-        return 1
-    if "tatu" in combined or "tattoo" in svc:
-        return 4
-    if "pierc" in combined or svc == "piercing":
-        return 2
-    if "other" in svc or "otro" in svc:
-        return 1
-    return 2
 
 
 # Separador explícito entre descripción de diseño y observaciones al editar detalle de cita existente.
@@ -925,37 +654,6 @@ def _rebuild_detail_for_patch(
     return _append_agenda_slots_marker(detail_for_api, slots)
 
 
-def _appointment_last_start_slot(start_hm: str, dur_slots: int, slot_opts: list[str]) -> str:
-    try:
-        si = slot_opts.index(start_hm)
-    except ValueError:
-        return start_hm
-    last_i = min(si + max(int(dur_slots), 1) - 1, len(slot_opts) - 1)
-    return slot_opts[last_i]
-
-
-def _duration_slots_from_start_last(start_hm: str, last_slot_hm: str, slot_opts: list[str]) -> int:
-    try:
-        si = slot_opts.index(start_hm)
-        ei = slot_opts.index(last_slot_hm)
-    except ValueError:
-        return _MIN_BOOKING_DURATION_SLOTS
-    if ei < si:
-        return _MIN_BOOKING_DURATION_SLOTS
-    return max(_MIN_BOOKING_DURATION_SLOTS, min(_MAX_BOOKING_DURATION_SLOTS, ei - si + 1))
-
-
-def _format_appt_created_at(val: Any) -> str:
-    if val is None:
-        return "—"
-    if isinstance(val, datetime):
-        return val.strftime("%d/%m/%Y %H:%M")
-    s = str(val).strip()
-    if len(s) >= 16:
-        return s[:16].replace("T", " ")
-    return s or "—"
-
-
 def _appointments_same_day_raw(items: list[dict[str, Any]], day: date) -> list[dict[str, Any]]:
     """Citas de ese día usando la lista completa de API (sin filtrar por nombre), para no solapar huecos."""
     out: list[dict[str, Any]] = []
@@ -983,489 +681,6 @@ def _consume_cal_appt_query_param() -> None:
     except ValueError:
         pass
     st.query_params.pop("cal_appt_id", None)
-
-
-def _twg_sess_appt_open_button_key(monday: date, aid: int) -> str:
-    """Clave estable para `st.button` oculto que abre una cita desde la rejilla semanal."""
-    return f"twg_sess_appt_open_{monday.isoformat()}_{aid}"
-
-
-def _week_grid_visible_appt_ids(
-    monday: date,
-    buckets: dict[tuple[int, int, int], list[dict[str, Any]]],
-) -> list[int]:
-    """IDs de citas visibles en la semana (orden por día y aparición)."""
-    out: list[int] = []
-    seen: set[int] = set()
-    for i in range(7):
-        d = monday + timedelta(days=i)
-        for row in buckets.get((d.year, d.month, d.day), []):
-            aid = int(row.get("id", 0) or 0)
-            if aid <= 0 or aid in seen:
-                continue
-            seen.add(aid)
-            out.append(aid)
-    return out
-
-
-def _render_week_grid_hidden_appt_open_buttons(
-    monday: date,
-    buckets: dict[tuple[int, int, int], list[dict[str, Any]]],
-) -> None:
-    """Botones Streamlit invisibles; el clic en la pastilla HTML delega aquí vía JS (sin navegar por URL)."""
-    ids = _week_grid_visible_appt_ids(monday, buckets)
-    if not ids:
-        return
-    keys = [_twg_sess_appt_open_button_key(monday, aid) for aid in ids]
-    css_chunks = [
-        "section.main button."
-        + html_mod.escape(f"st-key-{k}")
-        + "{position:absolute!important;left:-9999px!important;width:1px!important;"
-        "height:1px!important;opacity:0!important;margin:0!important;padding:0!important;}"
-        for k in keys
-    ]
-    st.markdown("<style>" + "\n".join(css_chunks) + "</style>", unsafe_allow_html=True)
-    for aid in ids:
-        bk = _twg_sess_appt_open_button_key(monday, aid)
-        if st.button(
-            "\u200b",
-            key=bk,
-            help=f"Abrir cita #{aid} (rejilla semanal)",
-            type="tertiary",
-            width=1,
-        ):
-            st.session_state["_cal_focus_appt_id"] = aid
-            st.session_state.pop("_cal_overflow_day", None)
-            st.rerun()
-
-
-def _inject_week_grid_appt_click_bridge(monday_iso: str) -> None:
-    """Engancha clics en `.twg-appt-link` y dispara el `st.button` oculto correspondiente."""
-    mon_lit = json.dumps(monday_iso)
-    inner_js = f"""
-(function () {{
-  var NS = "__twgApptOpenBridge_v2";
-  var mondayIso = {mon_lit};
-
-  function appDocument() {{
-    try {{
-      var t = window.top;
-      if (t && t.document && t.document.querySelector('[data-testid="stApp"]')) return t.document;
-    }} catch (e0) {{}}
-    var x = window;
-    for (var i = 0; i < 12; i++) {{
-      try {{
-        if (!x || !x.document) break;
-        var d = x.document;
-        if (d.querySelector('[data-testid="stApp"]')) return d;
-        if (x.parent === x) break;
-        x = x.parent;
-      }} catch (e) {{
-        break;
-      }}
-    }}
-    try {{
-      return window.top.document;
-    }} catch (e2) {{
-      return document;
-    }}
-  }}
-
-  function prevTuple(tupleVal) {{
-    if (
-      !tupleVal ||
-      !tupleVal.shell ||
-      !tupleVal.onClick ||
-      typeof tupleVal.shell.removeEventListener !== "function"
-    ) {{
-      return;
-    }}
-    try {{
-      tupleVal.shell.removeEventListener("click", tupleVal.onClick, true);
-    }} catch (e0) {{}}
-  }}
-
-  function mount() {{
-    var prev = window[NS];
-    if (prev && typeof prev === "object") {{
-      prevTuple(prev);
-    }}
-
-    function findWidgetButton(doc, aid) {{
-      var cls = "st-key-twg_sess_appt_open_" + mondayIso + "_" + aid;
-      var esc =
-        typeof CSS !== "undefined" && typeof CSS.escape === "function"
-          ? CSS.escape(cls)
-          : cls;
-      try {{
-        var hosts = doc.querySelectorAll("." + esc);
-        for (var i = 0; i < hosts.length; i++) {{
-          var h = hosts[i];
-          var btn = h.tagName === "BUTTON" ? h : h.querySelector("button");
-          if (btn) return btn;
-        }}
-      }} catch (e1) {{}}
-      return null;
-    }}
-
-    function onClick(ev) {{
-      var t = ev.target;
-      if (!t || typeof t.closest !== "function") return;
-      var pill = t.closest("button.twg-appt-link[data-cal-appt-id]");
-      if (!pill) return;
-      var raw = pill.getAttribute("data-cal-appt-id");
-      if (!raw) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      var aid = parseInt(raw, 10);
-      if (!aid || aid <= 0) return;
-      var doc = appDocument();
-      var wb = findWidgetButton(doc, aid);
-      if (wb) {{
-        try {{
-          wb.click();
-        }} catch (e2) {{}}
-      }}
-    }}
-
-    function bind() {{
-      var doc = appDocument();
-      var shell = doc.querySelector(".twg-shell");
-      if (!shell) return;
-      shell.removeEventListener("click", onClick, true);
-      shell.addEventListener("click", onClick, true);
-      window[NS] = {{ mondayIso: mondayIso, shell: shell, onClick: onClick }};
-    }}
-
-    bind();
-    setTimeout(bind, 0);
-    setTimeout(bind, 120);
-    setTimeout(bind, 400);
-  }}
-
-  mount();
-}})();
-"""
-    outer = (
-        "<script>\n"
-        "(function () {\n"
-        '  function appDocument() {\n'
-        "    try {\n"
-        '      var t = window.top;\n'
-        '      if (t && t.document && t.document.querySelector(\'[data-testid="stApp"]\')) return t.document;\n'
-        "    } catch (e0) {}\n"
-        "    var x = window;\n"
-        "    for (var i = 0; i < 12; i++) {\n"
-        "      try {\n"
-        "        if (!x || !x.document) break;\n"
-        "        var d = x.document;\n"
-        '        if (d.querySelector(\'[data-testid="stApp"]\')) return d;\n'
-        "        if (x.parent === x) break;\n"
-        "        x = x.parent;\n"
-        "      } catch (e) {\n"
-        "        break;\n"
-        "      }\n"
-        "    }\n"
-        "    try {\n"
-        "      return window.top.document;\n"
-        "    } catch (e2) {\n"
-        "      return document;\n"
-        "    }\n"
-        "  }\n"
-        "  function injectScript(doc, text) {\n"
-        "    try {\n"
-        '      var s = doc.createElement("script");\n'
-        "      s.textContent = text;\n"
-        "      (doc.head || doc.documentElement).appendChild(s);\n"
-        "      s.remove();\n"
-        "    } catch (e) {}\n"
-        "  }\n"
-        f"  injectScript(appDocument(), {json.dumps(inner_js)});\n"
-        "})();\n"
-        "</script>"
-    )
-    components.html(outer, height=0, width=0)
-
-
-def _calendar_month_footer_strip_html(
-    y: int,
-    m: int,
-    d: int,
-    *,
-    disabled_footer: bool,
-    title_esc: str,
-) -> str:
-    """Pie de celda mensual tipo cabecera: día visible + botón HTML que delega en `st.button` oculto."""
-    strip_cls = "cal-cell-footer-strip"
-    if disabled_footer:
-        strip_cls += " cal-footer-strip-disabled"
-    bd = " disabled" if disabled_footer else ""
-    return (
-        f'<div class="{strip_cls}" role="presentation">'
-        f'<span class="cal-footer-daynum">{html_mod.escape(str(d))}</span>'
-        f"<button type=\"button\" class=\"cal-footer-book\" "
-        f'data-cal-y="{int(y)}" data-cal-m="{int(m)}" data-cal-d="{int(d)}" '
-        f'title="{title_esc}" aria-label="{title_esc}"{bd}>'
-        "+ Agregar cita</button>"
-        "</div>"
-    )
-
-
-def _render_calendar_month_hidden_book_widgets(y: int, m: int, weeks_grid: list[list[int]]) -> None:
-    """Botones ocultos (uno por día) para poder agendar desde el pie HTML mediante JS."""
-    allow_book_role = not _panel_is_technician_role()
-    booked: list[int] = []
-    for row in weeks_grid:
-        for d in row:
-            if d > 0:
-                booked.append(d)
-    if not booked:
-        return
-    css_chunks = [
-        "section.main button[data-testid^=\"baseButton\"][class*=\"cal_main_day_\"] "
-        "{position:absolute!important;left:-9999px!important;width:1px!important;"
-        "height:1px!important;opacity:0!important;margin:0!important;padding:0!important;}",
-        'section.main div[data-testid="element-container"]:has(button[class*="cal_main_day_"]) '
-        "{min-height:0!important;max-height:0!important;margin:0!important;padding:0!important;"
-        "border:none!important;overflow:hidden!important;}",
-        "section.main div[data-testid=\"stHorizontalBlock\"]:has(button[class*=\"cal_main_day_\"]) "
-        "{min-height:0!important;margin:0!important;padding:0!important;gap:0!important;}",
-        "section.main div[data-testid=\"stHorizontalBlock\"]:has(button[class*=\"cal_main_day_\"]) "
-        "> div[data-testid=\"column\"] {min-height:0!important;padding:0!important;flex:0 0 auto!important;}",
-        "section.main div[data-testid=\"stVerticalBlock\"]:has(div[data-testid=\"stHorizontalBlock\"] button[class*=\"cal_main_day_\"]) "
-        "{gap:0!important;}",
-    ]
-    st.markdown("<style>" + "\n".join(css_chunks) + "</style>", unsafe_allow_html=True)
-    today_d = date.today()
-    # En filas de 7 como la rejilla mensual para no encadenar docenas de filas Streamlit ocultando el scroll útil del calendario.
-    chunk = 7
-    for i in range(0, len(booked), chunk):
-        row_days = booked[i : i + chunk]
-        row_cols = st.columns(len(row_days), gap=None)
-        for ci, d in enumerate(row_days):
-            with row_cols[ci]:
-                picked_cell = date(y, m, d)
-                bk = f"cal_main_day_{y}_{m}_{d}"
-                is_past = picked_cell < today_d
-                disabled = is_past or not allow_book_role
-                book_help = (
-                    "Los tatuadores y perforadores no pueden agendar desde el calendario"
-                    if not allow_book_role
-                    else (
-                        "No se pueden agendar citas en fechas pasadas"
-                        if is_past
-                        else f"Agendar cita · {picked_cell.strftime('%d/%m/%Y')}"
-                    )
-                )
-                if st.button(
-                    "\u200b",
-                    key=bk,
-                    type="tertiary",
-                    width=1,
-                    disabled=disabled,
-                    help=book_help,
-                ):
-                    _clear_calendar_dialog_focus()
-                    _pop_booking_document_session()
-                    st.session_state["ap_ad"] = date(y, m, d)
-                    st.session_state["_ap_dlg"] = "create"
-                    st.rerun()
-
-
-def _inject_calendar_month_footer_bridge() -> None:
-    """Clicks en `.cal-footer-book` disparan el `st.button` oculto `cal_main_day_…`."""
-    inner_js = f"""
-(function () {{
-  var NS = "__calFooterBook_v1";
-
-  function appDocument() {{
-    try {{
-      var t = window.top;
-      if (t && t.document && t.document.querySelector('[data-testid="stApp"]')) return t.document;
-    }} catch (e0) {{}}
-    var x = window;
-    for (var i = 0; i < 12; i++) {{
-      try {{
-        if (!x || !x.document) break;
-        var d = x.document;
-        if (d.querySelector('[data-testid="stApp"]')) return d;
-        if (x.parent === x) break;
-        x = x.parent;
-      }} catch (e) {{
-        break;
-      }}
-    }}
-    try {{
-      return window.top.document;
-    }} catch (e2) {{
-      return document;
-    }}
-  }}
-
-  function prevTuple(tupleVal) {{
-    if (!tupleVal || !tupleVal.shell || !tupleVal.onClick) return;
-    try {{
-      tupleVal.shell.removeEventListener("click", tupleVal.onClick, true);
-    }} catch (e0) {{}}
-  }}
-
-  function mount() {{
-    var prev = window[NS];
-    if (prev && typeof prev === "object") prevTuple(prev);
-
-    function findBookButton(doc, yy, mm, dd) {{
-      /* Misma convención que la rejilla semanal (clase st-key- + subKey) */
-      var subKey = "cal_main_day_" + yy + "_" + mm + "_" + dd;
-      var candidates = ["st-key-" + subKey, subKey];
-      for (var c = 0; c < candidates.length; c++) {{
-        var cls = candidates[c];
-        var esc =
-          typeof CSS !== "undefined" && typeof CSS.escape === "function"
-            ? CSS.escape(cls)
-            : cls;
-        try {{
-          var hosts = doc.querySelectorAll("." + esc);
-          for (var i = 0; i < hosts.length; i++) {{
-            var h = hosts[i];
-            var btn =
-              h.tagName === "BUTTON"
-                ? h
-                : h.querySelector('button[data-testid^="baseButton"]') || h.querySelector("button");
-            if (btn && !btn.disabled) return btn;
-          }}
-        }} catch (eCls) {{}}
-      }}
-      try {{
-        var hits = doc.querySelectorAll('[class*="' + subKey + '"]');
-        for (var j = 0; j < hits.length; j++) {{
-          var node = hits[j];
-          var btn =
-            node.tagName === "BUTTON"
-              ? node
-              : node.querySelector('button[data-testid^="baseButton"]');
-          if (btn && !btn.disabled) return btn;
-        }}
-      }} catch (eSub) {{}}
-      return null;
-    }}
-
-    function onClick(ev) {{
-      var t = ev.target;
-      if (!t || typeof t.closest !== "function") return;
-      var el = t.closest("button.cal-footer-book");
-      if (!el || el.closest(".cal-footer-strip-disabled")) return;
-      if (el.disabled) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      var cy = parseInt(el.getAttribute("data-cal-y") || "", 10);
-      var cm = parseInt(el.getAttribute("data-cal-m") || "", 10);
-      var cd = parseInt(el.getAttribute("data-cal-d") || "", 10);
-      if (!cd || cd <= 0) return;
-      var doc = appDocument();
-      var wb = findBookButton(doc, cy, cm, cd);
-      if (wb) {{
-        try {{
-          wb.click();
-        }} catch (e2) {{
-          try {{
-            wb.dispatchEvent(new MouseEvent("click", {{ bubbles: true, cancelable: true, view: window }}));
-          }} catch (e3) {{}}
-        }}
-      }}
-    }}
-
-    function bind() {{
-      var doc = appDocument();
-      var shell =
-        doc.querySelector('[data-testid="stMain"]') ||
-        doc.querySelector("section.main") ||
-        doc.body;
-      if (!shell) return;
-      shell.removeEventListener("click", onClick, true);
-      shell.addEventListener("click", onClick, true);
-      window[NS] = {{ shell: shell, onClick: onClick }};
-    }}
-
-    bind();
-    setTimeout(bind, 0);
-    setTimeout(bind, 120);
-    setTimeout(bind, 400);
-  }}
-
-  mount();
-}})();
-"""
-
-    outer = (
-        "<script>\n"
-        "(function () {\n"
-        '  function appDocument() {\n'
-        "    try {\n"
-        '      var t = window.top;\n'
-        '      if (t && t.document && t.document.querySelector(\'[data-testid="stApp"]\')) return t.document;\n'
-        "    } catch (e0) {}\n"
-        "    var x = window;\n"
-        "    for (var i = 0; i < 12; i++) {\n"
-        "      try {\n"
-        "        if (!x || !x.document) break;\n"
-        "        var d = x.document;\n"
-        '        if (d.querySelector(\'[data-testid="stApp"]\')) return d;\n'
-        "        if (x.parent === x) break;\n"
-        "        x = x.parent;\n"
-        "      } catch (e) {\n"
-        "        break;\n"
-        "      }\n"
-        "    }\n"
-        "    try {\n"
-        "      return window.top.document;\n"
-        "    } catch (e2) {\n"
-        "      return document;\n"
-        "    }\n"
-        "  }\n"
-        "  function injectScript(doc, text) {\n"
-        "    try {\n"
-        '      var s = doc.createElement("script");\n'
-        "      s.textContent = text;\n"
-        "      (doc.head || doc.documentElement).appendChild(s);\n"
-        "      s.remove();\n"
-        "    } catch (e) {}\n"
-        "  }\n"
-        f"  injectScript(appDocument(), {json.dumps(inner_js)});\n"
-        "})();\n"
-        "</script>"
-    )
-    components.html(outer, height=0, width=0)
-
-
-def _busy_slot_indices_for_day(day_rows: list[dict[str, Any]], slot_list: list[str]) -> set[int]:
-    busy: set[int] = set()
-    n = len(slot_list)
-    for row in day_rows:
-        if str(row.get("status") or "").strip().lower() == "cancelada":
-            continue
-        hm = _appt_time_hm(row.get("appointment_date", row.get("date")))
-        if hm == "—":
-            continue
-        try:
-            start_idx = slot_list.index(hm)
-        except ValueError:
-            continue
-        dur = _duration_slots_for_existing_appointment(row)
-        for j in range(start_idx, min(start_idx + dur, n)):
-            busy.add(j)
-    return busy
-
-
-def _available_start_slots(slot_list: list[str], need_slots: int, busy: set[int]) -> list[str]:
-    n = len(slot_list)
-    out: list[str] = []
-    for i in range(n):
-        if i + need_slots > n:
-            break
-        if any(j in busy for j in range(i, i + need_slots)):
-            continue
-        out.append(slot_list[i])
-    return out
 
 
 def _service_and_detail_for_work_kind(kind: str, user_detail: str) -> tuple[str, Optional[str]]:
@@ -1496,31 +711,6 @@ def _parse_existing_slot(val: Any) -> tuple[date, str]:
             return d, chunk
     return d, "09:00" if "09:00" in opts else opts[0]
 
-
-def _appt_time_hm(val: Any) -> str:
-    """Hora HH:MM para listados compactos; '—' si solo hay fecha."""
-    if val is None:
-        return "—"
-    if isinstance(val, datetime):
-        return val.strftime("%H:%M")
-    if isinstance(val, date) and not isinstance(val, datetime):
-        return "—"
-    s = str(val).strip().replace("T", " ")
-    if not s:
-        return "—"
-    for chunk, fmt in ((s[:19], "%Y-%m-%d %H:%M:%S"), (s[:16], "%Y-%m-%d %H:%M")):
-        try:
-            return datetime.strptime(chunk, fmt).strftime("%H:%M")
-        except ValueError:
-            pass
-    return "—"
-
-
-def _monday_of_week(d: date) -> date:
-    """Lunes como primer día de la semana (ISO, weekday() 0=lun)."""
-    return d - timedelta(days=d.weekday())
-
-
 def _sync_week_monday_for_agenda_context() -> None:
     """Deja `_ap_week_monday` coherente con el mes abierto en el calendario (o con hoy si es el mismo mes)."""
     ym_raw = st.session_state.get("_ap_cal_ym")
@@ -1536,285 +726,6 @@ def _sync_week_monday_for_agenda_context() -> None:
     today_d = date.today()
     anchor = today_d if (today_d.year == y and today_d.month == m) else date(y, m, 1)
     st.session_state["_ap_week_monday"] = _monday_of_week(anchor).isoformat()
-
-
-# Altura en px de cada franja de 30 min en la vista semanal tipo Teams/Outlook.
-_TWGS_SLOT_PX = 22
-
-
-def _week_grid_parse_segments(
-    day_rows: list[dict[str, Any]],
-    slot_list: list[str],
-) -> list[tuple[dict[str, Any], int, int]]:
-    """Citas posicionables en la rejilla: (row, start_idx, dur_slots_vis)."""
-    n = len(slot_list)
-    raw: list[tuple[dict[str, Any], int, int]] = []
-    for row in day_rows:
-        hm = _appt_time_hm(row.get("appointment_date", row.get("date")))
-        if hm == "—":
-            continue
-        try:
-            start_idx = slot_list.index(hm)
-        except ValueError:
-            continue
-        dur = _duration_slots_for_existing_appointment(row)
-        end_idx = min(start_idx + dur, n)
-        vis = max(0, end_idx - start_idx)
-        if vis <= 0:
-            continue
-        raw.append((row, start_idx, vis))
-    raw.sort(key=lambda x: (x[1], -x[2]))
-    return raw
-
-
-def _week_grid_assign_lanes(
-    raw: list[tuple[dict[str, Any], int, int]],
-) -> list[tuple[dict[str, Any], int, int, int, int]]:
-    """Asigna carril para solapes (greedy). Devuelve (row, start_idx, vis, lane_i, n_lanes)."""
-    lanes_end: list[int] = []
-    assignments: list[tuple[dict[str, Any], int, int, int]] = []
-    for row, start_idx, vis in raw:
-        end_idx = start_idx + vis
-        lane_i = -1
-        for li, le in enumerate(lanes_end):
-            if start_idx >= le:
-                lane_i = li
-                lanes_end[li] = end_idx
-                break
-        if lane_i < 0:
-            lane_i = len(lanes_end)
-            lanes_end.append(end_idx)
-        assignments.append((row, start_idx, vis, lane_i))
-    n_lanes = max(1, len(lanes_end))
-    return [(r, s, v, l, n_lanes) for r, s, v, l in assignments]
-
-
-def _week_grid_day_column_html(
-    d: date,
-    buckets: dict[tuple[int, int, int], list[dict[str, Any]]],
-    counts_by_client: dict[str, int],
-    *,
-    slot_list: list[str],
-    slot_px: int,
-    today: date,
-) -> str:
-    """Columna de un día con líneas de tiempo y bloques absolutos."""
-    n_slots = len(slot_list)
-    total_h = n_slots * slot_px
-    day_rows = list(buckets.get((d.year, d.month, d.day), []))
-    raw = _week_grid_parse_segments(day_rows, slot_list)
-    placed = _week_grid_assign_lanes(raw)
-    today_cls = " twg-col-today" if d == today else ""
-    parts: list[str] = [f'<div class="twg-col{today_cls}" style="height:{total_h}px">']
-    for si in range(n_slots):
-        parts.append(
-            f'<div class="twg-slot-line" style="top:{si * slot_px}px;height:{slot_px}px"></div>'
-        )
-    for row, start_idx, vis, lane_i, n_lanes in placed:
-        cls_pill = _client_pill_class(row, counts_by_client)
-        top = start_idx * slot_px
-        height = max(vis * slot_px - 2, 14)
-        pct_w = 100.0 / n_lanes
-        left = lane_i * pct_w
-        nm = str(row.get("customer_name") or row.get("name") or "").strip() or "—"
-        nm_esc = html_mod.escape(nm)
-        hm = _appt_time_hm(row.get("appointment_date", row.get("date")))
-        staff = _assigned_staff_label(row)
-        tit = html_mod.escape(f"{hm} · {nm}" + (f" · {staff}" if staff != "—" else ""))
-        st_cl = str(row.get("status") or "").strip().lower()
-        soft_cls = " twg-cancelada-soft" if st_cl == "cancelada" else ""
-        ap_id = int(row.get("id", 0) or 0)
-        # Una sola franja (= 30 min): el alto es ~20px; sin layout horizontal no cabe nombre + botón.
-        compact = vis <= 1
-        link_html = ""
-        if ap_id > 0:
-            if compact:
-                link_html = (
-                    f'<button type="button" class="twg-appt-link twg-appt-link--compact" '
-                    f'data-cal-appt-id="{ap_id}" aria-label="Ver cita">'
-                    '<span class="twg-appt-link-play" aria-hidden="true">▶</span>'
-                    "</button>"
-                )
-            else:
-                link_html = (
-                    f'<button type="button" class="twg-appt-link" data-cal-appt-id="{ap_id}" '
-                    'aria-label="Ver cita">'
-                    '<span class="twg-appt-link-play" aria-hidden="true">▶</span>'
-                    "<span>Ver cita</span>"
-                    "</button>"
-                )
-        cls_appt_extra = " twg-appt--compact" if compact else ""
-        if compact:
-            body = (
-                f'<span class="twg-appt-time-compact">{html_mod.escape(hm)}</span>'
-                f'<span class="twg-appt-client-compact">{nm_esc}</span>'
-            )
-        else:
-            body = (
-                '<div class="twg-appt-body-stack">'
-                f'<span class="twg-appt-head-time">{html_mod.escape(hm)}</span>'
-                f'<span class="twg-appt-client">{nm_esc}</span>'
-                "</div>"
-            )
-        geo = (
-            f"top:{top}px;height:{height}px;left:{left}%;width:calc({pct_w}% - 3px);margin-left:1px"
-        )
-        parts.append(
-            f'<div class="twg-appt twg-{cls_pill}{cls_appt_extra}{soft_cls}" '
-            f'title="{tit}" style="{geo}">{body}{link_html}</div>'
-        )
-    parts.append("</div>")
-    return "".join(parts)
-
-
-def _week_grid_html_for_week(
-    monday: date,
-    buckets: dict[tuple[int, int, int], list[dict[str, Any]]],
-    counts_by_client: dict[str, int],
-    *,
-    slot_list: list[str],
-    slot_px: int,
-) -> str:
-    """HTML de la rejilla semanal completa (cabecera + cuerpo)."""
-    today = date.today()
-    weekdays_short = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
-    parts: list[str] = ['<div class="twg-shell"><div class="twg-scroll-x"><div class="twg-grid-wrap">']
-
-    parts.append('<div class="twg-head">')
-    parts.append('<div class="twg-h-spacer"></div>')
-    parts.append('<div class="twg-h-days">')
-    for i in range(7):
-        d = monday + timedelta(days=i)
-        today_cls = " twg-h-today" if d == today else ""
-        parts.append(
-            f'<div class="twg-h-day{today_cls}"><div class="twg-h-wd">{weekdays_short[i]}</div>'
-            f'<div class="twg-h-num">{d.day}</div></div>'
-        )
-    parts.append("</div></div>")
-
-    parts.append('<div class="twg-body">')
-    parts.append('<div class="twg-times">')
-    for si, hm in enumerate(slot_list):
-        is_hour = hm.endswith(":00")
-        cls = "twg-tick-major" if is_hour else "twg-tick-minor"
-        label = hm if is_hour else ""
-        parts.append(
-            f'<div class="twg-tick {cls}" style="height:{slot_px}px"><span>{label}</span></div>'
-        )
-    parts.append("</div>")
-    parts.append('<div class="twg-day-columns">')
-    for i in range(7):
-        d = monday + timedelta(days=i)
-        parts.append(
-            _week_grid_day_column_html(
-                d,
-                buckets,
-                counts_by_client,
-                slot_list=slot_list,
-                slot_px=slot_px,
-                today=today,
-            )
-        )
-    parts.append("</div></div>")
-    parts.append("</div></div></div>")
-    return "".join(parts)
-
-
-def _render_week_schedule_grid(
-    buckets: dict[tuple[int, int, int], list[dict[str, Any]]],
-    counts_by_client: dict[str, int],
-) -> None:
-    """Vista semanal con columnas por día y bloques proporcionales a la duración (30 min/slot)."""
-    anchor_key = "_ap_week_monday"
-    if anchor_key not in st.session_state:
-        st.session_state[anchor_key] = _monday_of_week(date.today()).isoformat()
-    try:
-        monday = date.fromisoformat(str(st.session_state[anchor_key]))
-    except ValueError:
-        monday = _monday_of_week(date.today())
-        st.session_state[anchor_key] = monday.isoformat()
-
-    st.markdown("##### Agenda semanal (rejilla horaria)")
-    st.caption(
-        "Estilo **Outlook / Teams**: columnas por día, franjas de **30 min** (**08:00–20:00**). "
-        "En cada bloque, **Ver cita** (▶) abre el detalle en un **panel emergente** sin cambiar de página; "
-        "también puedes usar **Lista** para ver todas las citas del día."
-    )
-
-    b1, b2, b3, b4 = st.columns([1.1, 1.1, 3.2, 1.1])
-    with b1:
-        if st.button("◀ Semana", key="twg_prev_week"):
-            _clear_calendar_dialog_focus()
-            st.session_state[anchor_key] = (monday - timedelta(days=7)).isoformat()
-            st.rerun()
-    with b2:
-        if st.button("Hoy", key="twg_today_week"):
-            _clear_calendar_dialog_focus()
-            st.session_state[anchor_key] = _monday_of_week(date.today()).isoformat()
-            st.rerun()
-    with b3:
-        sunday = monday + timedelta(days=6)
-        span_lbl = f"{monday.strftime('%d/%m')} – {sunday.strftime('%d/%m/%Y')}"
-        st.markdown(
-            f"<div style='text-align:center;font-weight:600;padding-top:0.35rem'>{html_mod.escape(span_lbl)}</div>",
-            unsafe_allow_html=True,
-        )
-    with b4:
-        if st.button("Semana ▶", key="twg_next_week"):
-            _clear_calendar_dialog_focus()
-            st.session_state[anchor_key] = (monday + timedelta(days=7)).isoformat()
-            st.rerun()
-
-    slot_list = _time_slot_options()
-    st.markdown(
-        _week_grid_html_for_week(
-            monday,
-            buckets,
-            counts_by_client,
-            slot_list=slot_list,
-            slot_px=_TWGS_SLOT_PX,
-        ),
-        unsafe_allow_html=True,
-    )
-    _render_week_grid_hidden_appt_open_buttons(monday, buckets)
-    _inject_week_grid_appt_click_bridge(monday.isoformat())
-
-    st.markdown("**Acciones por día**")
-    wd_short = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
-    cols = st.columns(7)
-    allow_book = not _panel_is_technician_role()
-    for i in range(7):
-        d = monday + timedelta(days=i)
-        day_rows = list(buckets.get((d.year, d.month, d.day), []))
-        with cols[i]:
-            st.caption(f"{wd_short[i]} **{d.day}** · {len(day_rows)} cita(s)")
-            if st.button(
-                "Lista",
-                key=f"twg_day_list_{d.isoformat()}",
-                use_container_width=True,
-                disabled=len(day_rows) == 0,
-                help="Ver todas las citas del día en un solo panel",
-            ):
-                st.session_state.pop("_cal_focus_appt_id", None)
-                st.session_state["_cal_overflow_day"] = (d.year, d.month, d.day)
-                st.rerun()
-            past = d < date.today()
-            if st.button(
-                "Agendar",
-                key=f"twg_day_book_{d.isoformat()}",
-                use_container_width=True,
-                disabled=past or not allow_book,
-                help=(
-                    "Los tatuadores y perforadores no pueden agendar desde aquí"
-                    if not allow_book
-                    else ("No se pueden agendar fechas pasadas" if past else "Nueva cita en este día")
-                ),
-            ):
-                _clear_calendar_dialog_focus()
-                _pop_booking_document_session()
-                st.session_state["ap_ad"] = d
-                st.session_state["_ap_dlg"] = "create"
-                st.rerun()
 
 
 def _appointments_by_day_sorted(items: list[dict[str, Any]]) -> dict[tuple[int, int, int], list[dict[str, Any]]]:
@@ -1854,171 +765,6 @@ def _appointment_counts_by_client(items: list[dict[str, Any]]) -> dict[str, int]
         counts[k] = counts.get(k, 0) + 1
     return counts
 
-
-def _calendar_overflow_row_html(row: dict[str, Any], counts_by_client: dict[str, int]) -> str:
-    """Línea para el diálogo de citas extra: hora + tipo de servicio + nombre con pill de cliente + total."""
-    hm = _appt_time_hm(row.get("appointment_date", row.get("date")))
-    st_cl = str(row.get("status") or "").strip().lower()
-    muted = " cal-overflow-row--muted" if st_cl == "cancelada" else ""
-    svc_flag = _service_type_flag_html(row)
-    pill = _customer_name_pill_html(row, counts_by_client)
-    staff_s = _assigned_artist_display_name(row)
-    staff_el = ""
-    if staff_s != "Sin asignar":
-        staff_el = (
-            '<span class="cal-overflow-artist-dash"> · Artista: '
-            f"{html_mod.escape(staff_s)}</span>"
-        )
-    total_amt, _, _ = _financial_row_values(row)
-    total_box = (
-        '<span class="cal-overflow-total-wrap"><span class="cal-overflow-total-chip">'
-        '<span class="cal-overflow-total-label">Total servicio</span> · '
-        f'{html_mod.escape(_format_cop(total_amt))}</span></span>'
-    )
-    fire = ""
-    if bool(row.get("contract_pending_artist_signature")):
-        fire = '<span class="cal-overflow-fire-pending">Firma profesional pendiente</span>'
-    left_cluster = (
-        '<span class="cal-overflow-left">'
-        f'<span class="cal-overflow-hm">{html_mod.escape(hm)}</span><span>·</span>'
-        f"{svc_flag}<span>·</span>{pill}{staff_el}"
-        f"{fire}</span>"
-    )
-    return f'<div class="cal-overflow-row{muted}">{left_cluster}{total_box}</div>'
-
-
-def _calendar_cell_customer_label(full_name: str, *, long_from_len: int = 18) -> str:
-    """Texto compacto en celda del calendario: nombre completo si es corto; si no, solo el primer nombre."""
-    nm = (full_name or "").strip() or "—"
-    if nm == "—" or len(nm) <= long_from_len:
-        return nm
-    parts = nm.split()
-    if not parts:
-        return nm[: long_from_len - 1] + "…"
-    first = parts[0]
-    if len(first) > long_from_len:
-        return first[: long_from_len - 1] + "…"
-    return first
-
-
-def _group_calendar_day_rows_by_assigned_staff(
-    day_rows: list[dict[str, Any]],
-) -> list[tuple[str, list[dict[str, Any]]]]:
-    """Agrupa las citas del día por profesional asignado (orden de grupos = primera aparición en la línea de tiempo del día)."""
-    order_keys: list[Any] = []
-    buckets: dict[Any, list[dict[str, Any]]] = {}
-    labels: dict[Any, str] = {}
-
-    for r in day_rows:
-        raw = r.get("assigned_panel_user_id")
-        key: Any
-        try:
-            key = int(raw) if raw is not None and str(raw).strip() != "" else None
-        except (TypeError, ValueError):
-            key = None
-        if key is None:
-            key = "__unassigned__"
-            lab = "Sin asignar"
-        else:
-            lab = _assigned_artist_display_name(r)
-        if key not in buckets:
-            buckets[key] = []
-            order_keys.append(key)
-            labels[key] = lab
-        buckets[key].append(r)
-
-    return [(labels[k], buckets[k]) for k in order_keys]
-
-
-def _calendar_day_inner_body_html(
-    day_rows: list[dict[str, Any]],
-    counts_by_client: dict[str, int],
-    *,
-    team_layout: bool,
-) -> tuple[str, int]:
-    """HTML dentro de cal-day-inner: todas las citas del día; el alto fijo de la celda usa scroll."""
-    if not day_rows:
-        return "<div class='cal-day-empty'>—</div>", 0
-
-    chunks: list[str] = []
-    shown = 0
-
-    if team_layout:
-        for label, rows_g in _group_calendar_day_rows_by_assigned_staff(day_rows):
-            line_htmls: list[str] = []
-            for r in rows_g:
-                line_htmls.append(_calendar_appt_line_html(r, counts_by_client))
-                shown += 1
-            if line_htmls:
-                chunks.append(
-                    "<div class='cal-team-block'>"
-                    f"<div class='cal-team-label'>{html_mod.escape(label)}</div>"
-                    "<div class='cal-team-lines'>"
-                    f"{''.join(line_htmls)}"
-                    "</div></div>"
-                )
-    else:
-        for r in day_rows:
-            chunks.append(_calendar_appt_line_html(r, counts_by_client))
-            shown += 1
-
-    return "".join(chunks), shown
-
-
-def _calendar_appt_line_html(
-    row: dict[str, Any],
-    counts_by_client: dict[str, int],
-    *,
-    long_name_from: int = 16,
-) -> str:
-    """HTML de una línea en celda del calendario: rejilla hora | nombre | total (compacto)."""
-    hm = _appt_time_hm(row.get("appointment_date", row.get("date")))
-    nm = str(row.get("customer_name") or row.get("name") or "").strip() or "—"
-    short = _calendar_cell_customer_label(nm, long_from_len=long_name_from)
-    cls = _client_pill_class(row, counts_by_client)
-    st_cl = str(row.get("status") or "").strip().lower()
-    dim_cls = " cal-appt-line--muted" if st_cl == "cancelada" else ""
-    total_amt, _, _ = _financial_row_values(row)
-    price_lbl = _calendar_month_value_label(total_amt)
-    # Celda mensual: total en «miles» truncados, sin símbolo ni sufijo «k».
-    pill_inner = (
-        f'<span class="cli-pill {cls} cli-pill--cal-cell">{html_mod.escape(short)}</span>'
-    )
-    t_s = html_mod.escape(hm)
-    staff_lbl = _assigned_staff_label(row)
-    staff_part = f" · {staff_lbl}" if staff_lbl != "—" else ""
-    title = html_mod.escape(
-        f"{hm} · {nm}{staff_part} · Total: {_format_cop(total_amt)}"
-    )
-    price_esc = html_mod.escape(price_lbl)
-    return (
-        f"<div class='cal-appt-line{dim_cls}' title='{title}'>"
-        f"<span class='cal-appt-time'>{t_s}</span>"
-        f"<span class='cal-appt-pill-wrap'>{pill_inner}</span>"
-        f"<span class='cal-appt-total'>{price_esc}</span>"
-        "</div>"
-    )
-
-
-_MONTHS_ES = (
-    "",
-    "Enero",
-    "Febrero",
-    "Marzo",
-    "Abril",
-    "Mayo",
-    "Junio",
-    "Julio",
-    "Agosto",
-    "Septiembre",
-    "Octubre",
-    "Noviembre",
-    "Diciembre",
-)
-
-
-def _weekday_headers_es() -> List[str]:
-    return ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
 
 
 def _shift_years(base: date, years: int) -> date:
@@ -2577,699 +1323,21 @@ def _dialog_agendar_cita() -> None:
             st.rerun()
 
 
-def _calendar_fragment_rerun() -> None:
-    """Reejecutar solo el fragment del calendario si la versión de Streamlit lo permite."""
-    try:
-        st.rerun(scope="fragment")
-    except TypeError:
-        st.rerun()
-
-
-@st.fragment
 def _render_main_calendar(
     buckets: dict[tuple[int, int, int], list[dict[str, Any]]],
     counts_by_client: dict[str, int],
     *,
     team_layout: bool = False,
 ) -> None:
-    """Vista principal: mes con citas por día; al pulsar el día se abre el diálogo de agendamiento."""
-    ym_key = "_ap_cal_ym"
-    today = date.today()
-    if ym_key not in st.session_state:
-        st.session_state[ym_key] = (today.year, today.month)
-    y, m = st.session_state[ym_key]
-
-    st.markdown("##### Calendario de citas")
-
-    n1, n2, n3 = st.columns([1, 3, 1])
-    with n1:
-        if st.button("◀ Mes", key="cal_main_prev_m"):
-            _clear_calendar_dialog_focus()
-            if m <= 1:
-                st.session_state[ym_key] = (y - 1, 12)
-            else:
-                st.session_state[ym_key] = (y, m - 1)
-            _calendar_fragment_rerun()
-    with n2:
-        st.markdown(
-            f"<div style='text-align:center;font-weight:600;font-size:1.05rem'>{_MONTHS_ES[m]} {y}</div>",
-            unsafe_allow_html=True,
-        )
-    with n3:
-        if st.button("Mes ▶", key="cal_main_next_m"):
-            _clear_calendar_dialog_focus()
-            if m >= 12:
-                st.session_state[ym_key] = (y + 1, 1)
-            else:
-                st.session_state[ym_key] = (y, m + 1)
-            _calendar_fragment_rerun()
-
-    hdr_cells = st.columns(7, gap=None)
-    for i, lab in enumerate(_weekday_headers_es()):
-        hdr_cells[i].markdown(
-            f"<div class='cal-m-whcell'>{html_mod.escape(lab)}</div>",
-            unsafe_allow_html=True,
-        )
-    weeks_grid = calendar.monthcalendar(y, m)
-    allow_footer_book = _panel_is_technician_role() is False
-    for week in weeks_grid:
-        row_cells = st.columns(7, gap=None)
-        for i, d in enumerate(week):
-            with row_cells[i]:
-                if d == 0:
-                    st.markdown(
-                        "<div class='cal-cell-spacer cal-cell-spacer--month'></div>",
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    day_rows = buckets.get((y, m, d), [])
-                    picked_cell = date(y, m, d)
-                    today_cls = " cal-cell-today" if picked_cell == today else ""
-                    body, _shown = _calendar_day_inner_body_html(
-                        day_rows,
-                        counts_by_client,
-                        team_layout=team_layout,
-                    )
-                    is_past = picked_cell < date.today()
-                    footer_off = is_past or not allow_footer_book
-                    fh = html_mod.escape(
-                        "Los tatuadores y perforadores no pueden agendar desde el calendario"
-                        if not allow_footer_book
-                        else (
-                            "No se pueden agendar citas en fechas pasadas"
-                            if is_past
-                            else f"Agendar cita · {picked_cell.strftime('%d/%m/%Y')}"
-                        )
-                    )
-                    footer_html = _calendar_month_footer_strip_html(
-                        y,
-                        m,
-                        d,
-                        disabled_footer=footer_off,
-                        title_esc=fh,
-                    )
-                    st.markdown(
-                        f"<div class='cal-cell cal-cell--month{today_cls}'>"
-                        f"<div class='cal-cell-head'><span class='cal-cell-daynum'>"
-                        f"{html_mod.escape(str(d))}</span></div>"
-                        f"<div class='cal-day-inner'>{body}</div>"
-                        f"{footer_html}</div>",
-                        unsafe_allow_html=True,
-                    )
-    _render_calendar_month_hidden_book_widgets(y, m, weeks_grid)
-    _inject_calendar_month_footer_bridge()
-
-
-def _calendar_overflow_day_sheet_link_row(
-    r: dict[str, Any],
-    hist_counts: dict[str, int],
-    *,
-    key_suffix: str,
-) -> None:
-    """Resumen rápido + acceso al panel único de ficha/detalle."""
-    st.markdown(_calendar_overflow_row_html(r, hist_counts), unsafe_allow_html=True)
-    aid = int(r.get("id", 0) or 0)
-    c1, c2 = st.columns([1, 4])
-    with c1:
-        if st.button("Ficha completa", use_container_width=True, key=f"cal_day_open_sheet_{key_suffix}"):
-            st.session_state["_cal_focus_appt_id"] = aid
-            st.session_state.pop("_cal_overflow_day", None)
-            st.rerun()
-
-
-def _render_calendar_focus_appointment_body(r: dict[str, Any], hist_counts: dict[str, int]) -> None:
-    """Formulario único para ver/editar cita desde calendario (rejilla día / semana)."""
-    aid = int(r.get("id", 0) or 0)
-    if aid <= 0:
-        return
-    status_l = str(r.get("status") or "Agendada").strip()
-    montos_locked = aid <= 0 or status_l not in {"Agendada", "Reprogramada"}
-    firmar_disabled = _firmar_contrato_disabled(r)
-    firma_lbl = _firmar_contrato_button_label(r)
-    tech = _panel_is_technician_role()
-    aid_s = str(aid)
-
-    if tech:
-        st.markdown(_calendar_overflow_row_html(r, hist_counts), unsafe_allow_html=True)
-        if st.button(firma_lbl, use_container_width=True, key=f"fcd_tech_{aid_s}_firma", disabled=firmar_disabled):
-            _clear_calendar_dialog_focus()
-            _open_firma_contrato_nav(r, aid)
-        return
-
-    seed_k = "_fcd_seed_appt_id"
-    slot_opts = _time_slot_options()
-    today_d = date.today()
-    if st.session_state.get(seed_k) != aid:
-        st.session_state[seed_k] = aid
-        _, sl0 = _parse_existing_slot(r.get("appointment_date", r.get("date")))
-        if sl0 not in slot_opts and slot_opts:
-            sl0 = slot_opts[0]
-        dur0 = _duration_slots_for_existing_appointment(r)
-        last0 = _appointment_last_start_slot(sl0, dur0, slot_opts)
-        if last0 not in slot_opts:
-            last0 = sl0
-        plain = _appointment_detail_plain_body(str(r.get("detail") or ""))
-        dz0, obs0 = _split_design_obs_plain(plain)
-        st.session_state[f"fcd_start_{aid_s}"] = sl0
-        st.session_state[f"fcd_last_{aid_s}"] = last0
-        st.session_state[f"fcd_pri_{aid_s}"] = bool(_row_is_priority(r))
-        st.session_state[f"fcd_tot_{aid_s}"] = max(
-            int(_MIN_APPOINTMENT_TOTAL_COP), int(round(float(r.get("total_amount") or 0)))
-        )
-        st.session_state[f"fcd_dz_{aid_s}"] = dz0
-        st.session_state[f"fcd_obs_{aid_s}"] = obs0
-        wk_here = _work_kind_infer_from_existing_row(r)
-        role_need = _work_kind_to_assignee_role(wk_here)
-        staff_opts = [s for s in _ensure_assignable_staff() if str(s.get("role")) == role_need]
-        if not staff_opts:
-            staff_opts = list(_ensure_assignable_staff())
-        lbls_o: dict[int, str] = {}
-        opt_ids_o: list[int] = []
-        for s in staff_opts:
-            try:
-                oid = int(s.get("id") or 0)
-            except (TypeError, ValueError):
-                continue
-            if oid <= 0:
-                continue
-            opt_ids_o.append(oid)
-            fn = str(s.get("first_name") or "").strip()
-            ln = str(s.get("last_name") or "").strip()
-            lab = (fn + " " + ln).strip() or str(s.get("username") or f"#{oid}")
-            lbls_o[oid] = lab + f" (@{s.get('username') or oid})"
-        cur_id: Optional[int] = None
-        raw_as = r.get("assigned_panel_user_id")
-        if raw_as not in (None, "", 0):
-            try:
-                cur_id = int(raw_as)
-            except (TypeError, ValueError):
-                cur_id = None
-        if cur_id is not None and cur_id > 0 and cur_id not in lbls_o:
-            lbls_o[cur_id] = _assigned_artist_display_name(r) + " (historial)"
-            opt_ids_o = [cur_id] + [x for x in opt_ids_o if x != cur_id]
-        pick_art = cur_id if cur_id is not None and cur_id in lbls_o else (opt_ids_o[0] if opt_ids_o else None)
-        st.session_state[f"fcd_artpick_{aid_s}"] = int(pick_art) if pick_art is not None else 0
-
-        day_appt, hm_orig = _parse_existing_slot(r.get("appointment_date", r.get("date")))
-        hm_eff = hm_orig if hm_orig != "—" else "09:00"
-        dt_orig = _combine_appointment_datetime(day_appt, hm_eff)
-        base = {
-            "start": sl0,
-            "last": last0,
-            "prio": bool(_row_is_priority(r)),
-            "tot": max(int(_MIN_APPOINTMENT_TOTAL_COP), int(round(float(r.get("total_amount") or 0)))),
-            "artist": pick_art,
-            "dz": dz0,
-            "obs": obs0,
-            "dt_orig": dt_orig,
-            "dur": dur0,
-        }
-        st.session_state[f"fcd_base_{aid_s}"] = base
-
-    hdr_l, hdr_r = st.columns([3, 2])
-    with hdr_l:
-        st.markdown("### Cita")
-    with hdr_r:
-        st.markdown(
-            f"<div style='text-align:right'>{_format_appt_created_at(r.get('created_at'))}<br>"
-            f"{_status_pill_html(status_l)}</div>",
-            unsafe_allow_html=True,
-        )
-
-    cust: Optional[dict[str, Any]] = None
-    try:
-        cid_raw = r.get("customer_id")
-        if cid_raw:
-            cid = int(cid_raw)
-            ok_c, _, cdata = api_client.get_customer(cid)
-            if ok_c and isinstance(cdata, dict):
-                cust = cdata
-    except (TypeError, ValueError):
-        cust = None
-
-    if cust:
-        nm = (
-            str(cust.get("first_name") or "").strip() + " " + str(cust.get("last_name") or "").strip()
-        ).strip() or str(r.get("customer_name") or "").strip()
-        doc_lbl = str(cust.get("document_type") or "CC")
-        doc_n = str(cust.get("document_number") or "—").strip()
-        em = str(cust.get("email") or "—").strip()
-        cel = str(cust.get("phone_number") or r.get("phone") or "—").strip()
-        st.markdown(f"**Cliente:** {html_mod.escape(nm or '—')}")
-        st.caption(f"{doc_lbl} {doc_n} · ✉ {em} · 📱 {cel}")
-    else:
-        nm2 = str(r.get("customer_name") or r.get("name") or "—").strip()
-        cel2 = str(r.get("phone") or "—").strip()
-        st.markdown(f"**Cliente:** {html_mod.escape(nm2)} _(sin cliente vinculado o no cargado)_")
-        st.caption(f"📱 Teléfono en cita: **{cel2}**")
-
-    st.divider()
-
-    repro_lock = _reprogram_disabled_for_row(r) or status_l in {"Cancelada", "Finalizada"}
-    t1a, t1b = st.columns(2)
-    with t1a:
-        st.selectbox(
-            "Desde (inicio)",
-            options=slot_opts,
-            disabled=repro_lock,
-            key=f"fcd_start_{aid_s}",
-        )
-    with t1b:
-        st.selectbox(
-            "Hasta (última franja ocupada)",
-            options=slot_opts,
-            disabled=repro_lock,
-            key=f"fcd_last_{aid_s}",
-        )
-    if repro_lock:
-        st.caption("Horario bloqueado: estado cerrado o la cita no admite cambio de franja desde aquí.")
-
-    st.divider()
-
-    srv_l, srv_r = st.columns([4, 2])
-    with srv_l:
-        st.markdown("### Cita · servicio")
-    rc_key = f"{_AP_RECEIPTS_CACHE_PREFIX}{aid}"
-    cached_r = st.session_state.get(rc_key)
-    if not isinstance(cached_r, tuple) or len(cached_r) != 3:
-        cached_r = api_client.get_appointment_receipts(aid)
-        st.session_state[rc_key] = cached_r
-    ok_rr, _, rrows = cached_r
-    rec_txt = "—"
-    if ok_rr and isinstance(rrows, list):
-        ids_r = sorted(
-            int(x.get("id") or 0) for x in rrows if isinstance(x, dict) and int(x.get("id") or 0)
-        )
-        if ids_r:
-            rec_txt = ", ".join(str(x) for x in ids_r)
-    with srv_r:
-        st.caption(f"**Recibo id(s)** — solo lectura: {rec_txt}")
-
-    artist_locked = bool(r.get("has_signed_contract"))
-    lbls_reload = {}
-    role_need_r = _work_kind_to_assignee_role(_work_kind_infer_from_existing_row(r))
-    staff_reload = [s for s in _ensure_assignable_staff() if str(s.get("role")) == role_need_r] or list(
-        _ensure_assignable_staff()
+    """Delega en el `@st.fragment` del calendario mensual (`calendar_main_month`)."""
+    _render_main_calendar_impl(
+        buckets,
+        counts_by_client,
+        team_layout=team_layout,
+        clear_calendar_dialog_focus=_clear_calendar_dialog_focus,
+        panel_is_technician_role=_panel_is_technician_role,
+        pop_booking_document_session=_pop_booking_document_session,
     )
-    opt_ids_reload: list[int] = []
-    for s in staff_reload:
-        try:
-            oid = int(s.get("id") or 0)
-        except (TypeError, ValueError):
-            continue
-        if oid <= 0:
-            continue
-        fn = str(s.get("first_name") or "").strip()
-        ln = str(s.get("last_name") or "").strip()
-        lab = ((fn + " " + ln).strip() or str(s.get("username") or oid)) + f" (@{s.get('username') or oid})"
-        lbls_reload[oid] = lab
-        opt_ids_reload.append(oid)
-
-    sel_art = int(st.session_state.get(f"fcd_artpick_{aid_s}") or 0)
-    if sel_art not in lbls_reload and sel_art > 0:
-        lbls_reload[sel_art] = _assigned_artist_display_name(r)
-        opt_ids_reload = [sel_art] + [x for x in opt_ids_reload if x != sel_art]
-    ix_def = (
-        opt_ids_reload.index(sel_art)
-        if sel_art in opt_ids_reload
-        else 0
-    )
-    if not opt_ids_reload:
-        st.warning("No hay artistas configurados en el panel para este tipo de servicio.")
-    else:
-        st.selectbox(
-            "Artista",
-            options=opt_ids_reload,
-            index=min(ix_def, max(0, len(opt_ids_reload) - 1)),
-            format_func=lambda i: lbls_reload.get(int(i), str(i)),
-            disabled=montos_locked or artist_locked,
-            key=f"fcd_artpick_{aid_s}",
-        )
-
-    tot_min = max(int(_MIN_APPOINTMENT_TOTAL_COP), 1)
-    st.number_input(
-        "Valor del tatuaje / trabajo (COP, entero)",
-        min_value=float(tot_min),
-        step=10000.0,
-        disabled=montos_locked,
-        key=f"fcd_tot_{aid_s}",
-        format="%.0f",
-    )
-
-    _ = st.checkbox("Cita prioritaria", disabled=montos_locked, key=f"fcd_pri_{aid_s}")
-
-    _ = st.text_area("Descripción del diseño", disabled=montos_locked, height=90, key=f"fcd_dz_{aid_s}")
-    _ = st.text_area("Observaciones", disabled=montos_locked, height=80, key=f"fcd_obs_{aid_s}")
-
-    if artist_locked:
-        st.caption("El artista no se puede cambiar si ya existe contrato firmado en esta cita.")
-
-    st.divider()
-    st.markdown("##### Abonos")
-    okp, pcode, pays_raw = _get_appointment_payments_cached(aid)
-    if okp and isinstance(pays_raw, list) and pays_raw:
-        rows_view: list[dict[str, str]] = []
-        for pr in pays_raw:
-            pid = int(pr.get("id") or 0)
-            amt = float(pr.get("amount") or 0)
-            pon = pr.get("paid_on")
-            if hasattr(pon, "isoformat"):
-                d_show = pon.isoformat()[:10]  # type: ignore[attr-defined]
-            elif isinstance(pon, str) and len(pon) >= 10:
-                d_show = pon[:10]
-            else:
-                ca = pr.get("created_at")
-                ds = str(ca or "")[:10]
-                d_show = ds if ds else "—"
-            rows_view.append({"id": pid, "fecha_abono": d_show, "valor": _format_cop(amt), "nota": str(pr.get("note") or "")})
-        st.dataframe(rows_view, use_container_width=True, hide_index=True)
-    elif not okp:
-        st.warning(f"No se cargaron abonos (HTTP {pcode}).")
-    else:
-        st.caption("Aún no hay filas en el historial de abonos.")
-
-    if montos_locked is False:
-        new_pd, ncol = st.columns([2, 2])
-        with new_pd:
-            st.date_input("Fecha en que abona", min_value=today_d, format="DD/MM/YYYY", key=f"fcd_newpay_dt_{aid_s}")
-        with ncol:
-            st.number_input(
-                "Valor nuevo abono (COP)",
-                min_value=float(_MIN_APPOINTMENT_TOTAL_COP),
-                step=5000.0,
-                key=f"fcd_newpay_am_{aid_s}",
-                format="%.0f",
-            )
-        if st.button("➕ Agregar abono", key=f"fcd_newpay_btn_{aid_s}"):
-            paid_date = st.session_state.get(f"fcd_newpay_dt_{aid_s}")
-            amt_add = float(int(st.session_state.get(f"fcd_newpay_am_{aid_s}") or 0))
-            if amt_add < float(_MIN_APPOINTMENT_TOTAL_COP):
-                st.toast("El abono debe ser al menos el mínimo configurado.", icon="⚠️")
-            else:
-                iso = paid_date.isoformat() if hasattr(paid_date, "isoformat") else None
-                with st.spinner("Registrando abono…"):
-                    ok_pay, cd_pay, body_pay = api_client.post_appointment_payment(
-                        aid, amt_add, note=None, paid_on=iso
-                    )
-                if ok_pay:
-                    _purge_appointment_payment_caches()
-                    st.session_state.pop(f"{_AP_FIN_PAYMENTS_CACHE_PREFIX}{aid}", None)
-                    st.session_state.pop(seed_k, None)
-                    st.session_state["_ap_reload"] = True
-                    _queue_appointment_action_success(
-                        "**Abono registrado.** Revisa PDF en **Recibos** cuando corresponda."
-                    )
-                    st.rerun()
-                else:
-                    st.toast(f"Error HTTP {cd_pay}: {_api_error(body_pay)}", icon="❌")
-
-        pay_ids = []
-        if okp and isinstance(pays_raw, list):
-            pay_ids = [int(p.get("id") or 0) for p in pays_raw if int(p.get("id") or 0)]
-        lbl_pay = {"—": 0}
-        for pr in pays_raw if isinstance(pays_raw, list) else []:
-            pid = int(pr.get("id") or 0)
-            if pid <= 0:
-                continue
-            amt = float(pr.get("amount") or 0)
-            lbl_pay[f"#{pid} · {_format_cop(amt)}"] = pid
-        pick_lbl = st.selectbox("Editar un abono", options=list(lbl_pay.keys()), key=f"fcd_paypicklbl_{aid_s}")
-        pid_edit = lbl_pay[pick_lbl]
-        if pid_edit:
-            pr_hit = next(
-                (
-                    z
-                    for z in pays_raw
-                    if isinstance(z, dict) and int(z.get("id") or 0) == int(pid_edit)
-                ),
-                None,
-            )
-            if isinstance(pr_hit, dict):
-                st.number_input(
-                    "Nuevo valor (COP)",
-                    min_value=1.0,
-                    step=1000.0,
-                    key=f"fcd_patched_am_{aid_s}_{pid_edit}",
-                    format="%.0f",
-                )
-                st.date_input("Fecha efectiva abono", min_value=today_d, format="DD/MM/YYYY", key=f"fcd_patched_dt_{aid_s}_{pid_edit}")  # type: ignore[arg-type]
-                if st.button(f"Actualizar abono #{pid_edit}", key=f"fcd_patched_sv_{aid_s}_{pid_edit}"):
-                    n_am = float(int(st.session_state.get(f"fcd_patched_am_{aid_s}_{pid_edit}") or 0))
-                    nd_dt = st.session_state.get(f"fcd_patched_dt_{aid_s}_{pid_edit}")
-                    nd_iso = nd_dt.isoformat()[:10] if hasattr(nd_dt, "isoformat") else None
-                    ok_u, cu, bu = api_client.patch_appointment_payment(
-                        aid,
-                        pid_edit,
-                        amount=n_am,
-                        paid_on=nd_iso,
-                    )
-                    if ok_u:
-                        _purge_appointment_payment_caches()
-                        st.session_state.pop(f"{_AP_FIN_PAYMENTS_CACHE_PREFIX}{aid}", None)
-                        st.session_state.pop(seed_k, None)
-                        st.session_state["_ap_reload"] = True
-                        _queue_appointment_action_success("**Abono actualizado.**")
-                        st.rerun()
-                    else:
-                        st.toast(f"Error HTTP {cu}: {_api_error(bu)}", icon="❌")
-
-    b_now = dict(st.session_state.get(f"fcd_base_{aid_s}") or {})
-    cur_start_s = str(st.session_state.get(f"fcd_start_{aid_s}") or "")
-    cur_last_s = str(st.session_state.get(f"fcd_last_{aid_s}") or "")
-    cur_pri_b = bool(st.session_state.get(f"fcd_pri_{aid_s}") or False)
-    cur_tot_f = float(st.session_state.get(f"fcd_tot_{aid_s}") or 0)
-    cur_art_i = int(st.session_state.get(f"fcd_artpick_{aid_s}") or 0)
-    dz_cur = str(st.session_state.get(f"fcd_dz_{aid_s}") or "")
-    obs_cur = str(st.session_state.get(f"fcd_obs_{aid_s}") or "")
-    dur_now = (
-        _duration_slots_from_start_last(cur_start_s, cur_last_s, slot_opts)
-        if cur_start_s in slot_opts and cur_last_s in slot_opts
-        else int(b_now.get("dur") or _MIN_BOOKING_DURATION_SLOTS)
-    )
-    ds_day_appt, hm_row = _parse_existing_slot(r.get("appointment_date", r.get("date")))
-    new_booking_dt = (
-        _combine_appointment_datetime(ds_day_appt, cur_start_s) if cur_start_s != "—" else str(b_now.get("dt_orig") or "")
-    )
-    base_dur = int(b_now.get("dur") or _MIN_BOOKING_DURATION_SLOTS)
-    sched_need = montos_locked is False and (
-        (cur_start_s, cur_last_s) != (b_now.get("start"), b_now.get("last"))
-        or dur_now != base_dur
-        or (new_booking_dt and new_booking_dt != str(b_now.get("dt_orig") or ""))
-    )
-    text_dirty = dz_cur != str(b_now.get("dz") or "") or obs_cur != str(b_now.get("obs") or "")
-    art_dirty = cur_art_i != int(b_now.get("artist") or 0)
-    prio_dirty = cur_pri_b != bool(b_now.get("prio"))
-    tot_dirty_cop = (
-        montos_locked is False and int(round(cur_tot_f)) != int(b_now.get("tot") or 0)
-    )
-    form_dirty = bool(b_now) and (
-        sched_need or text_dirty or art_dirty or prio_dirty or tot_dirty_cop
-    )
-
-    st.divider()
-    st.markdown("##### Acciones")
-
-    leave_confirm = bool(st.session_state.get(f"fcd_confirm_leave_{aid_s}"))
-    if leave_confirm:
-        st.warning("Hay cambios sin guardar. Si sales ahora se descartan en esta pantalla (no en el servidor).")
-        cx1, cx2 = st.columns(2)
-        with cx1:
-            if st.button("Salir sin guardar", use_container_width=True, key=f"fcd_lvy_{aid_s}"):
-                st.session_state.pop(f"fcd_confirm_leave_{aid_s}", None)
-                st.session_state.pop(seed_k, None)
-                _clear_calendar_dialog_focus()
-                st.rerun()
-        with cx2:
-            if st.button("Seguir editando", use_container_width=True, key=f"fcd_lvn_{aid_s}"):
-                st.session_state.pop(f"fcd_confirm_leave_{aid_s}", None)
-                st.rerun()
-        return
-
-    detail_for_save = _rebuild_detail_for_patch(r, dz_cur, obs_cur, agenda_slots_override=dur_now)
-    detail_meta_only = detail_for_save if (not sched_need and text_dirty) else None
-
-    if montos_locked is False:
-
-        def _fcd_save_all() -> None:
-            if tot_dirty_cop:
-                nf = _find_appointment_row_by_id(aid) or r
-                dep_live = float(nf.get("deposit") or 0)
-                ttot = float(int(round(cur_tot_f)))
-                if dep_live > ttot + 0.01:
-                    st.toast("El valor total no puede ser menor que lo ya abonado.", icon="⚠️")
-                    return
-                pend = round(ttot - dep_live, 2)
-                ok_t, ct, bt = api_client.patch_appointment_financials(aid, ttot, dep_live, pend)
-                if not ok_t:
-                    st.toast(f"Montos (HTTP {ct}): {_api_error(bt)}", icon="❌")
-                    return
-            if sched_need:
-                ok_s, cs, bs = api_client.patch_appointment_reschedule(aid, new_booking_dt, detail_for_save)
-                if not ok_s:
-                    st.toast(f"Horario (HTTP {cs}): {_api_error(bs)}", icon="❌")
-                    return
-            meta_need = art_dirty or prio_dirty or detail_meta_only is not None
-            if meta_need:
-                ok_m, cm, bm = api_client.patch_appointment_meta(
-                    aid,
-                    assigned_panel_user_id=(cur_art_i if art_dirty else None),
-                    is_priority=cur_pri_b,
-                    detail=detail_meta_only,
-                )
-                if not ok_m:
-                    st.toast(f"Servicio/meta (HTTP {cm}): {_api_error(bm)}", icon="❌")
-                    return
-            st.session_state.pop(seed_k, None)
-            st.session_state["_ap_reload"] = True
-            _queue_appointment_action_success("**Cambios guardados en la cita.**")
-            st.rerun()
-
-        ba1, ba2, ba3, ba4 = st.columns(4)
-        with ba1:
-            if st.button("Guardar cambios", type="primary", use_container_width=True, key=f"fcd_sv_{aid_s}"):
-                _fcd_save_all()
-        with ba2:
-            anular_disabled = aid <= 0 or status_l in {"Cancelada", "Finalizada"}
-            if st.button(
-                "Cancelar cita",
-                use_container_width=True,
-                disabled=anular_disabled,
-                key=f"fcd_can_{aid_s}",
-            ):
-                st.session_state.pop(seed_k, None)
-                st.session_state.pop("_cal_focus_appt_id", None)
-                st.session_state["_ap_cancel_item"] = dict(r)
-                st.rerun()
-        with ba3:
-            if st.button(
-                "Enviar recibo",
-                use_container_width=True,
-                key=f"fcd_rc_{aid_s}",
-            ):
-                st.session_state["_ap_receipts_item"] = dict(r)
-                st.session_state.pop(seed_k, None)
-                st.session_state.pop("_cal_focus_appt_id", None)
-                st.rerun()
-        with ba4:
-            if st.button(
-                firma_lbl,
-                disabled=firmar_disabled,
-                use_container_width=True,
-                key=f"fcd_fr_{aid_s}",
-            ):
-                _clear_calendar_dialog_focus()
-                _open_firma_contrato_nav(dict(r), aid)
-
-        if st.button("Cerrar", use_container_width=True, key=f"fcd_close_{aid_s}"):
-            if form_dirty:
-                st.session_state[f"fcd_confirm_leave_{aid_s}"] = True
-                st.rerun()
-            st.session_state.pop(seed_k, None)
-            _clear_calendar_dialog_focus()
-            st.rerun()
-    else:
-        if st.button("Cerrar", use_container_width=True, key=f"fcd_close_ro_{aid_s}"):
-            st.session_state.pop(seed_k, None)
-            _clear_calendar_dialog_focus()
-            st.rerun()
-
-
-@st.dialog("Citas del día", width="large", dismissible=False)
-def _dialog_calendar_day_appointments(
-    buckets: dict[tuple[int, int, int], list[dict[str, Any]]],
-    hist_counts: dict[str, int],
-) -> None:
-    tup = st.session_state.get("_cal_overflow_day")
-    if not tup:
-        return
-    y, m, d = int(tup[0]), int(tup[1]), int(tup[2])
-    day_rows = list(buckets.get((y, m, d), []))
-    day_date = date(y, m, d)
-    if not day_rows:
-        st.info("No hay citas para este día con los filtros actuales.")
-        if st.button("Cerrar", key="cal_dlg_close_empty", use_container_width=True):
-            _clear_calendar_dialog_focus()
-            st.rerun()
-        return
-    st.markdown(f"**{day_date.strftime('%d/%m/%Y')}** · **{len(day_rows)}** cita(s)")
-    if _panel_is_technician_role():
-        st.caption(
-            "Como **tatuador / perforador** solo ves citas **desde hoy** con estado activo; aquí solo puedes "
-            "**Completar firma profesional** cuando recepción ya guardó el contrato del cliente. "
-            "El agendamiento, montos y reprogramación los gestiona administración o ventas."
-        )
-    else:
-        st.caption(
-            "Resumen de cada bloque **Cita**. Abre **Ficha completa** para ver datos del cliente, horario, montos y abonos."
-        )
-    for idx, r in enumerate(day_rows):
-        appt_id = int(r.get("id", 0) or 0)
-        _calendar_overflow_day_sheet_link_row(
-            r,
-            hist_counts,
-            key_suffix=f"{appt_id}_{y}_{m}_{d}_{idx}",
-        )
-        if idx < len(day_rows) - 1:
-            st.divider()
-    if st.button("Cerrar", key="cal_dlg_close", use_container_width=True):
-        _clear_calendar_dialog_focus()
-        st.rerun()
-
-
-@st.dialog("Cita", width="large", dismissible=False)
-def _dialog_calendar_single_appointment(
-    _buckets: dict[tuple[int, int, int], list[dict[str, Any]]],
-    hist_counts: dict[str, int],
-) -> None:
-    """Diálogo para una sola cita (desde ▸ en rejilla semanal o mes)."""
-    raw_id = st.session_state.get("_cal_focus_appt_id")
-    try:
-        aid = int(raw_id)
-    except (TypeError, ValueError):
-        aid = 0
-    if aid <= 0:
-        return
-    r = _find_appointment_row_by_id(aid)
-    if not r:
-        st.warning(
-            "No se encontró la cita en la lista actual. Pulsa **Actualizar** o abre de nuevo desde el calendario."
-        )
-        if st.button("Cerrar", key="cal_single_close_nf", use_container_width=True):
-            _clear_calendar_dialog_focus()
-            st.rerun()
-        return
-    try:
-        day_date = _parse_date(r.get("appointment_date", r.get("date")))
-    except (TypeError, ValueError):
-        day_date = date.today()
-    st.markdown(f"**{day_date.strftime('%d/%m/%Y')}** · Cita **#{aid}**")
-    if _panel_is_technician_role():
-        st.caption(
-            "Como **tatuador / perforador** solo ves citas **desde hoy** con estado activo; aquí solo puedes "
-            "**Completar firma profesional** cuando recepción ya guardó el contrato del cliente."
-        )
-    else:
-        st.caption("Edita horario (reprogramación), prioridad (pill), artista y abonos. **Guardar** aplica contra la API.")
-    _render_calendar_focus_appointment_body(r, hist_counts)
-
-
-_AP_FIN_PAYMENTS_CACHE_PREFIX = "_ap_fin_payments_"
-_AP_RECEIPTS_CACHE_PREFIX = "_ap_receipts_list_"
-
-
-def _purge_appointment_payment_caches() -> None:
-    """Evita historial de abonos obsoleto tras refrescar la lista de citas."""
-    for k in list(st.session_state.keys()):
-        if isinstance(k, str) and k.startswith(_AP_FIN_PAYMENTS_CACHE_PREFIX):
-            st.session_state.pop(k, None)
-
-
-def _purge_appointment_receipt_caches() -> None:
-    for k in list(st.session_state.keys()):
-        if not isinstance(k, str):
-            continue
-        if k.startswith(_AP_RECEIPTS_CACHE_PREFIX) or k.startswith("_ap_receipt_pdf_"):
-            st.session_state.pop(k, None)
 
 
 def _get_appointment_payments_cached(appt_id: int) -> tuple[bool, int, Any]:
@@ -3441,29 +1509,15 @@ def _apply_appointment_filters(
     service_key: str = "_ap_f_service",
     status_key: str = "_ap_f_status",
 ) -> list[dict[str, Any]]:
-    text = str(st.session_state.get(name_key) or "").strip().lower()
-    svc = str(st.session_state.get(service_key) or "Todos")
-    status = str(st.session_state.get(status_key) or "Todos")
-    from_date = st.session_state.get("_ap_f_from") if use_date_range else None
-    to_date = st.session_state.get("_ap_f_to") if use_date_range else None
-    filtered: list[dict[str, Any]] = []
-    for row in items:
-        name_value = str(row.get("customer_name", row.get("name", "")) or "")
-        service_value = str(row.get("service_type", row.get("service", "")) or "")
-        status_value = str(row.get("status") or "Agendada")
-        appt_date = _parse_date(row.get("appointment_date", row.get("date")))
-        if text and text not in name_value.lower():
-            continue
-        if svc != "Todos" and service_value != svc:
-            continue
-        if status != "Todos" and status_value != status:
-            continue
-        if from_date and appt_date < from_date:
-            continue
-        if to_date and appt_date > to_date:
-            continue
-        filtered.append(row)
-    return filtered
+    """Lee filtros desde `session_state` y delega en `filter_appointment_rows` (lógica pura)."""
+    return filter_appointment_rows(
+        items,
+        name_substr=str(st.session_state.get(name_key) or ""),
+        service=str(st.session_state.get(service_key) or "Todos"),
+        status=str(st.session_state.get(status_key) or "Todos"),
+        from_date=st.session_state.get("_ap_f_from") if use_date_range else None,
+        to_date=st.session_state.get("_ap_f_to") if use_date_range else None,
+    )
 
 
 def _cleanup_reprogram_dialog_state() -> None:
@@ -3889,7 +1943,7 @@ def _dialog_recibos_cita() -> None:
             when = when[:19]
         st.markdown(f"**{kind_es}** · {when or '—'} · **{_format_cop(amt)}**")
 
-        pdf_key = f"_ap_receipt_pdf_{appt_id}_{rid}"
+        pdf_key = f"{_AP_RECEIPT_PDF_PFX}{appt_id}_{rid}"
         if pdf_key not in st.session_state:
             ok_pdf, _pc, blob, fname = api_client.fetch_appointment_receipt_pdf(appt_id, rid)
             if ok_pdf and blob:
@@ -4335,10 +2389,41 @@ def _invoke_citas_tab_dialogs(
         _dialog_cancelar_cita()
     if st.session_state.get("_ap_receipts_item"):
         _dialog_recibos_cita()
-    if st.session_state.get("_cal_focus_appt_id"):
-        _dialog_calendar_single_appointment(by_day, hist_counts)
-    elif st.session_state.get("_cal_overflow_day"):
-        _dialog_calendar_day_appointments(by_day, hist_counts)
+    cal_focus_id = st.session_state.get("_cal_focus_appt_id")
+    cal_overflow = st.session_state.get("_cal_overflow_day")
+    if cal_focus_id or cal_overflow:
+        try:
+            set_calendar_focus_session_deps(
+                CalendarFocusDeps(
+                    panel_is_technician_role=_panel_is_technician_role,
+                    clear_calendar_dialog_focus=_clear_calendar_dialog_focus,
+                    open_firma_contrato_nav=_open_firma_contrato_nav,
+                    firmar_contrato_disabled=_firmar_contrato_disabled,
+                    firmar_contrato_button_label=_firmar_contrato_button_label,
+                    reprogram_disabled_for_row=_reprogram_disabled_for_row,
+                    appointment_detail_plain_body=_appointment_detail_plain_body,
+                    split_design_obs_plain=_split_design_obs_plain,
+                    rebuild_detail_for_patch=_rebuild_detail_for_patch,
+                    ensure_assignable_staff=_ensure_assignable_staff,
+                    work_kind_to_assignee_role=_work_kind_to_assignee_role,
+                    work_kind_infer_from_existing_row=_work_kind_infer_from_existing_row,
+                    find_appointment_row_by_id=_find_appointment_row_by_id,
+                    parse_date=_parse_date,
+                    get_appointment_payments_cached=_get_appointment_payments_cached,
+                    purge_appointment_payment_caches=_purge_appointment_payment_caches,
+                    queue_appointment_action_success=_queue_appointment_action_success,
+                    api_error=_api_error,
+                    min_appointment_total_cop=float(_MIN_APPOINTMENT_TOTAL_COP),
+                    receipts_cache_prefix=str(_AP_RECEIPTS_CACHE_PREFIX),
+                    fin_payments_cache_prefix=str(_AP_FIN_PAYMENTS_CACHE_PREFIX),
+                )
+            )
+            if cal_focus_id:
+                dialog_calendar_single_appointment(by_day, hist_counts)
+            else:
+                dialog_calendar_day_appointments(by_day, hist_counts)
+        finally:
+            clear_calendar_focus_session_deps()
     if st.session_state.get("_ap_dlg") == "create":
         _dialog_agendar_cita()
 
@@ -4576,6 +2661,12 @@ def render_citas_tab() -> None:
     _invoke_citas_tab_dialogs(by_day, hist_counts)
 
     if period_sel == "Semana (rejilla)":
-        _render_week_schedule_grid(by_day, hist_counts)
+        render_week_schedule_grid(
+            by_day,
+            hist_counts,
+            clear_calendar_dialog_focus=_clear_calendar_dialog_focus,
+            pop_booking_document_session=_pop_booking_document_session,
+            panel_is_technician_role=_panel_is_technician_role,
+        )
     else:
         _render_main_calendar(by_day, hist_counts, team_layout=team_layout)
