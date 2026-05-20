@@ -148,6 +148,7 @@ def _clear_calendar_dialog_focus() -> None:
     """Cierra diálogos de calendario asociados al día o a una cita concreta."""
     st.session_state.pop("_cal_overflow_day", None)
     st.session_state.pop("_cal_focus_appt_id", None)
+    clear_calendar_focus_session_deps()
 
 
 def _find_appointment_row_by_id(appt_id: int) -> Optional[dict[str, Any]]:
@@ -645,38 +646,38 @@ def _invoke_citas_tab_dialogs(
     cal_focus_id = st.session_state.get("_cal_focus_appt_id")
     cal_overflow = st.session_state.get("_cal_overflow_day")
     if cal_focus_id or cal_overflow:
-        try:
-            set_calendar_focus_session_deps(
-                CalendarFocusDeps(
-                    panel_is_technician_role=_panel_is_technician_role,
-                    clear_calendar_dialog_focus=_clear_calendar_dialog_focus,
-                    open_firma_contrato_nav=_open_firma_contrato_nav,
-                    firmar_contrato_disabled=_firmar_contrato_disabled,
-                    firmar_contrato_button_label=_firmar_contrato_button_label,
-                    reprogram_disabled_for_row=reprogram_disabled_for_row,
-                    appointment_detail_plain_body=_appointment_detail_plain_body,
-                    split_design_obs_plain=_split_design_obs_plain,
-                    rebuild_detail_for_patch=_rebuild_detail_for_patch,
-                    ensure_assignable_staff=ensure_assignable_staff,
-                    work_kind_to_assignee_role=work_kind_to_assignee_role,
-                    work_kind_infer_from_existing_row=work_kind_infer_from_existing_row,
-                    find_appointment_row_by_id=_find_appointment_row_by_id,
-                    parse_date=_parse_date,
-                    get_appointment_payments_cached=_get_appointment_payments_cached,
-                    purge_appointment_payment_caches=_purge_appointment_payment_caches,
-                    queue_appointment_action_success=_queue_appointment_action_success,
-                    api_error=format_http_error_detail,
-                    min_appointment_total_cop=float(MIN_APPOINTMENT_TOTAL_COP),
-                    receipts_cache_prefix=str(KEY_RECEIPTS_LIST_PFX),
-                    fin_payments_cache_prefix=str(KEY_FIN_PAYMENTS_PFX),
-                )
+        # No limpiar deps en finally: el cuerpo del @st.dialog corre en el mismo rerun y necesita _deps().
+        set_calendar_focus_session_deps(
+            CalendarFocusDeps(
+                panel_is_technician_role=_panel_is_technician_role,
+                clear_calendar_dialog_focus=_clear_calendar_dialog_focus,
+                open_firma_contrato_nav=_open_firma_contrato_nav,
+                firmar_contrato_disabled=_firmar_contrato_disabled,
+                firmar_contrato_button_label=_firmar_contrato_button_label,
+                reprogram_disabled_for_row=reprogram_disabled_for_row,
+                appointment_detail_plain_body=_appointment_detail_plain_body,
+                split_design_obs_plain=_split_design_obs_plain,
+                rebuild_detail_for_patch=_rebuild_detail_for_patch,
+                ensure_assignable_staff=ensure_assignable_staff,
+                work_kind_to_assignee_role=work_kind_to_assignee_role,
+                work_kind_infer_from_existing_row=work_kind_infer_from_existing_row,
+                find_appointment_row_by_id=_find_appointment_row_by_id,
+                parse_date=_parse_date,
+                get_appointment_payments_cached=_get_appointment_payments_cached,
+                purge_appointment_payment_caches=_purge_appointment_payment_caches,
+                queue_appointment_action_success=_queue_appointment_action_success,
+                api_error=format_http_error_detail,
+                min_appointment_total_cop=float(MIN_APPOINTMENT_TOTAL_COP),
+                receipts_cache_prefix=str(KEY_RECEIPTS_LIST_PFX),
+                fin_payments_cache_prefix=str(KEY_FIN_PAYMENTS_PFX),
             )
-            if cal_focus_id:
-                dialog_calendar_single_appointment(by_day, hist_counts)
-            else:
-                dialog_calendar_day_appointments(by_day, hist_counts)
-        finally:
-            clear_calendar_focus_session_deps()
+        )
+        if cal_focus_id:
+            dialog_calendar_single_appointment(by_day, hist_counts)
+        else:
+            dialog_calendar_day_appointments(by_day, hist_counts)
+    else:
+        clear_calendar_focus_session_deps()
     if st.session_state.get("_ap_dlg") == "create":
         dialog_agendar_cita()
 
