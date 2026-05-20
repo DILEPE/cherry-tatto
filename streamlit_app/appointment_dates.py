@@ -56,9 +56,22 @@ def format_appointment_created_at_display(val: Any) -> str:
     return s or "—"
 
 
+def format_api_datetime_compact_es(dt_str: str) -> str:
+    """Presentación corta para mensajes (YYYY-MM-DD HH:MM → DD/MM/YYYY HH:MM)."""
+    raw = (dt_str or "").strip().replace("T", " ")[:16]
+    if len(raw) < 16:
+        return raw or "—"
+    try:
+        dt = datetime.strptime(raw, "%Y-%m-%d %H:%M")
+        return dt.strftime("%d/%m/%Y %H:%M")
+    except ValueError:
+        return raw
+
+
 __all__ = [
     "appointment_row_date",
     "appointment_time_hm",
     "combine_appointment_datetime",
+    "format_api_datetime_compact_es",
     "format_appointment_created_at_display",
 ]

@@ -23,6 +23,10 @@ _KEY_SVC_VALUES = "_ap_svc_values"
 _KEY_FIN_PAYMENTS_PFX = "_ap_fin_payments_"
 _KEY_RECEIPTS_LIST_PFX = "_ap_receipts_list_"
 _KEY_RECEIPT_PDF_PFX = "_ap_receipt_pdf_"
+# Toast / mensajes tras acciones (persisten hasta consumir)
+_KEY_ACTION_INFO = "_ap_action_info"
+_KEY_TOAST_FETCH_ERR = "_ap_toast_fetch_err"
+_KEY_TOAST_FIN_SAVE_ERR = "_ap_toast_fin_save_err"
 
 # Export para imports explícitos
 KEY_LIST = _KEY_LIST
@@ -34,8 +38,12 @@ KEY_SVC_VALUES = _KEY_SVC_VALUES
 KEY_FIN_PAYMENTS_PFX = _KEY_FIN_PAYMENTS_PFX
 KEY_RECEIPTS_LIST_PFX = _KEY_RECEIPTS_LIST_PFX
 KEY_RECEIPT_PDF_PFX = _KEY_RECEIPT_PDF_PFX
+KEY_ACTION_INFO = _KEY_ACTION_INFO
+KEY_TOAST_FETCH_ERR = _KEY_TOAST_FETCH_ERR
+KEY_TOAST_FIN_SAVE_ERR = _KEY_TOAST_FIN_SAVE_ERR
 
 __all__ = [
+    "KEY_ACTION_INFO",
     "KEY_ERR",
     "KEY_FIN_PAYMENTS_PFX",
     "KEY_HIST_COUNTS",
@@ -44,5 +52,7 @@ __all__ = [
     "KEY_RECEIPTS_LIST_PFX",
     "KEY_RECEIPT_PDF_PFX",
     "KEY_RELOAD",
+    "KEY_TOAST_FETCH_ERR",
+    "KEY_TOAST_FIN_SAVE_ERR",
     "KEY_SVC_VALUES",
 ]

@@ -32,7 +32,7 @@ streamlit_app/
 │   └── calendar_main_month.py # `@st.fragment` calendario mensual (rejilla + `MONTHS_ES`)
 ├── state/
 │   ├── appointment_keys.py  # Contrato `_ap_*` (documentación hasta mover sync/form)
-│   ├── appointment_cache.py # purge_appointment_payment_caches / purge_appointment_receipt_caches
+│   ├── appointment_cache.py # purge cachés abonos/recibos + get_appointment_payments_cached por cita
 │   ├── appointments.py      # Pendiente: fetch / sync
 │   └── form_state.py        # Pendiente: formulario nueva cita
 ├── appointment_dates.py       # fecha/hora normalizada desde filas API (`appointment_row_date`, …)
@@ -41,7 +41,22 @@ streamlit_app/
 ├── appointment_filters.py     # `filter_appointment_rows` (sin `session_state`; orquestador aplica filtros)
 ├── appointment_staff_labels.py  # etiquetas artista/asignado
 ├── citas_financial_export.py  # XLSX financiero del panel Citas (`citas_filtered_to_excel_bytes`)
-├── citas_tab.py             # Orquestador principal + diálogos hasta Fase 5
+├── citas_booking_meta.py      # work kinds al agendar (servicio API + etiqueta detalle)
+├── citas_panel_staff.py       # `ensure_assignable_staff`
+├── citas_schedule_queries.py # ocupación por día/profesional para huecos en agenda
+├── citas_row_policy.py       # políticas UI por fila (p. ej. reprogramación)
+├── citas_agendar_dialog.py    # Orquestador @st.dialog; reexporta API agendar estable
+├── citas_agendar_state.py     # `ap_*`: init/pop/reset, cola mensaje tras crear cita
+├── citas_agendar_pure.py       # texto detalle desde diseño+notas; clamp franjas 30 min
+├── citas_agendar_helpers.py   # `show_validation_errors`, helpers que leen `session_state`
+├── citas_agendar_customer.py # `booking_customer_create_for_existing_client`
+├── citas_agendar_sections.py  # Piezas Streamlit recomponibles (`render_agendar_booking_form_body`, …)
+├── citas_agendar_submit.py    # `handle_agendar_booking_submit`, pie Crear/Cancelar
+├── citas_detail_dialogs.py   # reprogramar, montos, anular, recibos
+├── http_error_detail.py      # texto corto errores HTTP (JSON API)
+├── reporte_finanzas_citas.py # bloque Finanzas en pestaña Reporte
+├── survey_question_stats_report.py  # subsección Encuestas del Reporte
+├── citas_tab.py             # orquestador: calendario, invocación de diálogos, warm session
 └── reporte_tab.py           # Reexport hasta separar vistas de informe financiero
 ```
 
