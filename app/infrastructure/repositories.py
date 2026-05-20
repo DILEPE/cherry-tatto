@@ -483,6 +483,36 @@ class AppointmentRepository:
         finally:
             if conn: conn.close()
 
+    def patch_appointment_meta(
+        self,
+        appointment_id: int,
+        *,
+        is_priority: bool,
+        assigned_panel_user_id: Optional[int] = None,
+        detail: Optional[str] = None,
+    ) -> None:
+        """Actualiza prioridad siempre y, opcionalmente, profesional asignado o detalle."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            clauses: list[str] = ["is_priority = %s"]
+            params: list[object] = [1 if is_priority else 0]
+            if assigned_panel_user_id is not None:
+                clauses.append("assigned_panel_user_id = %s")
+                params.append(assigned_panel_user_id)
+            if detail is not None:
+                clauses.append("detail = %s")
+                params.append(detail)
+            params.append(appointment_id)
+            cursor.execute(
+                f"UPDATE appointments SET {', '.join(clauses)} WHERE id = %s",
+                tuple(params),
+            )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
     def update_financials(self, appointment_id: int, total_amount: float, deposit: float, pending_balance: float) -> None:
         conn = self.db.get_connection()
         try:
@@ -508,10 +538,10 @@ class AppointmentRepository:
             cursor = self._get_cursor(conn, dictionary=True)
             cursor.execute(
                 """
-                SELECT id, appointment_id, amount, note, created_at
+                SELECT id, appointment_id, amount, note, paid_on, created_at
                 FROM appointment_payments
                 WHERE appointment_id = %s
-                ORDER BY created_at ASC, id ASC
+                ORDER BY COALESCE(paid_on, DATE(created_at)) ASC, created_at ASC, id ASC
                 """,
                 (appointment_id,),
             )
@@ -520,16 +550,22 @@ class AppointmentRepository:
             if conn:
                 conn.close()
 
-    def create_payment(self, appointment_id: int, amount: float, note: Optional[str] = None) -> int:
+    def create_payment(
+        self,
+        appointment_id: int,
+        amount: float,
+        note: Optional[str] = None,
+        paid_on: Optional[date] = None,
+    ) -> int:
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn)
             cursor.execute(
                 """
-                INSERT INTO appointment_payments (appointment_id, amount, note)
-                VALUES (%s, %s, %s)
+                INSERT INTO appointment_payments (appointment_id, amount, note, paid_on)
+                VALUES (%s, %s, %s, %s)
                 """,
-                (appointment_id, amount, note),
+                (appointment_id, amount, note, paid_on),
             )
             new_pid = int(cursor.lastrowid or 0)
             cursor.execute(
@@ -546,6 +582,97 @@ class AppointmentRepository:
         finally:
             if conn:
                 conn.close()
+
+    def sync_appointment_deposit_totals_from_payments(self, appointment_id: int) -> None:
+        """Recalcula deposit/pending desde la suma real de appointment_payments."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=False)
+            cursor.execute(
+                """
+                SELECT COALESCE(SUM(amount), 0)
+                FROM appointment_payments
+                WHERE appointment_id = %s
+                """,
+                (appointment_id,),
+            )
+            r1 = cursor.fetchone()
+            paid_sum = float(r1[0] or 0) if r1 else 0.0
+            cursor.execute(
+                "SELECT COALESCE(total_amount, 0) FROM appointments WHERE id = %s",
+                (appointment_id,),
+            )
+            r2 = cursor.fetchone()
+            total_amount = float(r2[0] or 0) if r2 else 0.0
+            dep = round(paid_sum, 2)
+            pending = round(max(total_amount - dep, 0.0), 2)
+            cursor.execute(
+                """
+                UPDATE appointments
+                SET deposit = %s,
+                    pending_balance = %s
+                WHERE id = %s
+                """,
+                (dep, pending, appointment_id),
+            )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
+    def get_payment_by_id(self, payment_id: int) -> Optional[dict[str, object]]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                "SELECT id, appointment_id, amount, note, paid_on, created_at FROM appointment_payments WHERE id = %s",
+                (int(payment_id),),
+            )
+            row = cursor.fetchone()
+            return row if isinstance(row, dict) else None
+        finally:
+            if conn:
+                conn.close()
+
+    def patch_payment_row(
+        self,
+        payment_id: int,
+        *,
+        amount: Optional[float] = None,
+        note: Any = "__NO_NOTE_CHANGE__",
+        paid_on: Any = "__NO_PAID_CHANGE__",
+    ) -> int:
+        """Devuelve appointment_id tras actualizar montos/metadata del abono y sincronizar totales."""
+        row = self.get_payment_by_id(payment_id)
+        if not row:
+            raise ValueError("Abono no encontrado")
+        appt_id = int(row["appointment_id"])
+        parts: list[str] = []
+        vals: list[object] = []
+        if amount is not None:
+            parts.append("amount = %s")
+            vals.append(float(amount))
+        if note != "__NO_NOTE_CHANGE__":
+            parts.append("note = %s")
+            vals.append(note)
+        if paid_on != "__NO_PAID_CHANGE__":
+            parts.append("paid_on = %s")
+            vals.append(paid_on)
+        if not parts:
+            self.sync_appointment_deposit_totals_from_payments(appt_id)
+            return appt_id
+        vals.append(int(payment_id))
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            sql_set = ", ".join(parts)
+            cursor.execute(f"UPDATE appointment_payments SET {sql_set} WHERE id = %s", tuple(vals))
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+        self.sync_appointment_deposit_totals_from_payments(appt_id)
+        return appt_id
 
     def insert_payment_ledger_row_only(
         self, appointment_id: int, amount: float, note: Optional[str] = None

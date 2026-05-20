@@ -69,6 +69,37 @@ class DatabaseManager:
         finally:
             conn.close()
 
+    def ensure_appointment_payment_paid_on_column(self) -> None:
+        """Añade paid_on DATE en appointment_payments para registrar día del abono (opcional)."""
+        conn = self.get_connection()
+        if conn is None:
+            return
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'appointment_payments'
+                  AND COLUMN_NAME = 'paid_on'
+                """
+            )
+            row = cur.fetchone()
+            if row and int(row[0]) == 0:
+                cur.execute(
+                    """
+                    ALTER TABLE appointment_payments
+                    ADD COLUMN paid_on DATE NULL COMMENT 'Fecha en que el cliente abona'
+                    AFTER note
+                    """
+                )
+                conn.commit()
+                print("[DB] appointment_payments.paid_on añadida")
+        except Exception as e:
+            print(f"[DB] Migración appointment_payments.paid_on omitida o ya aplicada: {e}")
+        finally:
+            conn.close()
+
     def get_connection(self) -> MySQLConnection | None:
         try:
             return mysql.connector.connect(**self.config)
