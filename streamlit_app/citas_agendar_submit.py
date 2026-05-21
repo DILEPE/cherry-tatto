@@ -50,15 +50,18 @@ def render_agendar_create_cancel_footer(*, picked: date, today_d: date) -> None:
 
 def handle_agendar_booking_submit(*, picked: date, today_d: date) -> None:
     if not st.session_state.get("_ap_doc_verified"):
-        st.error("Debes verificar el documento antes de crear la cita.")
+        st.error("Debes verificar la identificación del cliente antes de crear la cita.")
         return
     doc_in = (st.session_state.get("ap_doc_number") or "").strip()
     if len(doc_in) < 5:
-        st.error("El número de documento no es válido.")
+        st.error("El número de identificación del cliente no es válido.")
         return
     snap = (st.session_state.get("_ap_verified_doc_number") or "").strip()
     if snap and snap != doc_in:
-        st.error("El documento cambió respecto al verificado. Pulsa de nuevo «Verificar documento».")
+        st.error(
+            "El número de identificación cambió respecto al verificado. "
+            "Pulsa de nuevo «Verificar identificación»."
+        )
         return
     cust_id = st.session_state.get("_ap_booking_customer_id")
     need_new = bool(st.session_state.get("_ap_need_new_customer"))
@@ -144,7 +147,8 @@ def handle_agendar_booking_submit(*, picked: date, today_d: date) -> None:
         snap_dict = st.session_state.get("_ap_booking_customer_snapshot")
         if not isinstance(snap_dict, dict) or int(snap_dict.get("id") or 0) != int(cust_id):
             st.error(
-                "Los datos del cliente no coinciden con la verificación. Pulsa **Verificar documento** de nuevo."
+                "Los datos del cliente no coinciden con la verificación. "
+                "Pulsa **Verificar identificación** de nuevo."
             )
             return
         try:
@@ -186,7 +190,7 @@ def handle_agendar_booking_submit(*, picked: date, today_d: date) -> None:
             return
         appt_payload["customer"] = c_new.model_dump(mode="json")
     else:
-        st.error("Verifica el documento antes de crear la cita.")
+        st.error("Verifica la identificación del cliente antes de crear la cita.")
         return
 
     with st.spinner("Guardando cita…"):

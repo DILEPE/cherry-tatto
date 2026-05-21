@@ -9,7 +9,6 @@ from typing import Any, Callable, Optional
 
 import streamlit as st
 
-from app.domain.appointment_money import appointment_financial_totals, format_cop
 from streamlit_app import api_client
 from streamlit_app.appointment_agenda_slots import MIN_BOOKING_DURATION_SLOTS, duration_slots_for_existing_appointment
 from streamlit_app.appointment_dates import (
@@ -24,6 +23,8 @@ from streamlit_app.appointment_slots import (
     parse_existing_appointment_slot,
     time_slot_options,
 )
+from streamlit_app.components.appointment_payments_block import render_appointment_abonos_section
+from streamlit_app.state.appointment_keys import KEY_RECEIPT_PDF_PFX
 from streamlit_app.components.calendar_cells import calendar_overflow_row_html
 from streamlit_app.components.pills import row_is_priority, status_pill_html
 
@@ -178,6 +179,8 @@ def render_calendar_focus_appointment_body(r: dict[str, Any], hist_counts: dict[
         }
         st.session_state[f"fcd_base_{aid_s}"] = base
 
+    st.markdown('<div class="ap-ficha-panel-root" aria-hidden="true"></div>', unsafe_allow_html=True)
+
     hdr_l, hdr_r = st.columns([3, 2])
     with hdr_l:
         st.markdown("### Cita")
@@ -187,6 +190,8 @@ def render_calendar_focus_appointment_body(r: dict[str, Any], hist_counts: dict[
             f"{status_pill_html(status_l)}</div>",
             unsafe_allow_html=True,
         )
+
+    st.markdown('<p class="ap-ficha-section-band">Cliente</p>', unsafe_allow_html=True)
 
     cust: Optional[dict[str, Any]] = None
     try:
@@ -215,9 +220,17 @@ def render_calendar_focus_appointment_body(r: dict[str, Any], hist_counts: dict[
         st.markdown(f"**Cliente:** {html_mod.escape(nm2)} _(sin cliente vinculado o no cargado)_")
         st.caption(f"📱 Teléfono en cita: **{cel2}**")
 
-    st.divider()
-
     repro_lock = deps.reprogram_disabled_for_row(r) or status_l in {"Cancelada", "Finalizada"}
+    st.markdown('<p class="ap-ficha-section-band">Horario</p>', unsafe_allow_html=True)
+    h_sched_a, h_sched_b = st.columns(2, vertical_alignment="center")
+    h_sched_a.markdown(
+        '<span class="ap-ficha-col-head ap-ficha-col-head--wide">Desde (inicio)</span>',
+        unsafe_allow_html=True,
+    )
+    h_sched_b.markdown(
+        '<span class="ap-ficha-col-head ap-ficha-col-head--wide">Hasta (última franja ocupada)</span>',
+        unsafe_allow_html=True,
+    )
     t1a, t1b = st.columns(2)
     with t1a:
         st.selectbox(
@@ -236,11 +249,7 @@ def render_calendar_focus_appointment_body(r: dict[str, Any], hist_counts: dict[
     if repro_lock:
         st.caption("Horario bloqueado: estado cerrado o la cita no admite cambio de franja desde aquí.")
 
-    st.divider()
-
-    srv_l, srv_r = st.columns([4, 2])
-    with srv_l:
-        st.markdown("### Cita · servicio")
+    st.markdown('<p class="ap-ficha-section-band">Cita · servicio</p>', unsafe_allow_html=True)
     rc_key = f"{deps.receipts_cache_prefix}{aid}"
     cached_r = st.session_state.get(rc_key)
     if not isinstance(cached_r, tuple) or len(cached_r) != 3:
@@ -254,8 +263,7 @@ def render_calendar_focus_appointment_body(r: dict[str, Any], hist_counts: dict[
         )
         if ids_r:
             rec_txt = ", ".join(str(x) for x in ids_r)
-    with srv_r:
-        st.caption(f"**Recibo id(s)** — solo lectura: {rec_txt}")
+    st.caption(f"**Recibo id(s)** — solo lectura: {rec_txt}")
 
     artist_locked = bool(r.get("has_signed_contract"))
     lbls_reload = {}
@@ -286,170 +294,60 @@ def render_calendar_focus_appointment_body(r: dict[str, Any], hist_counts: dict[
         if sel_art in opt_ids_reload
         else 0
     )
-    if not opt_ids_reload:
-        st.warning("No hay artistas configurados en el panel para este tipo de servicio.")
-    else:
-        st.selectbox(
-            "Artista",
-            options=opt_ids_reload,
-            index=min(ix_def, max(0, len(opt_ids_reload) - 1)),
-            format_func=lambda i: lbls_reload.get(int(i), str(i)),
-            disabled=montos_locked or artist_locked,
-            key=f"fcd_artpick_{aid_s}",
+
+    svc_left, svc_right = st.columns(2, gap="medium")
+    with svc_left:
+        if not opt_ids_reload:
+            st.warning("No hay artistas configurados en el panel para este tipo de servicio.")
+        else:
+            st.selectbox(
+                "Artista",
+                options=opt_ids_reload,
+                index=min(ix_def, max(0, len(opt_ids_reload) - 1)),
+                format_func=lambda i: lbls_reload.get(int(i), str(i)),
+                disabled=montos_locked or artist_locked,
+                key=f"fcd_artpick_{aid_s}",
+            )
+        st.number_input(
+            "Valor del tatuaje / trabajo (COP, entero)",
+            min_value=0.0,
+            step=10000.0,
+            disabled=montos_locked,
+            key=f"fcd_tot_{aid_s}",
+            format="%.0f",
+            help="Sin mínimo de agendamiento; el abonado acumulado no puede superar este total.",
+        )
+        _ = st.checkbox("Cita prioritaria", disabled=montos_locked, key=f"fcd_pri_{aid_s}")
+        if artist_locked:
+            st.caption("El artista no se puede cambiar si ya existe contrato firmado en esta cita.")
+    with svc_right:
+        _ = st.text_area(
+            "Descripción del diseño",
+            disabled=montos_locked,
+            height=120,
+            key=f"fcd_dz_{aid_s}",
+        )
+        _ = st.text_area(
+            "Observaciones",
+            disabled=montos_locked,
+            height=100,
+            key=f"fcd_obs_{aid_s}",
         )
 
-    st.number_input(
-        "Valor del tatuaje / trabajo (COP, entero)",
-        min_value=0.0,
-        step=10000.0,
-        disabled=montos_locked,
-        key=f"fcd_tot_{aid_s}",
-        format="%.0f",
-        help="Sin mínimo de agendamiento; el abonado acumulado no puede superar este total.",
+    render_appointment_abonos_section(
+        aid=aid,
+        appointment_row=deps.find_appointment_row_by_id(aid) or r,
+        montos_locked=montos_locked,
+        today=today_d,
+        get_payments_cached=deps.get_appointment_payments_cached,
+        purge_payment_caches=deps.purge_appointment_payment_caches,
+        fin_payments_cache_prefix=deps.fin_payments_cache_prefix,
+        receipts_cache_prefix=deps.receipts_cache_prefix,
+        receipt_pdf_cache_prefix=KEY_RECEIPT_PDF_PFX,
+        queue_success=deps.queue_appointment_action_success,
+        api_error=deps.api_error,
+        seed_reload_key=seed_k,
     )
-
-    _ = st.checkbox("Cita prioritaria", disabled=montos_locked, key=f"fcd_pri_{aid_s}")
-
-    _ = st.text_area("Descripción del diseño", disabled=montos_locked, height=90, key=f"fcd_dz_{aid_s}")
-    _ = st.text_area("Observaciones", disabled=montos_locked, height=80, key=f"fcd_obs_{aid_s}")
-
-    if artist_locked:
-        st.caption("El artista no se puede cambiar si ya existe contrato firmado en esta cita.")
-
-    st.divider()
-    st.markdown("##### Abonos")
-    okp, pcode, pays_raw = deps.get_appointment_payments_cached(aid)
-    if okp and isinstance(pays_raw, list) and pays_raw:
-        rows_view: list[dict[str, str]] = []
-        for pr in pays_raw:
-            pid = int(pr.get("id") or 0)
-            amt = float(pr.get("amount") or 0)
-            pon = pr.get("paid_on")
-            if hasattr(pon, "isoformat"):
-                d_show = pon.isoformat()[:10]  # type: ignore[attr-defined]
-            elif isinstance(pon, str) and len(pon) >= 10:
-                d_show = pon[:10]
-            else:
-                ca = pr.get("created_at")
-                ds = str(ca or "")[:10]
-                d_show = ds if ds else "—"
-            rows_view.append({"id": pid, "fecha_abono": d_show, "valor": format_cop(amt), "nota": str(pr.get("note") or "")})
-        st.dataframe(rows_view, use_container_width=True, hide_index=True)
-    elif not okp:
-        st.warning(f"No se cargaron abonos (HTTP {pcode}).")
-    else:
-        st.caption("Aún no hay filas en el historial de abonos.")
-
-    if montos_locked is False:
-        pay_row_live = deps.find_appointment_row_by_id(aid) or r
-        tot_for_pay = float(st.session_state.get(f"fcd_tot_{aid_s}") or pay_row_live.get("total_amount") or 0)
-        _, dep_for_pay, pend_for_pay = appointment_financial_totals(
-            {**pay_row_live, "total_amount": tot_for_pay}
-        )
-        can_add_pay = pend_for_pay > 0.009
-        if not can_add_pay:
-            st.info("Trabajo cubierto: no hay saldo pendiente; no se pueden agregar abonos adicionales.")
-        new_pd, ncol = st.columns([2, 2])
-        with new_pd:
-            st.date_input(
-                "Fecha en que abona",
-                min_value=today_d,
-                format="DD/MM/YYYY",
-                key=f"fcd_newpay_dt_{aid_s}",
-                disabled=not can_add_pay,
-            )
-        with ncol:
-            st.number_input(
-                "Valor nuevo abono (COP)",
-                min_value=1.0 if can_add_pay else 0.0,
-                max_value=float(pend_for_pay) if can_add_pay else 0.0,
-                step=5000.0,
-                key=f"fcd_newpay_am_{aid_s}",
-                format="%.0f",
-                disabled=not can_add_pay,
-                help=(
-                    f"Saldo pendiente: {format_cop(pend_for_pay)} (abonado: {format_cop(dep_for_pay)})."
-                    if can_add_pay
-                    else "Saldo pendiente en cero."
-                ),
-            )
-        if st.button("➕ Agregar abono", key=f"fcd_newpay_btn_{aid_s}", disabled=not can_add_pay):
-            paid_date = st.session_state.get(f"fcd_newpay_dt_{aid_s}")
-            amt_add = float(int(st.session_state.get(f"fcd_newpay_am_{aid_s}") or 0))
-            if amt_add <= 0:
-                st.toast("El abono debe ser mayor a cero.", icon="⚠️")
-            elif amt_add > pend_for_pay + 0.01:
-                st.toast(
-                    f"El abono no puede superar el saldo pendiente ({format_cop(pend_for_pay)}).",
-                    icon="⚠️",
-                )
-            else:
-                iso = paid_date.isoformat() if hasattr(paid_date, "isoformat") else None
-                with st.spinner("Registrando abono…"):
-                    ok_pay, cd_pay, body_pay = api_client.post_appointment_payment(
-                        aid, amt_add, note=None, paid_on=iso
-                    )
-                if ok_pay:
-                    deps.purge_appointment_payment_caches()
-                    st.session_state.pop(f"{deps.fin_payments_cache_prefix}{aid}", None)
-                    st.session_state.pop(seed_k, None)
-                    st.session_state["_ap_reload"] = True
-                    deps.queue_appointment_action_success(
-                        "**Abono registrado.** Revisa PDF en **Recibos** cuando corresponda."
-                    )
-                    st.rerun()
-                else:
-                    st.toast(f"Error HTTP {cd_pay}: {deps.api_error(body_pay)}", icon="❌")
-
-        pay_ids = []
-        if okp and isinstance(pays_raw, list):
-            pay_ids = [int(p.get("id") or 0) for p in pays_raw if int(p.get("id") or 0)]
-        lbl_pay = {"—": 0}
-        for pr in pays_raw if isinstance(pays_raw, list) else []:
-            pid = int(pr.get("id") or 0)
-            if pid <= 0:
-                continue
-            amt = float(pr.get("amount") or 0)
-            lbl_pay[f"#{pid} · {format_cop(amt)}"] = pid
-        pick_lbl = st.selectbox("Editar un abono", options=list(lbl_pay.keys()), key=f"fcd_paypicklbl_{aid_s}")
-        pid_edit = lbl_pay[pick_lbl]
-        if pid_edit:
-            pr_hit = next(
-                (
-                    z
-                    for z in pays_raw
-                    if isinstance(z, dict) and int(z.get("id") or 0) == int(pid_edit)
-                ),
-                None,
-            )
-            if isinstance(pr_hit, dict):
-                st.number_input(
-                    "Nuevo valor (COP)",
-                    min_value=1.0,
-                    step=1000.0,
-                    key=f"fcd_patched_am_{aid_s}_{pid_edit}",
-                    format="%.0f",
-                )
-                st.date_input("Fecha efectiva abono", min_value=today_d, format="DD/MM/YYYY", key=f"fcd_patched_dt_{aid_s}_{pid_edit}")  # type: ignore[arg-type]
-                if st.button(f"Actualizar abono #{pid_edit}", key=f"fcd_patched_sv_{aid_s}_{pid_edit}"):
-                    n_am = float(int(st.session_state.get(f"fcd_patched_am_{aid_s}_{pid_edit}") or 0))
-                    nd_dt = st.session_state.get(f"fcd_patched_dt_{aid_s}_{pid_edit}")
-                    nd_iso = nd_dt.isoformat()[:10] if hasattr(nd_dt, "isoformat") else None
-                    ok_u, cu, bu = api_client.patch_appointment_payment(
-                        aid,
-                        pid_edit,
-                        amount=n_am,
-                        paid_on=nd_iso,
-                    )
-                    if ok_u:
-                        deps.purge_appointment_payment_caches()
-                        st.session_state.pop(f"{deps.fin_payments_cache_prefix}{aid}", None)
-                        st.session_state.pop(seed_k, None)
-                        st.session_state["_ap_reload"] = True
-                        deps.queue_appointment_action_success("**Abono actualizado.**")
-                        st.rerun()
-                    else:
-                        st.toast(f"Error HTTP {cu}: {deps.api_error(bu)}", icon="❌")
 
     b_now = dict(st.session_state.get(f"fcd_base_{aid_s}") or {})
     cur_start_s = str(st.session_state.get(f"fcd_start_{aid_s}") or "")
@@ -543,7 +441,7 @@ def render_calendar_focus_appointment_body(r: dict[str, Any], hist_counts: dict[
             st.rerun()
 
         repro_btn_disabled = deps.reprogram_disabled_for_row(r)
-        ba1, ba2, ba3, ba4, ba5 = st.columns(5)
+        ba1, ba2, ba3, ba4 = st.columns(4)
         with ba1:
             if st.button("Guardar cambios", type="primary", use_container_width=True, key=f"fcd_sv_{aid_s}"):
                 _fcd_save_all()
@@ -573,16 +471,6 @@ def render_calendar_focus_appointment_body(r: dict[str, Any], hist_counts: dict[
                 st.session_state["_ap_cancel_item"] = dict(r)
                 st.rerun()
         with ba4:
-            if st.button(
-                "Enviar recibo",
-                use_container_width=True,
-                key=f"fcd_rc_{aid_s}",
-            ):
-                st.session_state["_ap_receipts_item"] = dict(r)
-                st.session_state.pop(seed_k, None)
-                st.session_state.pop("_cal_focus_appt_id", None)
-                st.rerun()
-        with ba5:
             if st.button(
                 firma_lbl,
                 disabled=firmar_disabled,

@@ -90,6 +90,41 @@ def calendar_overflow_row_html(row: dict[str, Any], counts_by_client: dict[str, 
     return f'<div class="cal-overflow-row{muted}">{left_cluster}{total_box}</div>'
 
 
+def calendar_appt_month_slot_html(
+    row: dict[str, Any],
+    counts_by_client: dict[str, int],
+) -> str:
+    """Bloque en celda mensual: hora, cliente y «Ver cita» (estilo rejilla semanal)."""
+    hm = appointment_time_hm(row.get("appointment_date", row.get("date")))
+    nm = str(row.get("customer_name") or row.get("name") or "").strip() or "—"
+    short = calendar_cell_customer_label(nm, long_from_len=22)
+    cls = client_pill_class(row, counts_by_client)
+    st_cl = str(row.get("status") or "").strip().lower()
+    dim_cls = " cal-appt-line--muted" if st_cl == "cancelada" else ""
+    ap_id = int(row.get("id", 0) or 0)
+    staff_lbl = assigned_staff_label(row)
+    title = html_mod.escape(
+        f"{hm} · {nm}"
+        + (f" · {staff_lbl}" if staff_lbl != "—" else "")
+    )
+    link_html = ""
+    if ap_id > 0:
+        link_html = (
+            f'<button type="button" class="cal-appt-slot-link" data-cal-appt-id="{ap_id}" '
+            'aria-label="Ver cita">'
+            '<span class="cal-appt-slot-link-play" aria-hidden="true">▶</span>'
+            "<span>Ver cita</span>"
+            "</button>"
+        )
+    return (
+        f"<div class='cal-appt-slot twg-{cls}{dim_cls}' title='{title}'>"
+        f'<span class="cal-appt-slot-time">{html_mod.escape(hm)}</span>'
+        f'<span class="cal-appt-slot-client">{html_mod.escape(short)}</span>'
+        f"{link_html}"
+        "</div>"
+    )
+
+
 def calendar_appt_line_html(
     row: dict[str, Any],
     counts_by_client: dict[str, int],
@@ -137,19 +172,19 @@ def calendar_day_inner_body_html(
 
     if team_layout:
         for label, rows_g in group_calendar_day_rows_by_assigned_staff(day_rows):
-            line_htmls = [calendar_appt_line_html(r, counts_by_client) for r in rows_g]
+            line_htmls = [calendar_appt_month_slot_html(r, counts_by_client) for r in rows_g]
             shown += len(line_htmls)
             if line_htmls:
                 chunks.append(
                     "<div class='cal-team-block'>"
                     f"<div class='cal-team-label'>{html_mod.escape(label)}</div>"
-                    "<div class='cal-team-lines'>"
+                    "<div class='cal-team-lines cal-team-lines--slots'>"
                     f"{''.join(line_htmls)}"
                     "</div></div>"
                 )
     else:
         for r in day_rows:
-            chunks.append(calendar_appt_line_html(r, counts_by_client))
+            chunks.append(calendar_appt_month_slot_html(r, counts_by_client))
             shown += 1
 
     return "".join(chunks), shown
@@ -157,6 +192,7 @@ def calendar_day_inner_body_html(
 
 __all__ = [
     "calendar_appt_line_html",
+    "calendar_appt_month_slot_html",
     "calendar_cell_customer_label",
     "calendar_day_inner_body_html",
     "calendar_overflow_row_html",

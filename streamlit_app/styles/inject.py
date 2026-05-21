@@ -14,6 +14,8 @@ _CSS_ORDER = (
     "_calendar.css",
     "_flags.css",
     "_legend.css",
+    "_appointment_search.css",
+    "_appointment_payments.css",
 )
 
 

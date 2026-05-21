@@ -12,7 +12,9 @@ import streamlit as st
 from streamlit_app.components.calendar_cells import calendar_day_inner_body_html
 from streamlit_app.components.calendar_month_footer import (
     calendar_month_footer_strip_html,
+    inject_calendar_month_appt_click_bridge,
     inject_calendar_month_footer_bridge,
+    render_calendar_month_hidden_appt_open_buttons,
     render_calendar_month_hidden_book_widgets,
 )
 
@@ -141,6 +143,10 @@ def render_main_calendar(
                         f"{footer_html}</div>",
                         unsafe_allow_html=True,
                     )
+    render_calendar_month_hidden_appt_open_buttons(
+        buckets,
+        clear_calendar_dialog_focus=clear_calendar_dialog_focus,
+    )
     render_calendar_month_hidden_book_widgets(
         y,
         m,
@@ -149,6 +155,7 @@ def render_main_calendar(
         clear_calendar_dialog_focus=clear_calendar_dialog_focus,
         pop_booking_document_session=pop_booking_document_session,
     )
+    inject_calendar_month_appt_click_bridge()
     inject_calendar_month_footer_bridge()
 
 

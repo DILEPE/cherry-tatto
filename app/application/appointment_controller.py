@@ -18,6 +18,7 @@ from app.schemas.appointment import (
     AppointmentPaymentReceiptListItem,
     AppointmentRescheduleRequest,
     AppointmentMetaPatchRequest,
+    AppointmentSearchResponse,
     AppointmentStatusUpdateRequest,
     appointment_request_to_domain,
 )
@@ -46,6 +47,40 @@ class AppointmentController(Controller):
             )
         except Exception as e:
             raise HTTPException(detail=f"Error al obtener citas: {str(e)}", status_code=500)
+
+    @get("/search")
+    async def search_appointments(
+        self,
+        state: State,
+        field: str = Parameter(
+            default="name",
+            query="field",
+            description="name | receipt | document",
+        ),
+        q: str = Parameter(min_length=1, max_length=120, query="q"),
+        limit: int = Parameter(default=10, ge=1, le=50, query="limit"),
+        offset: int = Parameter(default=0, ge=0, query="offset"),
+        assigned_panel_user_id: Optional[int] = Parameter(
+            default=None, ge=1, query="assigned_panel_user_id"
+        ),
+    ) -> AppointmentSearchResponse:
+        try:
+            return await state.service.search_appointments(
+                field=field.strip().lower(),
+                term=q.strip(),
+                limit=limit,
+                offset=offset,
+                assigned_panel_user_id=assigned_panel_user_id,
+            )
+        except ValueError as e:
+            if str(e) in ("SEARCH_TERM_EMPTY", "SEARCH_FIELD_INVALID"):
+                raise HTTPException(detail=str(e), status_code=400) from e
+            raise HTTPException(detail=str(e), status_code=400) from e
+        except Exception as e:
+            raise HTTPException(
+                detail=f"Error al buscar citas: {str(e)}",
+                status_code=500,
+            ) from e
 
     @get("/work-performed-labels")
     async def work_performed_labels(
@@ -266,3 +301,18 @@ class AppointmentController(Controller):
             raise HTTPException(detail=str(e), status_code=404) from e
         except Exception as e:
             raise HTTPException(detail=f"Error al descargar recibo: {str(e)}", status_code=400) from e
+
+    @post("/{appointment_id:int}/receipts/{receipt_id:int}/resend")
+    async def resend_receipt_pdf(
+        self,
+        appointment_id: int,
+        receipt_id: int,
+        state: State,
+    ) -> MessageResponse:
+        try:
+            await state.service.resend_appointment_payment_receipt(appointment_id, receipt_id)
+            return MessageResponse(status="success", message="Recibo reenviado a n8n.")
+        except ValueError as e:
+            raise HTTPException(detail=str(e), status_code=404) from e
+        except Exception as e:
+            raise HTTPException(detail=f"Error al reenviar recibo: {str(e)}", status_code=400) from e
