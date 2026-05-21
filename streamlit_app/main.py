@@ -28,7 +28,6 @@ from dotenv import load_dotenv
 load_dotenv(_ROOT / ".env")
 
 from collections.abc import Callable
-import base64
 import html
 
 import streamlit as st
@@ -52,6 +51,7 @@ from streamlit_app.panel_auth import (
 from streamlit_app.panel_users_admin import render_panel_users_tab
 from streamlit_app.stores_management import render_stores_management_tab
 from streamlit_app.survey_questions_admin import render_survey_questions_tab
+from streamlit_app.theme import inject_panel_theme, render_theme_mode_control
 
 LOGO_CANDIDATES = [
     Path(__file__).resolve().parent / "assets" / "branding.png",
@@ -66,202 +66,11 @@ PAGE_ICON_CANDIDATES = [
     Path(__file__).resolve().parent.parent / "app" / "assets" / "receipt_rock_city_icon.png",
 ]
 
-_WATERMARK_CANDIDATES = [
-    Path(__file__).resolve().parent / "assets" / "rock_city_watermark.png",
-    Path(__file__).resolve().parent.parent / "assets" / "rock_city_watermark.png",
-]
-# (mtime_ns, css_fragment) para regenerar el data URI si se reemplaza el PNG en disco.
-_WATERMARK_STYLE_CACHE: tuple[float, str] | None = None
-
-
-def _inject_background_watermark_css() -> str:
-    """CSS del logo Rock City como marca de agua en relieve (data URI). Vacío si no hay archivo."""
-    global _WATERMARK_STYLE_CACHE
-    wm_path = next((p for p in _WATERMARK_CANDIDATES if p.is_file()), None)
-    if wm_path is None:
-        return ""
-    try:
-        mtime = wm_path.stat().st_mtime
-    except OSError:
-        return ""
-    if _WATERMARK_STYLE_CACHE is not None and _WATERMARK_STYLE_CACHE[0] == mtime:
-        return _WATERMARK_STYLE_CACHE[1]
-    b64 = base64.standard_b64encode(wm_path.read_bytes()).decode("ascii")
-    uri = f"url(data:image/png;base64,{b64})"
-    css = f"""
-          [data-testid="stAppViewContainer"] {{
-            position: relative;
-          }}
-          [data-testid="stAppViewContainer"]::before {{
-            content: "";
-            position: fixed;
-            inset: 0;
-            z-index: 0;
-            pointer-events: none;
-            background-image: {uri};
-            background-repeat: no-repeat;
-            background-position: center center;
-            background-size: clamp(420px, 88vmin, min(96vw, 1280px));
-            opacity: 0.09;
-            filter:
-              drop-shadow(2px 2px 1px rgba(255,255,255,0.16))
-              drop-shadow(-1.5px -1.5px 1px rgba(0,0,0,0.45))
-              brightness(1.06)
-              contrast(1.08);
-            mix-blend-mode: soft-light;
-          }}
-          [data-testid="stMain"],
-          section.main {{
-            position: relative;
-            z-index: 1 !important;
-          }}
-    """
-    _WATERMARK_STYLE_CACHE = (mtime, css)
-    return css
-
-
-def _inject_material_neon_css() -> None:
-    """Se emite en cada rerun: Streamlit reconstruye el DOM y los estilos no persisten entre ejecuciones."""
-    wm = _inject_background_watermark_css()
-    st.markdown(
-        f"""
-        <style>
-          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-          html, body, [class*="css"]  {{ font-family: 'Inter', 'Segoe UI', sans-serif !important; }}
-          [data-testid="stAppViewContainer"] {{
-            background: radial-gradient(ellipse 120% 80% at 50% -20%, rgba(255,0,127,0.075), transparent 55%),
-                        radial-gradient(ellipse 80% 50% at 100% 50%, rgba(167,154,255,0.05), transparent 45%),
-                        linear-gradient(180deg, #43434e 0%, #3c3c48 42%, #363640 100%);
-          }}
-          [data-testid="stHeader"] {{ background: rgba(54,54,62,0.94) !important; z-index: 11 !important; }}
-          /* Streamlit ≥1.50: scroll en stSidebarUserContent; overflow en el section exterior rompe el layout. */
-          [data-testid="stSidebar"],
-          section.stSidebar {{
-            background: linear-gradient(180deg, #383842 0%, #303038 100%) !important;
-            border-right: 1px solid rgba(255,255,255,0.11);
-            overflow: visible !important;
-          }}
-          [data-testid="stSidebarContent"] {{
-            display: flex !important;
-            flex-direction: column !important;
-            min-height: 0 !important;
-            height: 100% !important;
-            max-height: 100vh !important;
-            overflow: hidden !important;
-          }}
-          [data-testid="stSidebarUserContent"] {{
-            flex: 1 1 auto !important;
-            min-height: 0 !important;
-            overflow-y: auto !important;
-            overflow-x: hidden !important;
-            overscroll-behavior: contain;
-            -webkit-overflow-scrolling: touch;
-          }}
-          div[data-baseweb="tab-highlight"] {{ background-color: #FF007F !important; box-shadow: 0 0 12px rgba(255,0,127,0.45); }}
-          [data-baseweb="tab"] {{ color: #e0e0e0 !important; font-weight: 600; }}
-          [data-baseweb="tab"]:hover {{ color: #FF007F !important; }}
-          [data-testid="stExpander"] {{
-            background: #484854 !important;
-            border: 1px solid rgba(255,255,255,0.15) !important;
-            border-radius: 12px !important;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.38);
-          }}
-          .neon-title {{
-            color: #fff;
-            font-weight: 700;
-            font-size: 1.35rem;
-            letter-spacing: 0.02em;
-            text-shadow: 0 0 18px rgba(255,0,127,0.35);
-          }}
-          .sub-lavender {{ color: #A79AFF; font-weight: 600; font-size: 0.95rem; }}
-          .m-error {{
-            background: rgba(207,102,121,0.15);
-            border: 1px solid #CF6679;
-            color: #FFB4A9;
-            border-radius: 8px;
-            padding: 0.75rem 1rem;
-            margin: 0.5rem 0 1rem 0;
-            font-size: 0.9rem;
-          }}
-          .m-success {{
-            background: rgba(105,240,174,0.12);
-            border: 1px solid #69F0AE;
-            color: #B9F6CA;
-            border-radius: 8px;
-            padding: 0.75rem 1rem;
-            margin: 0.5rem 0 1rem 0;
-          }}
-          div.stButton > button:first-child {{
-            border-radius: 999px !important;
-            font-weight: 600 !important;
-            border: 1px solid rgba(255,0,127,0.55) !important;
-            box-shadow: 0 0 16px rgba(255,0,127,0.25) !important;
-          }}
-          div.stButton > button[kind="secondary"] {{
-            border-color: rgba(167,154,255,0.5) !important;
-            box-shadow: 0 0 12px rgba(167,154,255,0.2) !important;
-          }}
-          hr {{ border-color: rgba(255,255,255,0.1) !important; }}
-          [data-testid="stTextInput"] input,
-          [data-testid="stNumberInput"] input,
-          [data-testid="stTextArea"] textarea,
-          [data-testid="stSelectbox"] div[data-baseweb="select"] > div {{
-            background-color: #50505c !important;
-            color: #f2f2f2 !important;
-            border-color: rgba(255,255,255,0.22) !important;
-          }}
-          {wm}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def _render_module_transition_curtain(module_label: str) -> None:
     """Pantalla intermedia de un rerun para enmascarar el montaje del nuevo módulo."""
     safe = html.escape(module_label)
     st.markdown(
         f"""
-        <style>
-        @keyframes panel-shimmer {{
-          0% {{ background-position: 0% 50%; }}
-          100% {{ background-position: 200% 50%; }}
-        }}
-        .panel-transition-curtain {{
-          min-height: calc(100vh - 9rem);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          background: linear-gradient(165deg, #42424e 0%, #3c3c46 45%, #363640 100%);
-          border-radius: 16px;
-          border: 1px solid rgba(255,0,127,0.22);
-          box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
-        }}
-        .panel-transition-curtain-inner {{
-          text-align: center;
-          padding: 2rem 2.5rem;
-          color: #ececec;
-        }}
-        .panel-transition-title {{
-          font-size: 1.15rem;
-          font-weight: 700;
-          letter-spacing: 0.03em;
-          margin-bottom: 0.35rem;
-        }}
-        .panel-transition-sub {{
-          font-size: 0.92rem;
-          opacity: 0.78;
-        }}
-        .panel-transition-bar {{
-          margin: 1.25rem auto 0;
-          width: min(280px, 70vw);
-          height: 3px;
-          border-radius: 999px;
-          background: linear-gradient(90deg, transparent, #ff007f, #a79aff, transparent);
-          background-size: 200% 100%;
-          animation: panel-shimmer 1.15s ease infinite;
-        }}
-        </style>
         <div class="panel-transition-curtain">
           <div class="panel-transition-curtain-inner">
             <div class="panel-transition-title">{safe}</div>
@@ -302,7 +111,7 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="expanded",
     )
-    _inject_material_neon_css()
+    inject_panel_theme(st)
     ensure_panel_session_initialized()
 
     render_login_gate()
@@ -394,6 +203,7 @@ def main() -> None:
         else:
             st.markdown('<p class="neon-title">CHERRY INK</p>', unsafe_allow_html=True)
             st.markdown('<p class="sub-lavender">Rock City Piercing</p>', unsafe_allow_html=True)
+        render_theme_mode_control(st)
         st.markdown("---")
         if len(module_definitions) == 1:
             active_module_key = module_definitions[0][0]

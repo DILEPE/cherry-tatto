@@ -11,7 +11,7 @@
   text-align: center;
   font-weight: 700;
   font-size: 0.82rem;
-  color: #fff;
+  color: #f8fafc;
   background: linear-gradient(180deg, #4b5563 0%, #374151 100%);
   border-radius: 6px 6px 0 0;
   padding: 0.28rem 0.5rem;
@@ -24,9 +24,9 @@
   display: inline-block;
   font-weight: 700;
   font-size: 0.78rem;
-  color: #111827;
-  background: linear-gradient(180deg, #f9fafb 0%, #e5e7eb 100%);
-  border: 1px solid #d1d5db;
+  color: var(--panel-text, #111827);
+  background: var(--panel-bg-input, #f9fafb);
+  border: 1px solid var(--panel-border-input, #d1d5db);
   border-radius: 6px;
   padding: 0.16rem 0.42rem;
   white-space: nowrap;

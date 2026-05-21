@@ -1,0 +1,144 @@
+/* Citas / calendario — tokens por tema (el activo se compila a :root en theme.py) */
+:root[data-panel-theme="dark"] {
+    --ct-surface: rgba(15, 23, 42, 0.5);
+    --ct-surface-strong: rgba(15, 23, 42, 0.96);
+    --ct-surface-today: rgba(15, 23, 42, 0.58);
+    --ct-surface-inner: rgba(0, 0, 0, 0.32);
+    --ct-surface-spacer: rgba(15, 23, 42, 0.22);
+    --ct-text-day: rgba(248, 250, 252, 0.94);
+    --ct-text-today: rgba(251, 168, 210, 0.98);
+    --ct-text-muted: rgba(148, 163, 184, 0.72);
+    --ct-text-week-wd: #cbd5e1;
+    --ct-text-week-num: #f1f5f9;
+    --ct-text-week-tick: #94a3b8;
+    --ct-text-week-tick-major: #cbd5e1;
+    --ct-border: rgba(148, 163, 184, 0.36);
+    --ct-border-slot: rgba(148, 163, 184, 0.22);
+    --ct-border-inner: rgba(226, 232, 240, 0.22);
+    --ct-legend-bg: rgba(15, 23, 42, 0.72);
+    --ct-legend-border: rgba(255, 0, 127, 0.38);
+    --ct-legend-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 2px 8px rgba(0, 0, 0, 0.22);
+    --ct-legend-label: #e2e8f0;
+    --ct-col-title-bg: #f3f4f6;
+    --ct-col-title-text: #111827;
+    --ct-search-bg: rgba(15, 23, 42, 0.55);
+    --ct-week-wrap-bg: rgba(15, 23, 42, 0.45);
+    --ct-week-h-day-bg: rgba(0, 0, 0, 0.28);
+    --ct-week-col-bg: rgba(0, 0, 0, 0.26);
+    --ct-week-col-today-bg: rgba(255, 0, 127, 0.05);
+    --ct-footer-bg: rgba(15, 23, 42, 0.96);
+    --ct-appt-link-bg: rgba(0, 0, 0, 0.38);
+    --ct-appt-link-border: rgba(255, 255, 255, 0.28);
+    --ct-appt-link-text: #f8fafc;
+    --ct-appt-link-hover-bg: rgba(255, 255, 255, 0.18);
+}
+
+:root[data-panel-theme="light"] {
+    --ct-surface: #ffffff;
+    --ct-surface-strong: #e2e8f0;
+    --ct-surface-today: rgba(255, 0, 127, 0.08);
+    --ct-surface-inner: #f8fafc;
+    --ct-surface-spacer: #f1f5f9;
+    --ct-text-day: #334155;
+    --ct-text-today: #be185d;
+    --ct-text-muted: #64748b;
+    --ct-text-week-wd: #64748b;
+    --ct-text-week-num: #0f172a;
+    --ct-text-week-tick: #94a3b8;
+    --ct-text-week-tick-major: #475569;
+    --ct-border: rgba(15, 23, 42, 0.14);
+    --ct-border-slot: rgba(15, 23, 42, 0.12);
+    --ct-border-inner: rgba(15, 23, 42, 0.1);
+    --ct-legend-bg: #ffffff;
+    --ct-legend-border: rgba(15, 23, 42, 0.12);
+    --ct-legend-shadow: 0 1px 3px rgba(15, 23, 42, 0.08), 0 4px 12px rgba(15, 23, 42, 0.05);
+    --ct-legend-label: #475569;
+    --ct-col-title-bg: #f1f5f9;
+    --ct-col-title-text: #0f172a;
+    --ct-search-bg: #ffffff;
+    --ct-week-wrap-bg: #f8fafc;
+    --ct-week-h-day-bg: #f1f5f9;
+    --ct-week-col-bg: #ffffff;
+    --ct-week-col-today-bg: rgba(255, 0, 127, 0.06);
+    --ct-footer-bg: #f1f5f9;
+    --ct-appt-link-bg: rgba(15, 23, 42, 0.08);
+    --ct-appt-link-border: rgba(15, 23, 42, 0.16);
+    --ct-appt-link-text: #1e293b;
+    --ct-appt-link-hover-bg: rgba(255, 0, 127, 0.12);
+}
+
+:root[data-panel-theme="light"] .ap-ficha-section-band,
+:root[data-panel-theme="light"] .ap-pay-table-band {
+    background: linear-gradient(180deg, #f1f5f9 0%, #e2e8f0 100%);
+    color: #0f172a;
+    border: 1px solid var(--panel-border);
+}
+
+:root[data-panel-theme="light"] .ap-ficha-col-head,
+:root[data-panel-theme="light"] .ap-pay-col-head {
+    background: #f8fafc;
+    color: #334155;
+    border-color: var(--ct-border-slot);
+}
+
+/* Diálogo ficha cita / abonos — modo claro */
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.ap-ficha-panel-root),
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.ap-pay-panel-root) {
+    color: var(--panel-text);
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.ap-ficha-panel-root) h3,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.ap-ficha-panel-root) h4,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.ap-ficha-panel-root) p,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.ap-ficha-panel-root) li,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.ap-ficha-panel-root) label,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.ap-ficha-panel-root) span,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.ap-pay-panel-root) p,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.ap-pay-panel-root) label {
+    color: var(--panel-text) !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.ap-ficha-panel-root) [data-testid="stCaptionContainer"] p,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.ap-ficha-panel-root) [data-testid="stMarkdownContainer"] p,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.ap-ficha-panel-root) [data-testid="stMarkdownContainer"] strong {
+    color: var(--panel-text-muted) !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.ap-ficha-panel-root) [data-baseweb="input"] input,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.ap-ficha-panel-root) textarea,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.ap-ficha-panel-root) [data-baseweb="select"] > div {
+    background-color: var(--panel-bg-input) !important;
+    color: var(--panel-text) !important;
+    border-color: var(--panel-border-input) !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.ap-ficha-panel-root) [role="dialog"],
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.ap-pay-panel-root) [role="dialog"] {
+    background: var(--panel-bg-surface) !important;
+    color: var(--panel-text) !important;
+    border: 1px solid var(--panel-border) !important;
+}
+
+:root[data-panel-theme="light"] .ap-pay-panel-title {
+    background: linear-gradient(180deg, #f1f5f9 0%, #e2e8f0 100%);
+    color: #0f172a;
+}
+
+:root[data-panel-theme="light"] .ap-pay-toolbar {
+    background: #f8fafc;
+    border-color: var(--panel-border);
+}
+
+:root[data-panel-theme="dark"] .ap-search-toolbar {
+    background: rgba(30, 41, 59, 0.55);
+    border-color: var(--ct-border-slot);
+}
+
+:root[data-panel-theme="dark"] .ap-search-table-title {
+    color: #f8fafc;
+}
+
+:root[data-panel-theme="light"] .ap-search-toolbar {
+    background: var(--ct-search-bg);
+    border-color: var(--ct-border-slot);
+}

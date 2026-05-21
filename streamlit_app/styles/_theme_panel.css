@@ -1,0 +1,335 @@
+/* ── Panel global: tokens por tema ─────────────────────────────────── */
+:root[data-panel-theme="dark"] {
+    --panel-bg-app: radial-gradient(ellipse 120% 80% at 50% -20%, rgba(255, 0, 127, 0.075), transparent 55%),
+        radial-gradient(ellipse 80% 50% at 100% 50%, rgba(167, 154, 255, 0.05), transparent 45%),
+        linear-gradient(180deg, #43434e 0%, #3c3c48 42%, #363640 100%);
+    --panel-bg-header: rgba(54, 54, 62, 0.94);
+    --panel-bg-sidebar: linear-gradient(180deg, #383842 0%, #303038 100%);
+    --panel-sidebar-border: rgba(255, 255, 255, 0.11);
+    --panel-bg-surface: #484854;
+    --panel-bg-input: #50505c;
+    --panel-text: #f2f2f2;
+    --panel-text-muted: #e0e0e0;
+    --panel-text-sub: #a79aff;
+    --panel-title-color: #fff;
+    --panel-title-glow: 0 0 18px rgba(255, 0, 127, 0.35);
+    --panel-border: rgba(255, 255, 255, 0.15);
+    --panel-border-soft: rgba(255, 255, 255, 0.1);
+    --panel-border-input: rgba(255, 255, 255, 0.22);
+    --panel-shadow-surface: 0 2px 8px rgba(0, 0, 0, 0.38);
+    --panel-transition-bg: linear-gradient(165deg, #42424e 0%, #3c3c46 45%, #363640 100%);
+    --panel-transition-text: #ececec;
+    --panel-login-frame-bg: linear-gradient(165deg, rgba(44, 44, 52, 0.96), rgba(28, 28, 34, 0.99));
+    --panel-login-frame-border: rgba(255, 255, 255, 0.14);
+    --panel-login-shadow: 0 20px 56px rgba(0, 0, 0, 0.55);
+    --panel-error-bg: rgba(207, 102, 121, 0.15);
+    --panel-error-border: #cf6679;
+    --panel-error-text: #ffb4a9;
+    --panel-success-bg: rgba(105, 240, 174, 0.12);
+    --panel-success-border: #69f0ae;
+    --panel-success-text: #b9f6ca;
+    --panel-tab-color: #e0e0e0;
+    --panel-dataframe-header: rgba(72, 72, 84, 0.95);
+}
+
+:root[data-panel-theme="light"] {
+    --panel-bg-app: radial-gradient(ellipse 120% 80% at 50% -18%, rgba(255, 0, 127, 0.06), transparent 52%),
+        radial-gradient(ellipse 70% 45% at 100% 0%, rgba(167, 154, 255, 0.07), transparent 42%),
+        linear-gradient(180deg, #f8fafc 0%, #f1f5f9 48%, #e8eef4 100%);
+    --panel-bg-header: rgba(255, 255, 255, 0.92);
+    --panel-bg-sidebar: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+    --panel-sidebar-border: rgba(15, 23, 42, 0.1);
+    --panel-bg-surface: #ffffff;
+    --panel-bg-input: #ffffff;
+    --panel-text: #1e293b;
+    --panel-text-muted: #475569;
+    --panel-text-sub: #7c3aed;
+    --panel-title-color: #0f172a;
+    --panel-title-glow: none;
+    --panel-border: rgba(15, 23, 42, 0.12);
+    --panel-border-soft: rgba(15, 23, 42, 0.08);
+    --panel-border-input: rgba(15, 23, 42, 0.18);
+    --panel-shadow-surface: 0 1px 3px rgba(15, 23, 42, 0.08), 0 4px 14px rgba(15, 23, 42, 0.06);
+    --panel-transition-bg: linear-gradient(165deg, #f8fafc 0%, #f1f5f9 45%, #e2e8f0 100%);
+    --panel-transition-text: #334155;
+    --panel-login-frame-bg: linear-gradient(165deg, #ffffff, #f8fafc);
+    --panel-login-frame-border: rgba(15, 23, 42, 0.12);
+    --panel-login-shadow: 0 16px 40px rgba(15, 23, 42, 0.12);
+    --panel-error-bg: #fef2f2;
+    --panel-error-border: #fecaca;
+    --panel-error-text: #991b1b;
+    --panel-success-bg: #ecfdf5;
+    --panel-success-border: #a7f3d0;
+    --panel-success-text: #065f46;
+    --panel-tab-color: #475569;
+    --panel-dataframe-header: #f1f5f9;
+}
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap");
+
+html,
+body,
+[class*="css"] {
+    font-family: "Inter", "Segoe UI", sans-serif !important;
+}
+
+[data-testid="stAppViewContainer"] {
+    position: relative;
+    background: var(--panel-bg-app) !important;
+}
+
+[data-testid="stAppViewContainer"]::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background-repeat: no-repeat;
+    background-position: center center;
+    background-size: clamp(420px, 88vmin, min(96vw, 1280px));
+}
+
+[data-testid="stHeader"] {
+    background: var(--panel-bg-header) !important;
+    z-index: 11 !important;
+}
+
+[data-testid="stSidebar"],
+section.stSidebar {
+    background: var(--panel-bg-sidebar) !important;
+    border-right: 1px solid var(--panel-sidebar-border);
+    overflow: visible !important;
+}
+
+[data-testid="stSidebarContent"] {
+    display: flex !important;
+    flex-direction: column !important;
+    min-height: 0 !important;
+    height: 100% !important;
+    max-height: 100vh !important;
+    overflow: hidden !important;
+}
+
+[data-testid="stSidebarUserContent"] {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+}
+
+[data-testid="stMain"],
+section.main {
+    position: relative;
+    z-index: 1 !important;
+    color: var(--panel-text) !important;
+}
+
+div[data-baseweb="tab-highlight"] {
+    background-color: #ff007f !important;
+    box-shadow: 0 0 12px rgba(255, 0, 127, 0.45);
+}
+
+[data-baseweb="tab"] {
+    color: var(--panel-tab-color) !important;
+    font-weight: 600;
+}
+
+[data-baseweb="tab"]:hover {
+    color: #ff007f !important;
+}
+
+[data-testid="stExpander"] {
+    background: var(--panel-bg-surface) !important;
+    border: 1px solid var(--panel-border) !important;
+    border-radius: 12px !important;
+    box-shadow: var(--panel-shadow-surface);
+}
+
+.neon-title {
+    color: var(--panel-title-color);
+    font-weight: 700;
+    font-size: 1.35rem;
+    letter-spacing: 0.02em;
+    text-shadow: var(--panel-title-glow);
+}
+
+.sub-lavender {
+    color: var(--panel-text-sub);
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.m-error {
+    background: var(--panel-error-bg);
+    border: 1px solid var(--panel-error-border);
+    color: var(--panel-error-text);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    margin: 0.5rem 0 1rem 0;
+    font-size: 0.9rem;
+}
+
+.m-success {
+    background: var(--panel-success-bg);
+    border: 1px solid var(--panel-success-border);
+    color: var(--panel-success-text);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    margin: 0.5rem 0 1rem 0;
+}
+
+div.stButton > button:first-child {
+    border-radius: 999px !important;
+    font-weight: 600 !important;
+    border: 1px solid rgba(255, 0, 127, 0.55) !important;
+    box-shadow: 0 0 16px rgba(255, 0, 127, 0.25) !important;
+}
+
+div.stButton > button[kind="secondary"] {
+    border-color: rgba(167, 154, 255, 0.5) !important;
+    box-shadow: 0 0 12px rgba(167, 154, 255, 0.2) !important;
+}
+
+hr {
+    border-color: var(--panel-border-soft) !important;
+}
+
+[data-testid="stTextInput"] input,
+[data-testid="stNumberInput"] input,
+[data-testid="stTextArea"] textarea,
+[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
+[data-testid="stDateInput"] input {
+    background-color: var(--panel-bg-input) !important;
+    color: var(--panel-text) !important;
+    border-color: var(--panel-border-input) !important;
+}
+
+[data-testid="stMarkdown"] p,
+[data-testid="stMarkdown"] li,
+[data-testid="stCaption"],
+[data-testid="stText"],
+label[data-testid="stWidgetLabel"] p {
+    color: var(--panel-text);
+}
+
+/* Radio / checkbox: config.toml textColor=#FFF deja etiquetas blancas en modo claro */
+[data-testid="stRadio"] label,
+[data-testid="stRadio"] label span,
+[data-testid="stRadio"] label p,
+[data-testid="stRadio"] div[role="radiogroup"] label,
+[data-testid="stRadio"] div[role="radiogroup"] label span,
+[data-testid="stRadio"] div[role="radiogroup"] label p,
+[data-testid="stRadio"] [data-testid="stMarkdownContainer"] p,
+[data-testid="stRadio"] [data-testid="stMarkdownContainer"] label,
+[data-testid="stCheckbox"] label,
+[data-testid="stCheckbox"] label span,
+[data-testid="stCheckbox"] label p,
+[data-testid="stCheckbox"] [data-testid="stMarkdownContainer"] p,
+[data-baseweb="radio"] label,
+[data-baseweb="radio"] label p,
+[data-baseweb="radio"] label span {
+    color: var(--panel-text) !important;
+}
+
+[data-testid="stAppViewContainer"] [data-testid="stRadio"] p,
+[data-testid="stAppViewContainer"] [data-testid="stRadio"] span,
+[data-testid="stAppViewContainer"] [data-testid="stCheckbox"] p {
+    color: var(--panel-text) !important;
+}
+
+[data-testid="stRadio"] > label[data-testid="stWidgetLabel"],
+[data-testid="stRadio"] > label[data-testid="stWidgetLabel"] p,
+[data-testid="stCheckbox"] > label[data-testid="stWidgetLabel"],
+[data-testid="stCheckbox"] > label[data-testid="stWidgetLabel"] p {
+    color: var(--panel-text-muted) !important;
+}
+
+/* Dataframes / tablas admin */
+[data-testid="stDataFrame"] th {
+    background: var(--panel-dataframe-header) !important;
+    color: var(--panel-text) !important;
+}
+
+/* Login */
+section.main [data-testid="column"]:has(.panel-login-frame-root) {
+    background: var(--panel-login-frame-bg);
+    border: 1px solid var(--panel-login-frame-border);
+    border-radius: 20px;
+    padding: 1.5rem 1.35rem 1.75rem !important;
+    box-shadow: 0 0 0 1px rgba(255, 0, 127, 0.14), var(--panel-login-shadow),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    margin-top: 0.75rem;
+    margin-bottom: 1rem;
+    overflow: hidden;
+    isolation: isolate;
+}
+
+/* Cortina cambio de módulo */
+@keyframes panel-shimmer {
+    0% {
+        background-position: 0% 50%;
+    }
+    100% {
+        background-position: 200% 50%;
+    }
+}
+
+.panel-transition-curtain {
+    min-height: calc(100vh - 9rem);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--panel-transition-bg);
+    border-radius: 16px;
+    border: 1px solid rgba(255, 0, 127, 0.22);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.panel-transition-curtain-inner {
+    text-align: center;
+    padding: 2rem 2.5rem;
+    color: var(--panel-transition-text);
+}
+
+.panel-transition-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    margin-bottom: 0.35rem;
+}
+
+.panel-transition-sub {
+    font-size: 0.92rem;
+    opacity: 0.78;
+}
+
+.panel-transition-bar {
+    margin: 1.25rem auto 0;
+    width: min(280px, 70vw);
+    height: 3px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, transparent, #ff007f, #a79aff, transparent);
+    background-size: 200% 100%;
+    animation: panel-shimmer 1.15s ease infinite;
+}
+
+/* Tema claro: botón secundario (usa vars; no depende de data-panel-theme en html) */
+div.stButton > button[kind="secondary"] {
+    color: var(--panel-text) !important;
+}
+
+:root[data-panel-theme="light"] div.stButton > button[kind="secondary"] {
+    background: #f8fafc !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stMarkdown"] p {
+    color: var(--panel-text-muted);
+}
+
+:root[data-panel-theme="light"] .panel-login-gate-curtain {
+    background: linear-gradient(165deg, #f8fafc, #e2e8f0);
+    border-color: rgba(255, 0, 127, 0.28);
+    box-shadow: 0 0 0 1px rgba(167, 154, 255, 0.15), 0 12px 32px rgba(15, 23, 42, 0.12);
+}

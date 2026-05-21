@@ -411,21 +411,7 @@ def _inject_login_brand_styles() -> None:
     st.markdown(
         """
         <style>
-          /* Recuadro centrado: columna media que contiene el marcador oculto */
-          section.main [data-testid="column"]:has(.panel-login-frame-root) {
-            background: linear-gradient(165deg, rgba(44, 44, 52, 0.96), rgba(28, 28, 34, 0.99));
-            border: 1px solid rgba(255, 255, 255, 0.14);
-            border-radius: 20px;
-            padding: 1.5rem 1.35rem 1.75rem !important;
-            box-shadow:
-              0 0 0 1px rgba(255, 0, 127, 0.14),
-              0 20px 56px rgba(0, 0, 0, 0.55),
-              inset 0 1px 0 rgba(255, 255, 255, 0.08);
-            margin-top: 0.75rem;
-            margin-bottom: 1rem;
-            overflow: hidden;
-            isolation: isolate;
-          }
+          /* Recuadro: fondo/borde en styles/_theme_panel.css (tema claro/oscuro) */
           /* Streamlit pinta los widgets después del markdown en el mismo bloque: sin esto,
              usuario/contraseña quedan por debajo de la cortina en el apilamiento.
              Cuando la cortina está subida (--locked-open), el shell se colapsa para no solapar.

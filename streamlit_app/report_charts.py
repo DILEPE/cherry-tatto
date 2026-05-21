@@ -10,21 +10,11 @@ from typing import Any, List, Optional, Union
 
 Number = Union[int, float]
 
-# Alineado a `main.py`: #000 / #1E1E1E, #FF007F, #A79AFF
-_THEME = {
-    "paper": "rgba(30, 30, 34, 0.96)",
-    "plot": "rgba(22, 22, 26, 0.98)",
-    "text": "#eaeaea",
-    "text_muted": "#a3a3b0",
-    "grid": "rgba(255, 255, 255, 0.07)",
-    "axis_line": "rgba(255, 255, 255, 0.14)",
-    "bar_fill": "rgba(167, 154, 255, 0.78)",
-    "bar_line": "rgba(255, 0, 127, 0.5)",
-    "pie_slice_line": "rgba(0, 0, 0, 0.4)",
-    "legend_bg": "rgba(30, 30, 34, 0.94)",
-    "legend_border": "rgba(167, 154, 255, 0.38)",
-    "font_family": "Inter, system-ui, 'Segoe UI', sans-serif",
-}
+from streamlit_app.theme import plotly_theme_dict
+
+
+def _theme() -> dict[str, str]:
+    return plotly_theme_dict()
 
 
 def plotly_missing_caption() -> str:
@@ -44,9 +34,9 @@ def _base_layout(*, height: int, show_legend: bool = False, margin: Optional[dic
     m = {"l": 56, "r": 28, "t": 36, "b": 80}
     if margin:
         m.update(margin)
-    t = _THEME
+    t = _theme()
     return {
-        "template": "plotly_dark",
+        "template": t["template"],
         "paper_bgcolor": t["paper"],
         "plot_bgcolor": t["plot"],
         "font": {"family": t["font_family"], "size": 12, "color": t["text"]},
@@ -57,7 +47,7 @@ def _base_layout(*, height: int, show_legend: bool = False, margin: Optional[dic
 
 
 def _style_xy_axes(fig: Any, *, x_title: Optional[str], y_title: str) -> None:
-    t = _THEME
+    t = _theme()
     title_font = dict(color=t["text"], size=12, family=t["font_family"])
     fig.update_xaxes(
         tickangle=-34,
@@ -97,7 +87,7 @@ def render_vertical_bars(
         return False
     if not categories or not values or len(categories) != len(values):
         return False
-    t = _THEME
+    t = _theme()
     n = len(categories)
     h = height if height is not None else min(420, 140 + n * 40)
     ht = hovertemplate if hovertemplate is not None else "%{x}<br>%{y}<extra></extra>"
@@ -156,7 +146,7 @@ def render_pie(
         return False
     if not labels or not values or len(labels) != len(values) or sum(values) <= 0:
         return False
-    t = _THEME
+    t = _theme()
     total = float(sum(values))
     legend_labels = [
         f"{lbl}  ·  {100.0 * float(v) / total:.1f}%  ·  n={v}"

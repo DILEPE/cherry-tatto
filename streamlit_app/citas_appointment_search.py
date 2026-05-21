@@ -60,10 +60,10 @@ def navigate_calendar_to_appointment(
     st.session_state["_ap_cal_ym"] = [d.year, d.month]
     st.session_state["_ap_week_monday"] = d - timedelta(days=d.weekday())
 
-    st.session_state["_cal_focus_appt_id"] = aid
-    st.session_state.pop("_cal_overflow_day", None)
     _close_search_dialog()
-    st.rerun()
+    from streamlit_app.panel_navigation import open_calendar_appointment_focus
+
+    open_calendar_appointment_focus(aid)
 
 
 def _run_search(*, assigned_user_id: Optional[int]) -> None:

@@ -32,31 +32,10 @@ section.main div[data-testid="stMarkdownContainer"]:has(.cal-m-whcell) {
     padding-left: 0 !important;
     padding-right: 0 !important;
 }
-/* Hueco inferior al hacer scroll: el contenido debe medir sólo lo visible, no «rellenar» viewport. */
-[data-testid="stMain"]:has(.cal-cell--month),
-section[data-testid="stMain"]:has(.cal-cell--month),
-section.main:has(.cal-cell--month) {
-    min-height: auto !important;
-    flex-grow: 0 !important;
-    align-self: stretch !important;
-}
-[data-testid="stMain"]:has(.cal-cell--month) [data-testid="block-container"],
-section.main:has(.cal-cell--month) [data-testid="block-container"] {
-    min-height: 0 !important;
-    flex-grow: 0 !important;
-    padding-bottom: 0 !important;
-}
-[data-testid="stMain"]:has(.cal-cell--month)
-    div[data-testid="stVerticalBlockBorderWrapper"],
-[data-testid="stMain"]:has(.cal-cell--month) div[data-testid="stVerticalBlock"],
-section.main:has(.cal-cell--month) div[data-testid="stVerticalBlockBorderWrapper"],
-section.main:has(.cal-cell--month) div[data-testid="stVerticalBlock"] {
-    flex-grow: 0 !important;
-    flex-shrink: 0 !important;
-}
-/* components.v1.html (puente clic pie / semana): el iframe suele llevar alto mínimo y empuja el alto del documento. */
+/* iframes height=0 (puentes JS): sin hueco extra; no tocar overflow del main (mantiene scroll) */
 [data-testid="stMain"]:has(.cal-cell--month) iframe,
-section.main:has(.cal-cell--month) iframe {
+section.main:has(.cal-cell--month) iframe,
+section.main:has(.cal-cell--month) [data-testid="stCustomComponentV1"] iframe {
     height: 0 !important;
     max-height: 0 !important;
     min-height: 0 !important;
@@ -65,9 +44,12 @@ section.main:has(.cal-cell--month) iframe {
     pointer-events: none !important;
     border: none !important;
 }
+[data-testid="stMain"]:has(.cal-cell--month) [data-testid="stElementContainer"]:has(iframe),
 [data-testid="stMain"]:has(.cal-cell--month)
     div[data-testid="element-container"]:has(iframe),
-section.main:has(.cal-cell--month) div[data-testid="element-container"]:has(iframe) {
+section.main:has(.cal-cell--month) [data-testid="stElementContainer"]:has(iframe),
+section.main:has(.cal-cell--month) div[data-testid="element-container"]:has(iframe),
+section.main:has(.cal-cell--month) [data-testid="stCustomComponentV1"] {
     min-height: 0 !important;
     height: auto !important;
     max-height: 0 !important;
@@ -75,6 +57,34 @@ section.main:has(.cal-cell--month) div[data-testid="element-container"]:has(ifra
     padding-block: 0 !important;
     overflow: hidden !important;
 }
+
+/* Mes: el fragment termina en la rejilla */
+section.main [data-testid="stFragment"]:has(.cal-cell--month) {
+    margin-bottom: 0 !important;
+    padding-bottom: 0 !important;
+}
+section.main:has(.cal-cell--month) [data-testid="block-container"] {
+    padding-bottom: 0.5rem !important;
+    flex-grow: 0 !important;
+    min-height: 0 !important;
+    height: auto !important;
+    align-self: flex-start !important;
+}
+[data-testid="stAppViewContainer"]:has(.cal-cell--month) [data-testid="stMain"] {
+    justify-content: flex-start !important;
+    align-items: stretch !important;
+}
+
+/* Scroll de página y de celdas del mes */
+[data-testid="stAppViewContainer"]:has(.cal-cell--month) {
+    overflow: auto !important;
+    overflow-y: auto !important;
+}
+[data-testid="stMain"]:has(.cal-cell--month),
+section.main:has(.cal-cell--month) {
+    overflow: visible !important;
+}
+
 .cal-m-whcell {
     box-sizing: border-box;
     display: flex;
@@ -87,13 +97,13 @@ section.main:has(.cal-cell--month) div[data-testid="element-container"]:has(ifra
     font-weight: 700;
     letter-spacing: 0.05em;
     text-transform: uppercase;
-    color: #f8fafc;
-    background: rgba(15, 23, 42, 0.96);
-    border: 1px solid rgba(148, 163, 184, 0.32);
+    color: var(--ct-text-day, #f8fafc);
+    background: var(--ct-surface-strong, rgba(15, 23, 42, 0.96));
+    border: 1px solid var(--ct-border, rgba(148, 163, 184, 0.32));
     border-radius: 0;
 }
 .cal-cell.cal-cell--month {
-    border: 1px solid rgba(148, 163, 184, 0.36);
+    border: 1px solid var(--ct-border, rgba(148, 163, 184, 0.36));
     border-radius: 0;
     padding: 0;
     height: 20rem;
@@ -101,7 +111,7 @@ section.main:has(.cal-cell--month) div[data-testid="element-container"]:has(ifra
     margin-bottom: 0;
     margin-right: -1px;
     margin-top: -1px;
-    background: rgba(15, 23, 42, 0.5);
+    background: var(--ct-surface, rgba(15, 23, 42, 0.5));
     box-shadow: none;
     box-sizing: border-box;
     display: flex;
@@ -111,7 +121,7 @@ section.main:has(.cal-cell--month) div[data-testid="element-container"]:has(ifra
 .cal-cell-today.cal-cell--month {
     border-color: rgba(255, 0, 127, 0.58);
     box-shadow: inset 0 0 0 1px rgba(255, 0, 127, 0.24);
-    background: rgba(15, 23, 42, 0.58);
+    background: var(--ct-surface-today, rgba(15, 23, 42, 0.58));
 }
 .cal-cell--month .cal-cell-head {
     flex: 0 0 auto;
@@ -125,12 +135,12 @@ section.main:has(.cal-cell--month) div[data-testid="element-container"]:has(ifra
 .cal-cell--month .cal-cell-daynum {
     font-size: 0.74rem;
     font-weight: 700;
-    color: rgba(248, 250, 252, 0.94);
+    color: var(--ct-text-day, rgba(248, 250, 252, 0.94));
     font-variant-numeric: tabular-nums;
     opacity: 0.92;
 }
 .cal-cell-today.cal-cell--month .cal-cell-daynum {
-    color: rgba(251, 168, 210, 0.98);
+    color: var(--ct-text-today, rgba(251, 168, 210, 0.98));
     opacity: 1;
 }
 /* Última columna: no arrastrar solapamiento -1px hacia fuera del bloque */
@@ -139,9 +149,9 @@ section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell-spacer--month) >
     margin-right: 0;
 }
 .cal-day-inner {
-    border: 1px solid rgba(226, 232, 240, 0.22);
+    border: 1px solid var(--ct-border-inner, rgba(226, 232, 240, 0.22));
     border-radius: 6px;
-    background: rgba(0, 0, 0, 0.32);
+    background: var(--ct-surface-inner, rgba(0, 0, 0, 0.32));
     padding: 0.18rem 0.22rem 0.14rem 0.22rem;
     margin-bottom: 0.22rem;
     flex: 1 1 auto;
@@ -161,7 +171,7 @@ section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell-spacer--month) >
     min-height: 0;
     padding: 0.2rem 0.22rem;
     border: none;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+    border-bottom: 1px solid var(--ct-border-slot, rgba(148, 163, 184, 0.18));
     margin-bottom: 0;
     gap: 0.28rem;
     -webkit-overflow-scrolling: touch;
@@ -177,8 +187,8 @@ section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell-spacer--month) >
     min-height: 2.05rem;
     padding: 0.28rem 0.35rem;
     box-sizing: border-box;
-    background: rgba(15, 23, 42, 0.96);
-    border-top: 1px solid rgba(148, 163, 184, 0.32);
+    background: var(--ct-footer-bg, rgba(15, 23, 42, 0.96));
+    border-top: 1px solid var(--ct-border, rgba(148, 163, 184, 0.32));
 }
 .cal-footer-daynum {
     display: inline-flex;
@@ -189,11 +199,14 @@ section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell-spacer--month) >
     font-size: 0.74rem;
     font-weight: 800;
     line-height: 1;
-    color: rgba(248, 250, 252, 0.94);
+    color: var(--ct-text-day, rgba(248, 250, 252, 0.94));
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.03em;
 }
-button.cal-footer-book {
+button.cal-footer-book,
+a.cal-footer-book,
+span.cal-footer-book--disabled,
+button.cal-query-nav.cal-footer-book {
     flex: 1 1 auto;
     min-width: 0;
     appearance: none;
@@ -221,8 +234,27 @@ button.cal-footer-book {
     overflow: hidden;
     text-overflow: ellipsis;
 }
-button.cal-footer-book:hover {
+button.cal-footer-book:hover,
+a.cal-footer-book:hover {
     filter: brightness(1.08);
+}
+a.cal-footer-book,
+button.cal-query-nav.cal-footer-book {
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: inherit;
+    cursor: pointer;
+}
+button.cal-query-nav.cal-footer-book {
+    appearance: none;
+    -webkit-appearance: none;
+}
+span.cal-footer-book--disabled {
+    cursor: not-allowed;
+    pointer-events: none;
+    opacity: 0.55;
 }
 .cal-footer-strip-disabled {
     opacity: 0.45;
@@ -230,7 +262,7 @@ button.cal-footer-book:hover {
     pointer-events: none;
 }
 .cal-cell-today.cal-cell--month .cal-footer-daynum {
-    color: rgba(251, 168, 210, 1);
+    color: var(--ct-text-today, rgba(251, 168, 210, 1));
 }
 .cal-team-block {
     min-width: 0;
@@ -297,7 +329,9 @@ button.cal-footer-book:hover {
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.14);
 }
-.cal-cell--month .cal-appt-total {
+.cal-cell--month .cal-appt-total,
+.cal-appt-slot .cal-appt-total,
+.twg-appt .cal-appt-total {
     font-size: 0.72rem;
     font-weight: 800;
     letter-spacing: 0.02em;
@@ -307,6 +341,12 @@ button.cal-footer-book:hover {
     background: rgba(255, 0, 127, 0.16);
     border-color: rgba(251, 113, 182, 0.45);
     box-shadow: 0 0 0 1px rgba(236, 72, 153, 0.12);
+    flex-shrink: 0;
+    align-self: flex-start;
+}
+.cal-appt-slot .cal-appt-total,
+.twg-appt .cal-appt-total {
+    margin-top: 0.06rem;
 }
 .cal-day-empty {
     flex: 1 1 auto;
@@ -330,9 +370,9 @@ button.cal-footer-book:hover {
     margin-right: -1px;
     margin-top: -1px;
     box-sizing: border-box;
-    border: 1px solid rgba(148, 163, 184, 0.22);
+    border: 1px solid var(--ct-border-slot, rgba(148, 163, 184, 0.22));
     border-radius: 0;
-    background: rgba(15, 23, 42, 0.22);
+    background: var(--ct-surface-spacer, rgba(15, 23, 42, 0.22));
     opacity: 1;
 }
 
@@ -347,7 +387,7 @@ button.cal-footer-book:hover {
 }
 .twg-grid-wrap {
     min-width: 680px;
-    background: rgba(15, 23, 42, 0.45);
+    background: var(--ct-week-wrap-bg, rgba(15, 23, 42, 0.45));
     border: 1px solid rgba(255, 0, 127, 0.32);
     border-radius: 10px;
     padding: 0.45rem 0.42rem 0.55rem;
@@ -372,12 +412,16 @@ button.cal-footer-book:hover {
     min-width: 0;
 }
 .twg-h-day {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
     text-align: center;
-    padding: 0.28rem 0.15rem;
+    padding: 0.28rem 0.15rem 0.22rem;
     border-radius: 8px;
-    background: rgba(0, 0, 0, 0.28);
-    border: 1px solid rgba(148, 163, 184, 0.28);
+    background: var(--ct-week-h-day-bg, rgba(0, 0, 0, 0.28));
+    border: 1px solid var(--ct-border-slot, rgba(148, 163, 184, 0.28));
     box-sizing: border-box;
+    min-width: 0;
 }
 .twg-h-today {
     border-color: rgba(255, 0, 127, 0.55);
@@ -388,14 +432,33 @@ button.cal-footer-book:hover {
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: #cbd5e1;
+    color: var(--ct-text-week-wd, #cbd5e1);
     opacity: 0.92;
 }
 .twg-h-num {
     font-size: 1rem;
     font-weight: 700;
-    color: #f1f5f9;
+    color: var(--ct-text-week-num, #f1f5f9);
     line-height: 1.15;
+    margin-bottom: 0.12rem;
+}
+/* Mismo pie que mes: cal-cell-footer-strip + cal-footer-book */
+.twg-h-day .twg-h-footer-strip {
+    margin-top: 0.1rem;
+    width: 100%;
+    min-height: 2.05rem;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+}
+.twg-h-day .twg-h-footer-strip .cal-footer-book {
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+}
+.twg-h-today .twg-h-footer-strip:not(.cal-footer-strip-disabled) {
+    border-top-color: rgba(255, 0, 127, 0.38);
 }
 .twg-body {
     display: flex;
@@ -412,7 +475,7 @@ button.cal-footer-book:hover {
     box-sizing: border-box;
     border-top: 1px solid rgba(148, 163, 184, 0.22);
     font-size: 0.58rem;
-    color: #94a3b8;
+    color: var(--ct-text-week-tick, #94a3b8);
     padding-right: 3px;
     text-align: right;
     display: flex;
@@ -425,7 +488,7 @@ button.cal-footer-book:hover {
 .twg-tick-major span {
     margin-top: -0.35rem;
     font-weight: 600;
-    color: #cbd5e1;
+    color: var(--ct-text-week-tick-major, #cbd5e1);
 }
 .twg-day-columns {
     flex: 1 1 auto;
@@ -436,14 +499,14 @@ button.cal-footer-book:hover {
 }
 .twg-col {
     position: relative;
-    background: rgba(0, 0, 0, 0.26);
+    background: var(--ct-week-col-bg, rgba(0, 0, 0, 0.26));
     border-radius: 8px;
-    border: 1px solid rgba(148, 163, 184, 0.22);
+    border: 1px solid var(--ct-border-slot, rgba(148, 163, 184, 0.22));
     box-sizing: border-box;
 }
 .twg-col-today {
     border-color: rgba(255, 0, 127, 0.42);
-    background: rgba(255, 0, 127, 0.05);
+    background: var(--ct-week-col-today-bg, rgba(255, 0, 127, 0.05));
 }
 .twg-slot-line {
     position: absolute;
@@ -500,10 +563,10 @@ button.cal-footer-book:hover {
     padding: 2px 4px 1px;
     margin-top: 2px;
     border-radius: 4px;
-    background: rgba(0, 0, 0, 0.38);
-    color: #f8fafc !important;
+    background: var(--ct-appt-link-bg, rgba(0, 0, 0, 0.38));
+    color: var(--ct-appt-link-text, #f8fafc) !important;
     text-decoration: none !important;
-    border: 1px solid rgba(255, 255, 255, 0.28);
+    border: 1px solid var(--ct-appt-link-border, rgba(255, 255, 255, 0.28));
     line-height: 1.1;
     font-family: inherit;
     cursor: pointer;
@@ -513,10 +576,14 @@ button.cal-footer-book:hover {
     gap: 3px;
     box-sizing: border-box;
 }
-button.twg-appt-link {
+a.twg-appt-link,
+button.twg-appt-link.cal-appt-slot-link {
     width: 100%;
+}
+button.twg-appt-link.cal-appt-slot-link {
     appearance: none;
     -webkit-appearance: none;
+    font-family: inherit;
 }
 .twg-appt-link-play {
     font-size: 0.55rem;
@@ -525,8 +592,8 @@ button.twg-appt-link {
     flex-shrink: 0;
 }
 .twg-appt-link:hover {
-    background: rgba(255, 255, 255, 0.18);
-    color: #ffffff !important;
+    background: var(--ct-appt-link-hover-bg, rgba(255, 255, 255, 0.18));
+    color: var(--ct-appt-link-text, #ffffff) !important;
 }
 .twg-appt {
     border-radius: 5px;
@@ -583,7 +650,9 @@ button.twg-appt-link {
     min-height: 0;
     flex: 1 1 auto;
 }
-button.cal-appt-slot-link {
+button.cal-appt-slot-link,
+a.cal-appt-slot-link,
+button.twg-appt-link.cal-appt-slot-link {
     flex-shrink: 0;
     width: 100%;
     appearance: none;
@@ -595,9 +664,9 @@ button.cal-appt-slot-link {
     font-weight: 700;
     padding: 3px 4px;
     border-radius: 4px;
-    background: rgba(0, 0, 0, 0.38);
-    color: #f8fafc !important;
-    border: 1px solid rgba(255, 255, 255, 0.28);
+    background: var(--ct-appt-link-bg, rgba(0, 0, 0, 0.38));
+    color: var(--ct-appt-link-text, #f8fafc) !important;
+    border: 1px solid var(--ct-appt-link-border, rgba(255, 255, 255, 0.28));
     line-height: 1.1;
     font-family: inherit;
     cursor: pointer;
@@ -607,9 +676,14 @@ button.cal-appt-slot-link {
     gap: 3px;
     box-sizing: border-box;
 }
-.cal-appt-slot-link:hover {
-    background: rgba(255, 255, 255, 0.18);
-    color: #ffffff !important;
+.cal-appt-slot-link:hover,
+a.cal-appt-slot-link:hover {
+    background: var(--ct-appt-link-hover-bg, rgba(255, 255, 255, 0.18));
+    color: var(--ct-appt-link-text, #ffffff) !important;
+    text-decoration: none;
+}
+a.cal-appt-slot-link {
+    text-decoration: none;
 }
 .cal-appt-slot-link-play {
     font-size: 0.55rem;
