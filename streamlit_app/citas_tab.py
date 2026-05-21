@@ -7,7 +7,6 @@ from typing import Any, Dict, Optional
 
 import streamlit as st
 
-from app.domain.appointment_money import MIN_APPOINTMENT_TOTAL_COP
 from app.domain.contract_kinds import service_type_requires_contract
 from app.domain.contract_signing_guard import appointment_must_be_fully_paid_for_contract
 from streamlit_app import api_client
@@ -667,7 +666,6 @@ def _invoke_citas_tab_dialogs(
                 purge_appointment_payment_caches=_purge_appointment_payment_caches,
                 queue_appointment_action_success=_queue_appointment_action_success,
                 api_error=format_http_error_detail,
-                min_appointment_total_cop=float(MIN_APPOINTMENT_TOTAL_COP),
                 receipts_cache_prefix=str(KEY_RECEIPTS_LIST_PFX),
                 fin_payments_cache_prefix=str(KEY_FIN_PAYMENTS_PFX),
             )

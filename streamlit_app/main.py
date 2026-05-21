@@ -50,6 +50,7 @@ from streamlit_app.panel_auth import (
     render_login_gate,
 )
 from streamlit_app.panel_users_admin import render_panel_users_tab
+from streamlit_app.stores_management import render_stores_management_tab
 from streamlit_app.survey_questions_admin import render_survey_questions_tab
 
 LOGO_CANDIDATES = [
@@ -377,6 +378,7 @@ def main() -> None:
     if "encuestas" in allowed_modules:
         module_definitions.append(("encuestas", "Gestión encuesta", render_survey_questions_tab))
     if panel_is_operator_admin():
+        module_definitions.append(("tiendas", "Gestión de tiendas", render_stores_management_tab))
         module_definitions.append(("usuarios_panel", "Gestión de usuarios", render_panel_users_tab))
     if "reporte" in allowed_modules:
         module_definitions.append(("reporte", "Reporte", render_reporte_citas_tab))

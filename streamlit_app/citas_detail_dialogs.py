@@ -381,6 +381,11 @@ def dialog_ajustar_montos() -> None:
                 "No hay saldo pendiente; no puedes registrar otro abono."
             )
             st.rerun()
+        if ex > 0 and ex > pend_ui + 0.01:
+            st.session_state["_ap_fin_save_error"] = (
+                f"El abono adicional ({format_cop(ex)}) supera el saldo pendiente ({format_cop(pend_ui)})."
+            )
+            st.rerun()
         err_save: Optional[str] = None
         with st.spinner("Guardando montos y abonos…"):
             ok, code, data = api_client.patch_appointment_financials(

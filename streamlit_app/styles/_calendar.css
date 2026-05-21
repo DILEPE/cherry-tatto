@@ -674,3 +674,31 @@ button.twg-appt-link {
     font-weight: 700;
     margin-left: 0.15rem;
 }
+
+/* Diálogo «Citas del día» — tarjetas en un solo nodo DOM (menos flash al rerender) */
+.appt-cards-block {
+    min-height: 3.5rem;
+    contain: layout style;
+}
+
+.appt-card-wrap {
+    contain: layout style;
+    padding: 0.55rem 0;
+    margin: 0;
+}
+
+.appt-card-wrap:not(:last-child) {
+    border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.appt-card-wrap .cal-overflow-row {
+    margin: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.cal-day-action-sep {
+    height: 1px;
+    background: rgba(148, 163, 184, 0.15);
+    margin: 0.3rem 0;
+}

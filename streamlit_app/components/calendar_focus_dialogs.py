@@ -9,10 +9,14 @@ from typing import Any, Callable, Optional
 
 import streamlit as st
 
-from app.domain.appointment_money import format_cop
+from app.domain.appointment_money import appointment_financial_totals, format_cop
 from streamlit_app import api_client
 from streamlit_app.appointment_agenda_slots import MIN_BOOKING_DURATION_SLOTS, duration_slots_for_existing_appointment
-from streamlit_app.appointment_dates import combine_appointment_datetime, format_appointment_created_at_display
+from streamlit_app.appointment_dates import (
+    appointment_time_hm,
+    combine_appointment_datetime,
+    format_appointment_created_at_display,
+)
 from streamlit_app.appointment_staff_labels import assigned_artist_display_name
 from streamlit_app.appointment_slots import (
     appointment_last_start_slot,
@@ -46,7 +50,6 @@ class CalendarFocusDeps:
     purge_appointment_payment_caches: Callable[[], None]
     queue_appointment_action_success: Callable[[str], None]
     api_error: Callable[[Any], str]
-    min_appointment_total_cop: float
     receipts_cache_prefix: str
     fin_payments_cache_prefix: str
 
@@ -123,7 +126,7 @@ def render_calendar_focus_appointment_body(r: dict[str, Any], hist_counts: dict[
         st.session_state[f"fcd_last_{aid_s}"] = last0
         st.session_state[f"fcd_pri_{aid_s}"] = bool(row_is_priority(r))
         st.session_state[f"fcd_tot_{aid_s}"] = max(
-            int(deps.min_appointment_total_cop), int(round(float(r.get("total_amount") or 0)))
+            0, int(round(float(r.get("total_amount") or 0)))
         )
         st.session_state[f"fcd_dz_{aid_s}"] = dz0
         st.session_state[f"fcd_obs_{aid_s}"] = obs0
@@ -166,7 +169,7 @@ def render_calendar_focus_appointment_body(r: dict[str, Any], hist_counts: dict[
             "start": sl0,
             "last": last0,
             "prio": bool(row_is_priority(r)),
-            "tot": max(int(deps.min_appointment_total_cop), int(round(float(r.get("total_amount") or 0)))),
+            "tot": max(0, int(round(float(r.get("total_amount") or 0)))),
             "artist": pick_art,
             "dz": dz0,
             "obs": obs0,
@@ -295,14 +298,14 @@ def render_calendar_focus_appointment_body(r: dict[str, Any], hist_counts: dict[
             key=f"fcd_artpick_{aid_s}",
         )
 
-    tot_min = max(int(deps.min_appointment_total_cop), 1)
     st.number_input(
         "Valor del tatuaje / trabajo (COP, entero)",
-        min_value=float(tot_min),
+        min_value=0.0,
         step=10000.0,
         disabled=montos_locked,
         key=f"fcd_tot_{aid_s}",
         format="%.0f",
+        help="Sin mínimo de agendamiento; el abonado acumulado no puede superar este total.",
     )
 
     _ = st.checkbox("Cita prioritaria", disabled=montos_locked, key=f"fcd_pri_{aid_s}")
@@ -338,22 +341,48 @@ def render_calendar_focus_appointment_body(r: dict[str, Any], hist_counts: dict[
         st.caption("Aún no hay filas en el historial de abonos.")
 
     if montos_locked is False:
+        pay_row_live = deps.find_appointment_row_by_id(aid) or r
+        tot_for_pay = float(st.session_state.get(f"fcd_tot_{aid_s}") or pay_row_live.get("total_amount") or 0)
+        _, dep_for_pay, pend_for_pay = appointment_financial_totals(
+            {**pay_row_live, "total_amount": tot_for_pay}
+        )
+        can_add_pay = pend_for_pay > 0.009
+        if not can_add_pay:
+            st.info("Trabajo cubierto: no hay saldo pendiente; no se pueden agregar abonos adicionales.")
         new_pd, ncol = st.columns([2, 2])
         with new_pd:
-            st.date_input("Fecha en que abona", min_value=today_d, format="DD/MM/YYYY", key=f"fcd_newpay_dt_{aid_s}")
+            st.date_input(
+                "Fecha en que abona",
+                min_value=today_d,
+                format="DD/MM/YYYY",
+                key=f"fcd_newpay_dt_{aid_s}",
+                disabled=not can_add_pay,
+            )
         with ncol:
             st.number_input(
                 "Valor nuevo abono (COP)",
-                min_value=float(deps.min_appointment_total_cop),
+                min_value=1.0 if can_add_pay else 0.0,
+                max_value=float(pend_for_pay) if can_add_pay else 0.0,
                 step=5000.0,
                 key=f"fcd_newpay_am_{aid_s}",
                 format="%.0f",
+                disabled=not can_add_pay,
+                help=(
+                    f"Saldo pendiente: {format_cop(pend_for_pay)} (abonado: {format_cop(dep_for_pay)})."
+                    if can_add_pay
+                    else "Saldo pendiente en cero."
+                ),
             )
-        if st.button("➕ Agregar abono", key=f"fcd_newpay_btn_{aid_s}"):
+        if st.button("➕ Agregar abono", key=f"fcd_newpay_btn_{aid_s}", disabled=not can_add_pay):
             paid_date = st.session_state.get(f"fcd_newpay_dt_{aid_s}")
             amt_add = float(int(st.session_state.get(f"fcd_newpay_am_{aid_s}") or 0))
-            if amt_add < float(deps.min_appointment_total_cop):
-                st.toast("El abono debe ser al menos el mínimo configurado.", icon="⚠️")
+            if amt_add <= 0:
+                st.toast("El abono debe ser mayor a cero.", icon="⚠️")
+            elif amt_add > pend_for_pay + 0.01:
+                st.toast(
+                    f"El abono no puede superar el saldo pendiente ({format_cop(pend_for_pay)}).",
+                    icon="⚠️",
+                )
             else:
                 iso = paid_date.isoformat() if hasattr(paid_date, "isoformat") else None
                 with st.spinner("Registrando abono…"):
@@ -513,11 +542,25 @@ def render_calendar_focus_appointment_body(r: dict[str, Any], hist_counts: dict[
             deps.queue_appointment_action_success("**Cambios guardados en la cita.**")
             st.rerun()
 
-        ba1, ba2, ba3, ba4 = st.columns(4)
+        repro_btn_disabled = deps.reprogram_disabled_for_row(r)
+        ba1, ba2, ba3, ba4, ba5 = st.columns(5)
         with ba1:
             if st.button("Guardar cambios", type="primary", use_container_width=True, key=f"fcd_sv_{aid_s}"):
                 _fcd_save_all()
         with ba2:
+            if st.button(
+                "Reprogramar",
+                use_container_width=True,
+                disabled=repro_btn_disabled,
+                key=f"fcd_repr_{aid_s}",
+                help="Abre el formulario de nueva fecha y franja (con disponibilidad del profesional).",
+            ):
+                st.session_state.pop(seed_k, None)
+                st.session_state.pop("_cal_focus_appt_id", None)
+                deps.clear_calendar_dialog_focus()
+                st.session_state["_ap_reprogram_item"] = dict(r)
+                st.rerun()
+        with ba3:
             anular_disabled = aid <= 0 or status_l in {"Cancelada", "Finalizada"}
             if st.button(
                 "Cancelar cita",
@@ -529,7 +572,7 @@ def render_calendar_focus_appointment_body(r: dict[str, Any], hist_counts: dict[
                 st.session_state.pop("_cal_focus_appt_id", None)
                 st.session_state["_ap_cancel_item"] = dict(r)
                 st.rerun()
-        with ba3:
+        with ba4:
             if st.button(
                 "Enviar recibo",
                 use_container_width=True,
@@ -539,7 +582,7 @@ def render_calendar_focus_appointment_body(r: dict[str, Any], hist_counts: dict[
                 st.session_state.pop(seed_k, None)
                 st.session_state.pop("_cal_focus_appt_id", None)
                 st.rerun()
-        with ba4:
+        with ba5:
             if st.button(
                 firma_lbl,
                 disabled=firmar_disabled,
@@ -568,6 +611,7 @@ def dialog_calendar_day_appointments(
     buckets: dict[tuple[int, int, int], list[dict[str, Any]]],
     hist_counts: dict[str, int],
 ) -> None:
+    """Lista del día: tarjetas HTML en un solo bloque + botones en pasada aparte (menos flash al scroll)."""
     tup = st.session_state.get("_cal_overflow_day")
     if not tup:
         return
@@ -581,26 +625,107 @@ def dialog_calendar_day_appointments(
             deps.clear_calendar_dialog_focus()
             st.rerun()
         return
+
     st.markdown(f"**{day_date.strftime('%d/%m/%Y')}** · **{len(day_rows)}** cita(s)")
     if deps.panel_is_technician_role():
         st.caption(
-            "Como **tatuador / perforador** solo ves citas **desde hoy** con estado activo; aquí solo puedes "
-            "**Completar firma profesional** cuando recepción ya guardó el contrato del cliente. "
+            "Como **tatuador / perforador** solo puedes usar **Completar firma profesional**. "
             "El agendamiento, montos y reprogramación los gestiona administración o ventas."
         )
     else:
         st.caption(
-            "Resumen de cada bloque **Cita**. Abre **Ficha completa** para ver datos del cliente, horario, montos y abonos."
+            "**Firmar contrato** abre la vista de firma. "
+            "Reprogramar, Montos o Recibos cierran este panel y abren el formulario correspondiente."
         )
+
+    all_cards = "".join(
+        f'<div class="appt-card-wrap">{calendar_overflow_row_html(r, hist_counts)}</div>'
+        for r in day_rows
+    )
+    st.markdown(f'<div class="appt-cards-block">{all_cards}</div>', unsafe_allow_html=True)
+
+    st.markdown("---")
+    tech = deps.panel_is_technician_role()
+
     for idx, r in enumerate(day_rows):
         appt_id = int(r.get("id", 0) or 0)
-        _calendar_overflow_day_sheet_link_row(
-            r,
-            hist_counts,
-            key_suffix=f"{appt_id}_{y}_{m}_{d}_{idx}",
-        )
+        status = str(r.get("status") or "Agendada")
+        nm = str(r.get("customer_name") or r.get("name") or "").strip() or "—"
+        hm = appointment_time_hm(r.get("appointment_date", r.get("date")))
+        st.caption(f"{hm} · {nm}")
+
+        firmar_disabled = deps.firmar_contrato_disabled(r)
+        repro_disabled = deps.reprogram_disabled_for_row(r)
+        montos_disabled = appt_id <= 0 or status not in {"Agendada", "Reprogramada"}
+        anular_disabled = appt_id <= 0 or status in {"Cancelada", "Finalizada"}
+        key_base = f"{appt_id}_{y}_{m}_{d}_{idx}"
+
+        if tech:
+            lbl = deps.firmar_contrato_button_label(r)
+            if st.button(
+                lbl,
+                disabled=firmar_disabled,
+                use_container_width=True,
+                key=f"cal_dlg_firmar_{key_base}",
+            ):
+                deps.clear_calendar_dialog_focus()
+                deps.open_firma_contrato_nav(r, appt_id)
+        else:
+            b0, b1, b2, b3, b4 = st.columns(5)
+            with b0:
+                if st.button(
+                    "Firmar contrato",
+                    disabled=firmar_disabled,
+                    use_container_width=True,
+                    key=f"cal_dlg_firmar_{key_base}",
+                ):
+                    deps.clear_calendar_dialog_focus()
+                    deps.open_firma_contrato_nav(r, appt_id)
+            with b1:
+                if st.button(
+                    "Reprogramar",
+                    disabled=repro_disabled,
+                    use_container_width=True,
+                    key=f"cal_dlg_repr_{key_base}",
+                ):
+                    deps.clear_calendar_dialog_focus()
+                    st.session_state["_ap_reprogram_item"] = r
+                    st.rerun()
+            with b2:
+                if st.button(
+                    "Montos",
+                    disabled=montos_disabled,
+                    use_container_width=True,
+                    key=f"cal_dlg_fin_{key_base}",
+                ):
+                    deps.clear_calendar_dialog_focus()
+                    st.session_state["_ap_fin_item"] = r
+                    st.rerun()
+            with b3:
+                if st.button(
+                    "Recibos",
+                    disabled=appt_id <= 0,
+                    use_container_width=True,
+                    key=f"cal_dlg_rec_{key_base}",
+                ):
+                    deps.clear_calendar_dialog_focus()
+                    st.session_state["_ap_receipts_item"] = r
+                    st.rerun()
+            with b4:
+                if st.button(
+                    "Anular",
+                    disabled=anular_disabled,
+                    use_container_width=True,
+                    key=f"cal_dlg_can_{key_base}",
+                ):
+                    deps.clear_calendar_dialog_focus()
+                    st.session_state["_ap_cancel_item"] = r
+                    st.rerun()
+
         if idx < len(day_rows) - 1:
-            st.divider()
+            st.markdown('<div class="cal-day-action-sep"></div>', unsafe_allow_html=True)
+
+    st.markdown("---")
     if st.button("Cerrar", key="cal_dlg_close", use_container_width=True):
         deps.clear_calendar_dialog_focus()
         st.rerun()
@@ -639,6 +764,4 @@ def dialog_calendar_single_appointment(
             "Como **tatuador / perforador** solo ves citas **desde hoy** con estado activo; aquí solo puedes "
             "**Completar firma profesional** cuando recepción ya guardó el contrato del cliente."
         )
-    else:
-        st.caption("Edita horario (reprogramación), prioridad (pill), artista y abonos. **Guardar** aplica contra la API.")
     render_calendar_focus_appointment_body(r, hist_counts)

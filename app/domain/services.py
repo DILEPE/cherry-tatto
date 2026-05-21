@@ -15,6 +15,11 @@ from app.domain.contract_kinds import (
     service_type_to_contract_kind,
 )
 from app.domain.contract_signing_guard import appointment_must_be_fully_paid_for_contract
+from app.domain.piercing_procedure_labels import (
+    build_piercing_type_index,
+    expand_procedure_answer_candidates,
+    resolve_piercing_type_canonical,
+)
 from app.domain.procedure_consent import PROCEDURE_CONSENT_SURVEY_QUESTION_ID
 from app.domain.service_types import resolve_service_type
 from app.domain.models import (
@@ -62,27 +67,10 @@ from app.schemas.survey_questions import (
     SurveyQuestionUpdate,
     question_create_to_domain,
 )
+from app.schemas.store import StoreCreate, StorePublic, StoreUpdate
 from app.schemas.template import ContractTemplateCreate, ContractTemplateRead, ContractTemplateUpdate
 
 logger = logging.getLogger(__name__)
-
-
-def _expand_procedure_answer_candidates(raw: str) -> list[str]:
-    """Opción única o elementos de lista JSON (checkbox de encuesta) candidatos a etiqueta de consentimiento."""
-    s = (raw or "").strip()
-    if not s:
-        return []
-    out: list[str] = [s]
-    try:
-        parsed = json.loads(s)
-        if isinstance(parsed, list):
-            for x in parsed:
-                sx = str(x).strip()
-                if sx:
-                    out.append(sx)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        pass
-    return out
 
 
 class BusinessLogicService:
@@ -90,11 +78,19 @@ class BusinessLogicService:
     Capa de dominio / aplicación: orquesta citas, clientes, plantillas y notificaciones.
     """
 
-    def __init__(self, appointment_repository, customer_repository, notifier, panel_user_repository=None):
+    def __init__(
+        self,
+        appointment_repository,
+        customer_repository,
+        notifier,
+        panel_user_repository=None,
+        store_repository=None,
+    ):
         self.repository = appointment_repository
         self.customers = customer_repository
         self.notifier = notifier
         self.panel_user_repo = panel_user_repository
+        self.store_repo = store_repository
 
     def _payment_receipt_pdf_webhook_payload(
         self,
@@ -456,32 +452,27 @@ class BusinessLogicService:
         luego cualquier respuesta de encuesta cuyo texto coincida (exacto o sin distinguir mayúsculas).
         Así se envía el PDF de cuidados aunque la pregunta de procedimiento no sea la id=3 o venga en checkbox.
         """
-        lower_index: dict[str, str] = {}
-        for lbl in self.repository.list_procedure_consent_labels():
-            if not lbl:
-                continue
-            lower_index[lbl.lower()] = lbl
+        index = build_piercing_type_index(
+            consent_labels=self.repository.list_procedure_consent_labels()
+        )
 
         def match_piece(piece: str) -> Optional[str]:
-            p = piece.strip()
-            if not p:
+            canonical = resolve_piercing_type_canonical(piece, index)
+            if not canonical:
                 return None
-            row = self.repository.get_procedure_consent_document(p)
+            row = self.repository.get_procedure_consent_document(canonical)
             if row is not None:
                 sl = row.get("survey_option_label")
-                return str(sl).strip() if sl else p
-            low = p.lower()
-            if low in lower_index:
-                return lower_index[low]
-            return None
+                return str(sl).strip() if sl else canonical
+            return canonical
 
-        for cand in _expand_procedure_answer_candidates(preferred_answer or ""):
+        for cand in expand_procedure_answer_candidates(preferred_answer or ""):
             got = match_piece(cand)
             if got:
                 return got
 
         for raw in self.repository.list_survey_answer_texts_for_appointment(appointment_id):
-            for cand in _expand_procedure_answer_candidates(raw):
+            for cand in expand_procedure_answer_candidates(raw):
                 got = match_piece(cand)
                 if got:
                     return got
@@ -695,6 +686,31 @@ class BusinessLogicService:
         def _run() -> list[AppointmentListItem]:
             rows = self.repository.get_all(assigned_panel_user_id=assigned_panel_user_id)
             return [AppointmentListItem.model_validate(r) for r in rows]
+
+        return await asyncio.to_thread(_run)
+
+    async def work_performed_labels_for_appointments(
+        self, appointment_ids: list[int]
+    ) -> dict[int, str]:
+        """Etiquetas de perforación (encuesta) para citas piercing; clave = appointment_id."""
+
+        def _run() -> dict[int, str]:
+            from app.domain.procedure_consent import PROCEDURE_CONSENT_SURVEY_QUESTION_ID
+            from app.domain.work_performed_label import resolve_work_performed_from_survey_raw
+
+            index = build_piercing_type_index(
+                consent_labels=self.repository.list_procedure_consent_labels()
+            )
+            raw = self.repository.get_piercing_type_labels_by_appointment_ids(
+                appointment_ids,
+                question_id=PROCEDURE_CONSENT_SURVEY_QUESTION_ID,
+            )
+            out: dict[int, str] = {}
+            for appt_id, text in raw.items():
+                label = resolve_work_performed_from_survey_raw(text, index)
+                if label:
+                    out[int(appt_id)] = label
+            return out
 
         return await asyncio.to_thread(_run)
 
@@ -1150,11 +1166,88 @@ class BusinessLogicService:
             raise ValueError("Customer not found")
         await asyncio.to_thread(self.customers.soft_delete, customer_id)
 
+    def _ensure_active_store_id(self, store_id: int) -> int:
+        sid = int(store_id)
+        if sid <= 0:
+            raise ValueError("STORE_NOT_ACTIVE")
+        if self.store_repo is None:
+            raise ValueError("STORE_NOT_ACTIVE")
+        row = self.store_repo.get_by_id(sid)
+        if row is None or not bool(row.get("is_active")):
+            raise ValueError("STORE_NOT_ACTIVE")
+        return sid
+
+    async def list_stores(self, *, include_inactive: bool = False) -> list[StorePublic]:
+        if self.store_repo is None:
+            return []
+
+        def _run() -> list[StorePublic]:
+            rows = self.store_repo.list_stores(include_inactive=include_inactive)
+            return [StorePublic.model_validate(r) for r in rows]
+
+        return await asyncio.to_thread(_run)
+
+    async def get_store(self, store_id: int) -> Optional[StorePublic]:
+        if self.store_repo is None:
+            return None
+
+        def _run() -> Optional[StorePublic]:
+            row = self.store_repo.get_by_id(store_id)
+            return StorePublic.model_validate(row) if row else None
+
+        return await asyncio.to_thread(_run)
+
+    async def create_store(self, data: StoreCreate) -> int:
+        if self.store_repo is None:
+            raise RuntimeError("Repositorio de tiendas no configurado.")
+
+        def _run() -> int:
+            return self.store_repo.insert(
+                name=data.name,
+                address=data.address,
+                phone=data.phone,
+                email=data.email,
+                is_active=data.is_active,
+            )
+
+        return await asyncio.to_thread(_run)
+
+    async def update_store(self, store_id: int, data: StoreUpdate) -> None:
+        if self.store_repo is None:
+            raise RuntimeError("Repositorio de tiendas no configurado.")
+
+        def _run() -> None:
+            self.store_repo.update(
+                store_id,
+                name=data.name,
+                address=data.address,
+                phone=data.phone,
+                email=data.email,
+                is_active=data.is_active,
+            )
+
+        await asyncio.to_thread(_run)
+
+    async def soft_delete_store(self, store_id: int) -> None:
+        if self.store_repo is None:
+            raise RuntimeError("Repositorio de tiendas no configurado.")
+
+        def _run() -> None:
+            row = self.store_repo.get_by_id(store_id)
+            if row is None:
+                raise ValueError("STORE_NOT_FOUND")
+            if self.store_repo.count_users_with_store_id(int(store_id)) > 0:
+                raise ValueError("STORE_IN_USE")
+            self.store_repo.soft_delete(store_id)
+
+        await asyncio.to_thread(_run)
+
     async def register_panel_user(self, data: PanelUserRegister) -> int:
         if self.panel_user_repo is None:
             raise RuntimeError("Repositorio de usuarios del panel no configurado.")
 
         def _run() -> int:
+            store_id = self._ensure_active_store_id(data.store_id)
             with self.panel_user_repo.db.transaction() as conn:
                 if self.panel_user_repo.get_by_username(data.username, conn):
                     raise ValueError("USERNAME_TAKEN")
@@ -1166,7 +1259,7 @@ class BusinessLogicService:
                     last_name=data.last_name,
                     address=data.address,
                     phone=data.phone,
-                    store=data.store,
+                    store_id=store_id,
                     role=data.role,
                     is_active=True,
                     conn=conn,
@@ -1179,6 +1272,7 @@ class BusinessLogicService:
             raise RuntimeError("Repositorio de usuarios del panel no configurado.")
 
         def _run() -> int:
+            store_id = self._ensure_active_store_id(data.store_id)
             with self.panel_user_repo.db.transaction() as conn:
                 if self.panel_user_repo.get_by_username(data.username, conn):
                     raise ValueError("USERNAME_TAKEN")
@@ -1190,7 +1284,7 @@ class BusinessLogicService:
                     last_name=data.last_name,
                     address=data.address,
                     phone=data.phone,
-                    store=data.store,
+                    store_id=store_id,
                     role=data.role,
                     is_active=data.is_active,
                     conn=conn,
@@ -1241,10 +1335,13 @@ class BusinessLogicService:
             payload["password_hash"] = hash_password(payload.pop("password"))
 
         def _run() -> None:
+            upd = dict(payload)
+            if "store_id" in upd:
+                upd["store_id"] = self._ensure_active_store_id(int(upd["store_id"]))
             with self.panel_user_repo.db.transaction() as conn:
                 if self.panel_user_repo.get_by_id(user_id, conn) is None:
                     raise ValueError("NOT_FOUND")
-                self.panel_user_repo.update(user_id, payload, conn)
+                self.panel_user_repo.update(user_id, upd, conn)
                 if payload.get("role") == "administrador":
                     self.panel_user_repo.replace_module_keys(user_id, [], conn)
 

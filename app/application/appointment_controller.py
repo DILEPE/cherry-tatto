@@ -47,6 +47,37 @@ class AppointmentController(Controller):
         except Exception as e:
             raise HTTPException(detail=f"Error al obtener citas: {str(e)}", status_code=500)
 
+    @get("/work-performed-labels")
+    async def work_performed_labels(
+        self,
+        state: State,
+        ids: str = Parameter(
+            default="",
+            query="ids",
+            description="IDs de citas separados por coma (solo se consulta encuesta de tipo de perforación).",
+        ),
+    ) -> dict[str, str]:
+        """Mapa appointment_id → texto (perforación en encuesta), para reportes financieros."""
+        parsed: list[int] = []
+        for part in (ids or "").split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                n = int(part)
+            except ValueError:
+                continue
+            if n > 0:
+                parsed.append(n)
+        try:
+            labels = await state.service.work_performed_labels_for_appointments(parsed)
+            return {str(k): v for k, v in labels.items()}
+        except Exception as e:
+            raise HTTPException(
+                detail=f"Error al obtener tipos de trabajo: {str(e)}",
+                status_code=500,
+            ) from e
+
     @get("/{appointment_id:int}")
     async def get_one(self, appointment_id: int, state: State) -> AppointmentListItem:
         """Detalle de una cita (mismo formato que el listado)."""

@@ -4,32 +4,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from app.domain.booking_work_kind import (
+    BOOKING_WORK_KIND_META,
+    BOOKING_WORK_KIND_ORDER,
+    work_kind_infer_from_existing_row,
+)
 from app.domain.service_types import resolve_service_type
-
-BOOKING_WORK_KIND_ORDER = ("piercing", "limpieza_piercing", "cambio_piercing", "tatuaje")
-
-BOOKING_WORK_KIND_META: Dict[str, Dict[str, Any]] = {
-    "piercing": {
-        "label": "Piercing (colocación)",
-        "service_token": "piercing",
-        "detail_tag": "[Piercing]",
-    },
-    "limpieza_piercing": {
-        "label": "Limpieza (piercing)",
-        "service_token": "piercing",
-        "detail_tag": "[Limpieza piercing]",
-    },
-    "cambio_piercing": {
-        "label": "Cambio de piercing",
-        "service_token": "piercing",
-        "detail_tag": "[Cambio piercing]",
-    },
-    "tatuaje": {
-        "label": "Tatuaje (sesión)",
-        "service_token": "tattoo",
-        "detail_tag": "[Tatuaje]",
-    },
-}
 
 
 def service_and_detail_for_work_kind(kind: str, user_detail: str) -> tuple[str, Optional[str]]:
@@ -55,22 +35,6 @@ def work_kind_to_schedule_kind(work_kind: str) -> str:
     """
     if work_kind == "tatuaje":
         return "tattoo"
-    return "piercing"
-
-
-def work_kind_infer_from_existing_row(row: Dict[str, Any]) -> str:
-    """Heurística desde fila API (tipo de servicio + detalle) para edición rápida desde calendario."""
-    svc = str(row.get("service_type") or row.get("service") or "").strip().lower()
-    det = str(row.get("detail") or "").lower()
-    combined = f"{svc} {det}"
-    if "limpieza" in det:
-        return "limpieza_piercing"
-    if "cambio" in det and "pierc" in combined:
-        return "cambio_piercing"
-    if "tatu" in combined or "tattoo" in svc:
-        return "tatuaje"
-    if "pierc" in combined or svc == "piercing":
-        return "piercing"
     return "piercing"
 
 

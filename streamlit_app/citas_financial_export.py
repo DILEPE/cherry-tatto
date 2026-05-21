@@ -11,6 +11,7 @@ from app.domain.appointment_money import (
     customer_credit_from_row,
 )
 from streamlit_app.appointment_staff_labels import assigned_artist_display_name
+from streamlit_app.report_work_performed import report_work_performed_text
 
 
 def _xlsx_border_thin() -> Any:
@@ -55,6 +56,7 @@ def citas_filtered_to_excel_bytes(
     rows: list[dict[str, Any]],
     *,
     generated_at: Optional[datetime] = None,
+    piercing_survey_labels: Optional[dict[int, str]] = None,
 ) -> bytes:
     """Genera .xlsx financiero estilizado: título, encabezados en negrita y tablas demarcadas."""
     from openpyxl import Workbook
@@ -64,16 +66,21 @@ def citas_filtered_to_excel_bytes(
     gen_dt = generated_at or datetime.now()
     fecha_etiqueta = gen_dt.strftime("%d/%m/%Y %H:%M")
 
+    survey_map = dict(piercing_survey_labels or {})
     datos: list[list[Any]] = []
     for r in rows:
         tot, abo, pend = appointment_financial_totals(r)
         cred = customer_credit_from_row(r)
         nombre = str(r.get("customer_name") or r.get("name") or "").strip()
         artista = assigned_artist_display_name(r)
+        servicio = str(r.get("service_type") or r.get("service") or "").strip()
+        tipo_trabajo = report_work_performed_text(r, survey_map)
         datos.append(
             [
                 nombre,
                 artista,
+                servicio,
+                tipo_trabajo,
                 round(tot, 2),
                 round(abo, 2),
                 round(pend, 2),
@@ -84,6 +91,8 @@ def citas_filtered_to_excel_bytes(
     headers = [
         "Cliente",
         "Artista / profesional",
+        "Servicio",
+        "Tipo trabajo / perforación",
         "Valor total (COP)",
         "Abonado (COP)",
         "Pendiente (COP)",
@@ -123,7 +132,7 @@ def citas_filtered_to_excel_bytes(
             headers[col - 1],
             font=font_header,
             fill=fill_header,
-            alignment=align_left if col <= 2 else align_right_num,
+            alignment=align_left if col <= 4 else align_right_num,
             border=bd,
         )
 
@@ -133,7 +142,7 @@ def citas_filtered_to_excel_bytes(
             r = row_start_body + i
             for col in range(1, ncol + 1):
                 v = row_vals[col - 1]
-                align = align_left if col <= 2 else align_right_num
+                align = align_left if col <= 4 else align_right_num
                 _excel_set_cell(ws1, r, col, v, font=font_body, alignment=align, border=bd)
             rmax = r
         _excel_apply_border_block(ws1, header_row, rmax, 1, ncol, bd)
@@ -153,6 +162,10 @@ def citas_filtered_to_excel_bytes(
             w = 34
         elif col == 2:
             w = 28
+        elif col == 3:
+            w = 16
+        elif col == 4:
+            w = 26
         ws1.column_dimensions[letter].width = w
 
     ws2 = wb.create_sheet("Resumen financiero", 1)
