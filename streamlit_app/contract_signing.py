@@ -1453,6 +1453,7 @@ def render_contract_express_piercing_view() -> None:
         appointments_for_artist_schedule as _appointments_for_artist_schedule,
         appointments_same_day_schedule_kind as _appointments_same_day_schedule_kind,
     )
+    from streamlit_app.citas_agendar_sections import render_agendar_required_banner_html
     from streamlit_app.panel_auth import panel_auth_enabled
 
     st.subheader("Cita express (piercing)")
@@ -1478,60 +1479,78 @@ def render_contract_express_piercing_view() -> None:
             "Define día, perforador, horario y montos. **El valor total debe quedar cubierto por el abono** "
             "para pasar al cuestionario y a la firma."
         )
+        render_agendar_required_banner_html()
+        st.caption("**Piercing (cita express)** — misma disposición que al agendar desde el calendario.")
+
         wk_submit = "piercing"
-        picked_raw = st.session_state.get("ctsig_expr_pick_day")
-        picked = picked_raw if isinstance(picked_raw, date) else date.today()
-        st.date_input(
-            "Fecha de la cita *",
-            value=picked,
-            min_value=date.today(),
-            format="DD/MM/YYYY",
-            key="ctsig_expr_pick_day",
-        )
+        need_role = _work_kind_to_assignee_role(wk_submit)
+
+        c_fecha, c_prof = st.columns(2)
+        with c_fecha:
+            st.markdown('<p class="dlg-appt-col-h">Fecha de la cita</p>', unsafe_allow_html=True)
+            picked_raw = st.session_state.get("ctsig_expr_pick_day")
+            picked = picked_raw if isinstance(picked_raw, date) else date.today()
+            st.date_input(
+                "Día en agenda *",
+                value=picked,
+                min_value=date.today(),
+                format="DD/MM/YYYY",
+                key="ctsig_expr_pick_day",
+                label_visibility="collapsed",
+            )
         picked2_raw = st.session_state.get("ctsig_expr_pick_day")
         picked_d = picked2_raw if isinstance(picked2_raw, date) else date.today()
 
-        need_role = _work_kind_to_assignee_role(wk_submit)
-        staff_opts = [s for s in _ensure_assignable_staff() if str(s.get("role")) == need_role]
         assigned_id: Optional[int] = None
-        role_me = str(st.session_state.get("_panel_user_role") or "")
-        uid_me = st.session_state.get("_panel_user_id")
-        locked_self = (
-            panel_auth_enabled()
-            and not st.session_state.get("_panel_session_full_access")
-            and role_me == need_role
-            and uid_me is not None
-        )
-        if locked_self:
-            assigned_id = int(uid_me)
-            st.caption("La cita quedará asignada a **tu usuario** del panel.")
-        elif not staff_opts:
-            st.error(
-                f"No hay usuario activo con rol **{need_role}**. Da de alta un perforador en **Gestión de usuarios**."
+        with c_prof:
+            st.markdown('<p class="dlg-appt-col-h">Profesional asignado</p>', unsafe_allow_html=True)
+            staff_opts = [s for s in _ensure_assignable_staff() if str(s.get("role")) == need_role]
+            role_me = str(st.session_state.get("_panel_user_role") or "")
+            uid_me = st.session_state.get("_panel_user_id")
+            locked_self = (
+                panel_auth_enabled()
+                and not st.session_state.get("_panel_session_full_access")
+                and role_me == need_role
+                and uid_me is not None
             )
-        else:
-            labels_p = [
-                f"{s.get('first_name', '')} {s.get('last_name', '')} (@{s.get('username', '')})"
-                for s in staff_opts
-            ]
-            pick_key = "ctsig_expr_staff_pick"
-            if pick_key not in st.session_state or st.session_state[pick_key] not in labels_p:
-                st.session_state[pick_key] = labels_p[0]
-            choice_p = st.selectbox(
-                "Perforador asignado *",
-                options=labels_p,
-                key=pick_key,
-            )
-            idx_p = labels_p.index(str(choice_p))
-            assigned_id = int(staff_opts[idx_p]["id"])
+            if locked_self:
+                assigned_id = int(uid_me)
+                st.caption("La cita quedará asignada a **tu usuario** del panel.")
+            elif not staff_opts:
+                st.error(
+                    f"No hay usuario activo con rol **{need_role}**. "
+                    "Da de alta un perforador en **Gestión de usuarios**."
+                )
+            else:
+                labels_p = [
+                    f"{s.get('first_name', '')} {s.get('last_name', '')} (@{s.get('username', '')})"
+                    for s in staff_opts
+                ]
+                pick_key = "ctsig_expr_staff_pick"
+                if pick_key not in st.session_state or st.session_state[pick_key] not in labels_p:
+                    st.session_state[pick_key] = labels_p[0]
+                choice_p = st.selectbox(
+                    "Perforador *",
+                    options=labels_p,
+                    key=pick_key,
+                    label_visibility="collapsed",
+                    help="Cada profesional tiene su propia ocupación por día.",
+                )
+                idx_p = labels_p.index(str(choice_p))
+                assigned_id = int(staff_opts[idx_p]["id"])
 
-        st.number_input(
-            "Franjas de 30 min a reservar *",
-            min_value=_MIN_BOOKING_DURATION_SLOTS,
-            max_value=_MAX_BOOKING_DURATION_SLOTS,
-            step=1,
-            key="ctsig_expr_slots",
-        )
+        c_dur, c_hr = st.columns(2)
+        with c_dur:
+            st.markdown('<p class="dlg-appt-col-h">Duración en agenda</p>', unsafe_allow_html=True)
+            st.number_input(
+                "Franjas de 30 min *",
+                min_value=_MIN_BOOKING_DURATION_SLOTS,
+                max_value=_MAX_BOOKING_DURATION_SLOTS,
+                step=1,
+                key="ctsig_expr_slots",
+                label_visibility="collapsed",
+                help="Desde la hora de inicio se bloquean tantas franjas de media hora.",
+            )
         need_slots = max(
             _MIN_BOOKING_DURATION_SLOTS,
             min(_MAX_BOOKING_DURATION_SLOTS, int(st.session_state.get("ctsig_expr_slots") or 1)),
@@ -1559,25 +1578,63 @@ def render_contract_express_piercing_view() -> None:
             st.session_state["ctsig_expr_slot"] = avail_slots[0]
 
         slot: Optional[str]
-        if not avail_slots:
-            st.warning("No quedan franjas libres ese día para esta duración.")
-            slot = None
-        else:
-            slot = st.selectbox(
-                "Franja de inicio *",
-                options=avail_slots,
-                key="ctsig_expr_slot",
+        with c_hr:
+            st.markdown('<p class="dlg-appt-col-h">Hora de inicio</p>', unsafe_allow_html=True)
+            if not avail_slots:
+                st.warning(
+                    "No quedan franjas libres ese día para esta duración. Prueba otro día o revisa las citas ya cargadas."
+                )
+                slot = None
+            else:
+                slot = st.selectbox(
+                    "Franja de inicio *",
+                    options=avail_slots,
+                    key="ctsig_expr_slot",
+                    label_visibility="collapsed",
+                    help=f"Se reservan {need_slots} franja(s) de 30 min desde esta hora.",
+                )
+                slot_vis = str(st.session_state.get("ctsig_expr_slot") or "").strip()
+                st.caption(f"Inicio **{slot_vis or '—'}** · duración **{need_slots * 30}** min")
+
+        st.markdown(f"**Fecha de la cita:** {picked_d.strftime('%d/%m/%Y')}")
+
+        st.markdown('<p class="dlg-appt-col-h">Cita y montos</p>', unsafe_allow_html=True)
+        cm1, cm2 = st.columns(2)
+        with cm1:
+            st.text_area(
+                "Notas u observaciones (opcional)",
+                height=68,
+                key="ctsig_expr_det",
+                help="Texto adicional (indicaciones, zona, etc.).",
             )
-
-        st.number_input("Valor total del trabajo (COP) *", min_value=0.0, step=10000.0, key="ctsig_expr_total")
-        st.number_input("Saldo abonado (COP) *", min_value=0.0, step=10000.0, key="ctsig_expr_dep")
-        st.text_area("Notas (opcional)", height=72, key="ctsig_expr_det")
-        st.checkbox("Cita prioritaria", key="ctsig_expr_priority")
-
-        total_amount = float(st.session_state.get("ctsig_expr_total") or 0)
-        deposit = max(0.0, round(float(st.session_state.get("ctsig_expr_dep") or 0), 2))
-        pending_balance = round(total_amount - deposit, 2)
-        st.caption(f"Saldo pendiente: **{_format_cop_express(max(pending_balance, 0))}** (debe ser **0** para encuesta y firma).")
+            st.checkbox(
+                "Cita prioritaria",
+                key="ctsig_expr_priority",
+                help="Se muestra con etiqueta roja en calendario y listado.",
+            )
+        with cm2:
+            st.number_input(
+                "Valor total del trabajo (COP) *",
+                min_value=0.0,
+                step=10000.0,
+                format="%.0f",
+                key="ctsig_expr_total",
+            )
+            st.number_input(
+                "Saldo abonado (COP) *",
+                min_value=0.0,
+                step=10000.0,
+                format="%.0f",
+                key="ctsig_expr_dep",
+                help="Para express, el abono debe cubrir el valor total (saldo pendiente cero).",
+            )
+            total_amount = float(st.session_state.get("ctsig_expr_total") or 0)
+            deposit = max(0.0, round(float(st.session_state.get("ctsig_expr_dep") or 0), 2))
+            pending_balance = round(total_amount - deposit, 2)
+            st.caption(
+                f"Saldo pendiente: **{_format_cop_express(max(pending_balance, 0))}** "
+                "(debe ser **0** para encuesta y firma)."
+            )
 
         c_go, c_cancel = st.columns(2)
         with c_cancel:

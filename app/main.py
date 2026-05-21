@@ -14,6 +14,7 @@ from litestar.plugins.pydantic import PydanticPlugin
 
 from app.infrastructure.database import DatabaseManager
 from app.infrastructure.repositories import AppointmentRepository
+from app.infrastructure.store_repository import StoreRepository
 from app.infrastructure.customer_repository import CustomerRepository
 from app.infrastructure.panel_user_repository import PanelUserRepository
 from app.infrastructure.external_api import NotificationService
@@ -26,6 +27,7 @@ from app.application.template_controller import TemplateController
 from app.application.customer_controller import CustomerController
 from app.application.health_controller import HealthController
 from app.application.panel_user_controller import PanelUserController
+from app.application.store_controller import StoreController
 
 
 # 2. Extraer las variables del entorno usando os.getenv()
@@ -62,6 +64,7 @@ db_mgr.ensure_appointment_payment_paid_on_column()
 repo = AppointmentRepository(db_mgr)
 customer_repo = CustomerRepository(db_mgr)
 panel_user_repo = PanelUserRepository(db_mgr)
+store_repo = StoreRepository(db_mgr)
 
 notifier = NotificationService(
     webhook_url=N8N_URL,
@@ -70,7 +73,9 @@ notifier = NotificationService(
 )
 
 # 4. Inicializar Servicio de Dominio
-business_service = BusinessLogicService(repo, customer_repo, notifier, panel_user_repo)
+business_service = BusinessLogicService(
+    repo, customer_repo, notifier, panel_user_repo, store_repo
+)
 
 # 5. Configurar Litestar
 initial_state = State({"service": business_service})
@@ -85,6 +90,7 @@ app = Litestar(
         SurveyQuestionController,
         CustomerController,
         PanelUserController,
+        StoreController,
     ],
     plugins=[PydanticPlugin()],
     cors_config=CORSConfig(allow_origins=["*"]),

@@ -811,6 +811,51 @@ class AppointmentRepository:
         finally:
             if conn: conn.close()
 
+    def get_piercing_type_labels_by_appointment_ids(
+        self,
+        appointment_ids: list[int],
+        *,
+        question_id: int = 3,
+    ) -> dict[int, str]:
+        """Respuesta de encuesta «tipo de perforación» por cita (pregunta id 3 por defecto)."""
+        ids = sorted({int(x) for x in appointment_ids if int(x) > 0})
+        if not ids:
+            return {}
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            placeholders = ",".join(["%s"] * len(ids))
+            cursor.execute(
+                f"""
+                SELECT s.appointment_id, sa.answer_text
+                FROM surveys s
+                INNER JOIN survey_answers sa ON sa.survey_id = s.id
+                WHERE s.appointment_id IN ({placeholders})
+                  AND sa.question_id = %s
+                  AND sa.answer_text IS NOT NULL
+                  AND TRIM(sa.answer_text) <> ''
+                """,
+                (*ids, int(question_id)),
+            )
+            out: dict[int, str] = {}
+            for row in cursor.fetchall() or []:
+                try:
+                    appt_id = int(row.get("appointment_id") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if appt_id <= 0 or appt_id in out:
+                    continue
+                raw = row.get("answer_text")
+                if raw is None:
+                    continue
+                t = str(raw).strip()
+                if t:
+                    out[appt_id] = t
+            return out
+        finally:
+            if conn:
+                conn.close()
+
     def get_survey_answer_text(self, appointment_id: int, question_id: int) -> Optional[str]:
         """Texto en `survey_answers` (p. ej. opción elegida en radio/select)."""
         conn = self.db.get_connection()

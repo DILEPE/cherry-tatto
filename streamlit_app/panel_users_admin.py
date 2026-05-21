@@ -6,13 +6,9 @@ from typing import Any, Dict, List
 import streamlit as st
 
 from app.domain.panel_modules import ASSIGNABLE_PANEL_MODULE_KEYS, PANEL_MODULE_LABEL_ES
-from app.domain.panel_user_profile import (
-    PANEL_ROLE_CHOICES,
-    PANEL_ROLE_LABEL_ES,
-    PANEL_STORE_CHOICES,
-    PANEL_STORE_LABEL_ES,
-)
+from app.domain.panel_user_profile import PANEL_ROLE_CHOICES, PANEL_ROLE_LABEL_ES
 from streamlit_app import api_client
+from streamlit_app.store_choices import load_store_choices, store_display_label
 from streamlit_app.panel_auth import panel_invalidate_module_cache, panel_is_operator_admin
 
 
@@ -186,10 +182,11 @@ def _dialog_crear_usuario_panel() -> None:
     with b:
         w_addr = st.text_input("Dirección", key="dlg_pu_addr")
         w_phone = st.text_input("Celular", key="dlg_pu_phone")
+        store_ids, store_labels = load_store_choices()
         w_store = st.selectbox(
             "Tienda *",
-            options=list(PANEL_STORE_CHOICES),
-            format_func=lambda x: PANEL_STORE_LABEL_ES[str(x)],
+            options=store_ids,
+            format_func=lambda x: store_display_label(int(x), store_labels),
             key="dlg_pu_store",
         )
         w_role = st.selectbox(
@@ -227,7 +224,7 @@ def _dialog_crear_usuario_panel() -> None:
                 "password": w_pass,
                 "first_name": (w_fn or "").strip(),
                 "last_name": (w_ln or "").strip(),
-                "store": w_store,
+                "store_id": int(w_store),
                 "role": w_role,
                 "is_active": bool(w_active),
             }
@@ -296,14 +293,17 @@ def _dialog_editar_usuario_panel(user_id: int) -> None:
         e_addr = st.text_input("Dirección", value=str(ed.get("address") or ""), key="dlg_pu_e_addr")
         e_phone = st.text_input("Celular", value=str(ed.get("phone") or ""), key="dlg_pu_e_phone")
         try:
-            s_idx = list(PANEL_STORE_CHOICES).index(str(ed.get("store") or "cherry_tattoo"))
-        except ValueError:
+            store_ids_e, store_labels_e = load_store_choices()
+            cur_sid = int(ed.get("store_id") or 0)
+            s_idx = store_ids_e.index(cur_sid) if cur_sid in store_ids_e else 0
+        except (TypeError, ValueError):
+            store_ids_e, store_labels_e = load_store_choices()
             s_idx = 0
         e_store = st.selectbox(
             "Tienda",
-            options=list(PANEL_STORE_CHOICES),
+            options=store_ids_e,
             index=s_idx,
-            format_func=lambda x: PANEL_STORE_LABEL_ES[str(x)],
+            format_func=lambda x: store_display_label(int(x), store_labels_e),
             key="dlg_pu_e_store",
         )
         try:
@@ -352,7 +352,7 @@ def _dialog_editar_usuario_panel(user_id: int) -> None:
                     "last_name": (e_ln or "").strip(),
                     "address": (e_addr or "").strip() or None,
                     "phone": (e_phone or "").strip() or None,
-                    "store": e_store,
+                    "store_id": int(e_store),
                     "role": e_role,
                     "is_active": bool(e_active),
                 }
@@ -454,7 +454,7 @@ def render_panel_users_tab() -> None:
         uid = int(it.get("id", 0))
         nombre = f"{it.get('first_name', '')} {it.get('last_name', '')}".strip() or "—"
         usr = str(it.get("username") or "")
-        tienda = PANEL_STORE_LABEL_ES.get(str(it.get("store")), str(it.get("store", "")))
+        tienda = str(it.get("store_name") or "").strip() or "—"
         rol = PANEL_ROLE_LABEL_ES.get(str(it.get("role")), str(it.get("role", "")))
         cel = str(it.get("phone") or "") or "—"
         activo = "Sí" if it.get("is_active") else "No"

@@ -21,13 +21,9 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from app.domain.panel_modules import ASSIGNABLE_PANEL_MODULE_KEYS
-from app.domain.panel_user_profile import (
-    PANEL_ROLE_CHOICES,
-    PANEL_ROLE_LABEL_ES,
-    PANEL_STORE_CHOICES,
-    PANEL_STORE_LABEL_ES,
-)
+from app.domain.panel_user_profile import PANEL_ROLE_CHOICES, PANEL_ROLE_LABEL_ES
 from streamlit_app import api_client
+from streamlit_app.store_choices import load_store_choices, store_display_label
 
 _ENV_ON: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
 """Segundos: debe ser ≥ duración CSS de la cortina (0.52s) para no crear widgets antes."""
@@ -797,10 +793,11 @@ def render_login_gate() -> bool:
                     reg_ln = st.text_input("Apellido", key="_panel_reg_ln")
                     reg_addr = st.text_input("Dirección", key="_panel_reg_addr")
                     reg_phone = st.text_input("Celular", key="_panel_reg_phone")
-                    reg_store = st.selectbox(
+                    _reg_store_ids, _reg_store_labels = load_store_choices()
+                    reg_store_id = st.selectbox(
                         "Tienda",
-                        options=list(PANEL_STORE_CHOICES),
-                        format_func=lambda x: PANEL_STORE_LABEL_ES[str(x)],
+                        options=_reg_store_ids,
+                        format_func=lambda x: store_display_label(int(x), _reg_store_labels),
                         key="_panel_reg_store",
                     )
                     reg_role = st.selectbox(
@@ -822,7 +819,7 @@ def render_login_gate() -> bool:
                             last_name=(reg_ln or "").strip(),
                             address=(reg_addr or "").strip() or None,
                             phone=(reg_phone or "").strip() or None,
-                            store=reg_store,
+                            store_id=int(reg_store_id),
                             role=reg_role,
                         )
                         if ok:

@@ -50,6 +50,20 @@ def get_appointment(appointment_id: int) -> Tuple[bool, int, Any]:
     return _request("GET", f"/api/appointments/{int(appointment_id)}")
 
 
+def get_appointments_work_performed_labels(
+    appointment_ids: list[int],
+) -> Tuple[bool, int, Any]:
+    """Mapa id cita → tipo de perforación (encuesta), para reporte financiero."""
+    ids = sorted({int(x) for x in appointment_ids if int(x) > 0})
+    if not ids:
+        return True, 200, {}
+    return _request(
+        "GET",
+        "/api/appointments/work-performed-labels",
+        params={"ids": ",".join(str(i) for i in ids)},
+    )
+
+
 def post_appointment(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
     return _request("POST", "/api/appointments", json_body=payload)
 
@@ -230,7 +244,7 @@ def post_panel_user_register(
     last_name: str = "",
     address: Optional[str] = None,
     phone: Optional[str] = None,
-    store: str = "cherry_tattoo",
+    store_id: int = 1,
     role: str = "vendedor",
 ) -> Tuple[bool, int, Any]:
     body: Dict[str, Any] = {
@@ -238,7 +252,7 @@ def post_panel_user_register(
         "password": password,
         "first_name": first_name,
         "last_name": last_name,
-        "store": store,
+        "store_id": int(store_id),
         "role": role,
     }
     if address is not None:
@@ -368,6 +382,32 @@ def put_customer(customer_id: int, payload: Dict[str, Any]) -> Tuple[bool, int, 
 
 def delete_customer(customer_id: int) -> Tuple[bool, int, Any]:
     return _request("DELETE", f"/api/customers/{customer_id}")
+
+
+# --- Tiendas ---
+
+
+def get_stores(*, include_inactive: bool = False) -> Tuple[bool, int, Any]:
+    params: Dict[str, Any] = {}
+    if include_inactive:
+        params["include_inactive"] = True
+    return _request("GET", "/api/stores", params=params or None)
+
+
+def get_store(store_id: int) -> Tuple[bool, int, Any]:
+    return _request("GET", f"/api/stores/{int(store_id)}")
+
+
+def post_store(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
+    return _request("POST", "/api/stores", json_body=payload)
+
+
+def put_store(store_id: int, payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
+    return _request("PUT", f"/api/stores/{int(store_id)}", json_body=payload)
+
+
+def delete_store(store_id: int) -> Tuple[bool, int, Any]:
+    return _request("DELETE", f"/api/stores/{int(store_id)}")
 
 
 def get_health_n8n() -> Tuple[bool, int, Any]:

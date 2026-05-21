@@ -22,6 +22,9 @@ Esta carpeta contiene scripts SQL para crear la estructura base y aplicar cambio
 16. `016_panel_users_profile.sql` (nombre, contacto, tienda y rol para cada usuario del panel)
 17. `017_panel_user_module_access.sql` (qué pestañas del panel puede ver cada usuario no administrador; los administradores tienen acceso total)
 18. `018_appointments_assigned_panel_user.sql` (columna `assigned_panel_user_id` en citas; FK a `panel_users` para agenda por tatuador/perforador)
+19. … migraciones `019`–`023` según tu despliegue (recibos, consentimientos, encuesta, abonos, etc.)
+20. `024_stores.sql` (tabla `stores`; `panel_users.store_id` FK; sin slug `code`)
+21. `025_stores_drop_code_panel_store_id.sql` (solo si aplicaste un `024` antiguo que aún tenía `stores.code`)
 
 > Nota: `001_customers_and_appointments_fk.sql` queda como referencia histórica porque la estructura base ya está consolidada en `000_initial_schema_cherry_tatto.sql`.
 
@@ -46,6 +49,8 @@ Si tu base ya existe y solo quieres actualizar:
 15. `016_panel_users_profile.sql` (perfil ampliado: nombre, dirección, tienda, rol)
 16. `017_panel_user_module_access.sql` (módulos asignables por usuario; requerido para el control de pestañas cuando no eres administrador)
 17. `018_appointments_assigned_panel_user.sql` (profesional asignado por cita; ejecutar después de `015`)
+18. `024_stores.sql` (catálogo de tiendas; ejecutar cuando uses **Gestión de tiendas** en el panel)
+19. `025_stores_drop_code_panel_store_id.sql` (si tu `024` anterior aún tenía columna `code`)
 
 ## Recuperación rápida
 
