@@ -56,6 +56,35 @@ def format_appointment_created_at_display(val: Any) -> str:
     return s or "—"
 
 
+def format_appointment_datetime_table_es(val: Any) -> str:
+    """Fecha/hora para tablas (p. ej. buscador de citas)."""
+    if val is None:
+        return "—"
+    if isinstance(val, datetime):
+        dt = val
+    else:
+        s = str(val).strip().replace("T", " ")
+        if not s:
+            return "—"
+        parsed: datetime | None = None
+        for chunk, fmt in (
+            (s[:19], "%Y-%m-%d %H:%M:%S"),
+            (s[:16], "%Y-%m-%d %H:%M"),
+            (s[:10], "%Y-%m-%d"),
+        ):
+            try:
+                parsed = datetime.strptime(chunk, fmt)
+                break
+            except ValueError:
+                continue
+        if parsed is None:
+            return s
+        dt = parsed
+    hour = dt.hour % 12 or 12
+    ampm = "AM" if dt.hour < 12 else "PM"
+    return f"{dt.strftime('%d/%m/%Y')} {hour:02d}:{dt.strftime('%M')} {ampm}"
+
+
 def format_api_datetime_compact_es(dt_str: str) -> str:
     """Presentación corta para mensajes (YYYY-MM-DD HH:MM → DD/MM/YYYY HH:MM)."""
     raw = (dt_str or "").strip().replace("T", " ")[:16]
@@ -74,4 +103,5 @@ __all__ = [
     "combine_appointment_datetime",
     "format_api_datetime_compact_es",
     "format_appointment_created_at_display",
+    "format_appointment_datetime_table_es",
 ]

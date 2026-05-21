@@ -195,11 +195,11 @@ def render_agendar_picked_date_summary(*, picked: date) -> None:
 
 
 def render_agendar_document_verify_block() -> None:
-    st.markdown('<p class="dlg-appt-col-h">Verificación de documento</p>', unsafe_allow_html=True)
+    st.markdown('<p class="dlg-appt-col-h">Identificación del cliente</p>', unsafe_allow_html=True)
     c_doc_l, c_doc_r = st.columns(2)
     with c_doc_l:
         st.selectbox(
-            "Tipo de documento *",
+            "Tipo de identificación del cliente *",
             options=["CC", "TI", "CE", "PAS"],
             format_func=lambda x: {
                 "CC": "CC — Cédula",
@@ -208,20 +208,26 @@ def render_agendar_document_verify_block() -> None:
                 "PAS": "PAS — Pasaporte",
             }[x],
             key="ap_doc_type",
-            help="Para clientes nuevos y como tipo de documento al verificar o registrar.",
         )
         st.text_input(
-            "Número de documento *",
+            "Número de identificación del cliente *",
             key="ap_doc_number",
             placeholder="Sin puntos ni espacios, si es posible",
         )
     with c_doc_r:
         st.markdown("<div style='height:4.5rem'></div>", unsafe_allow_html=True)
-        if st.button("Verificar documento", type="secondary", use_container_width=True, key="ap_btn_verify_doc"):
+        if st.button(
+            "Verificar identificación",
+            type="secondary",
+            use_container_width=True,
+            key="ap_btn_verify_doc",
+        ):
             doc_in = (st.session_state.get("ap_doc_number") or "").strip()
             if len(doc_in) < 5:
                 st.session_state["_ap_verify_level"] = "error"
-                st.session_state["_ap_verify_msg"] = "Ingresa un documento válido (mínimo 5 caracteres)."
+                st.session_state["_ap_verify_msg"] = (
+                    "Ingresa un número de identificación válido (mínimo 5 caracteres)."
+                )
                 st.session_state["_ap_doc_verified"] = False
             else:
                 ok_f, msg_f, row_f = fetch_customer_by_document(doc_in)

@@ -5,10 +5,27 @@ from __future__ import annotations
 import html as html_mod
 import json
 from datetime import date
-from typing import Callable
+from typing import Any, Callable
 
 import streamlit as st
 import streamlit.components.v1 as components
+
+
+def cal_month_appt_open_button_key(appt_id: int) -> str:
+    return f"cal_month_appt_open_{int(appt_id)}"
+
+
+def _month_visible_appt_ids(buckets: dict[tuple[int, int, int], list[dict[str, Any]]]) -> list[int]:
+    out: list[int] = []
+    seen: set[int] = set()
+    for rows in buckets.values():
+        for row in rows:
+            aid = int(row.get("id", 0) or 0)
+            if aid <= 0 or aid in seen:
+                continue
+            seen.add(aid)
+            out.append(aid)
+    return out
 
 
 def calendar_month_footer_strip_html(
@@ -268,8 +285,193 @@ def inject_calendar_month_footer_bridge() -> None:
     components.html(outer, height=0, width=0)
 
 
+def render_calendar_month_hidden_appt_open_buttons(
+    buckets: dict[tuple[int, int, int], list[dict[str, Any]]],
+    *,
+    clear_calendar_dialog_focus: Callable[[], None],
+) -> None:
+    """Botones ocultos: clic en «Ver cita» de la celda mensual abre la ficha."""
+    ids = _month_visible_appt_ids(buckets)
+    if not ids:
+        return
+    keys = [cal_month_appt_open_button_key(aid) for aid in ids]
+    css_chunks = [
+        "section.main button."
+        + html_mod.escape(f"st-key-{k}")
+        + "{position:absolute!important;left:-9999px!important;width:1px!important;"
+        "height:1px!important;opacity:0!important;margin:0!important;padding:0!important;}"
+        for k in keys
+    ]
+    st.markdown("<style>" + "\n".join(css_chunks) + "</style>", unsafe_allow_html=True)
+    for aid in ids:
+        bk = cal_month_appt_open_button_key(aid)
+        if st.button(
+            "\u200b",
+            key=bk,
+            help=f"Abrir cita #{aid} (calendario mes)",
+            type="tertiary",
+            width=1,
+        ):
+            clear_calendar_dialog_focus()
+            st.session_state["_cal_focus_appt_id"] = aid
+            st.session_state.pop("_cal_overflow_day", None)
+            st.rerun()
+
+
+def inject_calendar_month_appt_click_bridge() -> None:
+    """Clic en `.cal-appt-slot-link` dispara el botón oculto `cal_month_appt_open_*`."""
+    inner_js = """
+(function () {
+  var NS = "__calMonthApptOpenBridge_v1";
+
+  function appDocument() {
+    try {
+      var t = window.top;
+      if (t && t.document && t.document.querySelector('[data-testid="stApp"]')) return t.document;
+    } catch (e0) {}
+    var x = window;
+    for (var i = 0; i < 12; i++) {
+      try {
+        if (!x || !x.document) break;
+        var d = x.document;
+        if (d.querySelector('[data-testid="stApp"]')) return d;
+        if (x.parent === x) break;
+        x = x.parent;
+      } catch (e) {
+        break;
+      }
+    }
+    try {
+      return window.top.document;
+    } catch (e2) {
+      return document;
+    }
+  }
+
+  function prevTuple(tupleVal) {
+    if (!tupleVal || !tupleVal.shell || !tupleVal.onClick) return;
+    try {
+      tupleVal.shell.removeEventListener("click", tupleVal.onClick, true);
+    } catch (e0) {}
+  }
+
+  function mount() {
+    var prev = window[NS];
+    if (prev && typeof prev === "object") prevTuple(prev);
+
+    function findApptButton(doc, apptId) {
+      var subKey = "cal_month_appt_open_" + apptId;
+      var candidates = ["st-key-" + subKey, subKey];
+      for (var c = 0; c < candidates.length; c++) {
+        var cls = candidates[c];
+        var esc =
+          typeof CSS !== "undefined" && typeof CSS.escape === "function"
+            ? CSS.escape(cls)
+            : cls;
+        try {
+          var hosts = doc.querySelectorAll("." + esc);
+          for (var i = 0; i < hosts.length; i++) {
+            var h = hosts[i];
+            var btn =
+              h.tagName === "BUTTON"
+                ? h
+                : h.querySelector('button[data-testid^="baseButton"]') || h.querySelector("button");
+            if (btn && !btn.disabled) return btn;
+          }
+        } catch (eCls) {}
+      }
+      return null;
+    }
+
+    function onClick(ev) {
+      var t = ev.target;
+      if (!t || typeof t.closest !== "function") return;
+      var pill = t.closest("button.cal-appt-slot-link[data-cal-appt-id]");
+      if (!pill) return;
+      var raw = pill.getAttribute("data-cal-appt-id");
+      var apptId = parseInt(raw || "", 10);
+      if (!apptId || apptId <= 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      var wb = findApptButton(appDocument(), apptId);
+      if (wb) {
+        try {
+          wb.click();
+        } catch (e2) {
+          try {
+            wb.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+          } catch (e3) {}
+        }
+      }
+    }
+
+    function bind() {
+      var doc = appDocument();
+      var shell =
+        doc.querySelector('[data-testid="stMain"]') ||
+        doc.querySelector("section.main") ||
+        doc.body;
+      if (!shell) return;
+      shell.removeEventListener("click", onClick, true);
+      shell.addEventListener("click", onClick, true);
+      window[NS] = { shell: shell, onClick: onClick };
+    }
+
+    bind();
+    setTimeout(bind, 0);
+    setTimeout(bind, 120);
+    setTimeout(bind, 400);
+  }
+
+  mount();
+})();
+"""
+    outer = (
+        "<script>\n"
+        "(function () {\n"
+        '  function appDocument() {\n'
+        "    try {\n"
+        '      var t = window.top;\n'
+        '      if (t && t.document && t.document.querySelector(\'[data-testid="stApp"]\')) return t.document;\n'
+        "    } catch (e0) {}\n"
+        "    var x = window;\n"
+        "    for (var i = 0; i < 12; i++) {\n"
+        "      try {\n"
+        "        if (!x || !x.document) break;\n"
+        "        var d = x.document;\n"
+        '        if (d.querySelector(\'[data-testid="stApp"]\')) return d;\n'
+        "        if (x.parent === x) break;\n"
+        "        x = x.parent;\n"
+        "      } catch (e) {\n"
+        "        break;\n"
+        "      }\n"
+        "    }\n"
+        "    try {\n"
+        "      return window.top.document;\n"
+        "    } catch (e2) {\n"
+        "      return document;\n"
+        "    }\n"
+        "  }\n"
+        "  function injectScript(doc, text) {\n"
+        "    try {\n"
+        '      var s = doc.createElement("script");\n'
+        "      s.textContent = text;\n"
+        "      (doc.head || doc.documentElement).appendChild(s);\n"
+        "      s.remove();\n"
+        "    } catch (e) {}\n"
+        "  }\n"
+        f"  injectScript(appDocument(), {json.dumps(inner_js)});\n"
+        "})();\n"
+        "</script>"
+    )
+    components.html(outer, height=0, width=0)
+
+
 __all__ = [
+    "cal_month_appt_open_button_key",
     "calendar_month_footer_strip_html",
+    "inject_calendar_month_appt_click_bridge",
     "inject_calendar_month_footer_bridge",
+    "render_calendar_month_hidden_appt_open_buttons",
     "render_calendar_month_hidden_book_widgets",
 ]

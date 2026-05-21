@@ -27,8 +27,8 @@ __all__ = [
 ]
 
 
-# Altura en px de cada franja de 30 min en la vista semanal tipo Teams/Outlook.
-WEEK_SCHEDULE_SLOT_PX = 22
+# Altura en px de cada franja de 30 min (hora + cliente + «Ver cita» en citas de 1 franja).
+WEEK_SCHEDULE_SLOT_PX = 72
 
 
 def week_monday(d: date) -> date:
@@ -309,7 +309,7 @@ def week_grid_day_column_html(
     for row, start_idx, vis, lane_i, n_lanes in placed:
         cls_pill = client_pill_class(row, counts_by_client)
         top = start_idx * slot_px
-        height = max(vis * slot_px - 2, 14)
+        height = max(vis * slot_px - 3, slot_px - 4)
         pct_w = 100.0 / n_lanes
         left = lane_i * pct_w
         nm = str(row.get("customer_name") or row.get("name") or "").strip() or "—"
@@ -320,37 +320,23 @@ def week_grid_day_column_html(
         st_cl = str(row.get("status") or "").strip().lower()
         soft_cls = " twg-cancelada-soft" if st_cl == "cancelada" else ""
         ap_id = int(row.get("id", 0) or 0)
-        compact = vis <= 1
+        single_slot = vis <= 1
         link_html = ""
         if ap_id > 0:
-            if compact:
-                link_html = (
-                    f'<button type="button" class="twg-appt-link twg-appt-link--compact" '
-                    f'data-cal-appt-id="{ap_id}" aria-label="Ver cita">'
-                    '<span class="twg-appt-link-play" aria-hidden="true">▶</span>'
-                    "</button>"
-                )
-            else:
-                link_html = (
-                    f'<button type="button" class="twg-appt-link" data-cal-appt-id="{ap_id}" '
-                    'aria-label="Ver cita">'
-                    '<span class="twg-appt-link-play" aria-hidden="true">▶</span>'
-                    "<span>Ver cita</span>"
-                    "</button>"
-                )
-        cls_appt_extra = " twg-appt--compact" if compact else ""
-        if compact:
-            body = (
-                f'<span class="twg-appt-time-compact">{html_mod.escape(hm)}</span>'
-                f'<span class="twg-appt-client-compact">{nm_esc}</span>'
+            link_html = (
+                f'<button type="button" class="twg-appt-link" data-cal-appt-id="{ap_id}" '
+                'aria-label="Ver cita">'
+                '<span class="twg-appt-link-play" aria-hidden="true">▶</span>'
+                "<span>Ver cita</span>"
+                "</button>"
             )
-        else:
-            body = (
-                '<div class="twg-appt-body-stack">'
-                f'<span class="twg-appt-head-time">{html_mod.escape(hm)}</span>'
-                f'<span class="twg-appt-client">{nm_esc}</span>'
-                "</div>"
-            )
+        cls_appt_extra = " twg-appt--single-slot" if single_slot else ""
+        body = (
+            '<div class="twg-appt-body-stack">'
+            f'<span class="twg-appt-head-time">{html_mod.escape(hm)}</span>'
+            f'<span class="twg-appt-client">{nm_esc}</span>'
+            "</div>"
+        )
         geo = (
             f"top:{top}px;height:{height}px;left:{left}%;width:calc({pct_w}% - 3px);margin-left:1px"
         )

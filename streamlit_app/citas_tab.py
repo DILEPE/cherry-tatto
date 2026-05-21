@@ -20,6 +20,7 @@ from streamlit_app.appointment_agenda_slots import (
 )
 from streamlit_app.appointment_dates import appointment_row_date as _parse_date
 from streamlit_app.appointment_filters import filter_appointment_rows
+from streamlit_app.store_choices import load_store_choices
 from streamlit_app.appointment_staff_labels import assigned_artist_display_name as _assigned_artist_display_name
 from streamlit_app.components.calendar_focus_dialogs import (
     CalendarFocusDeps,
@@ -42,6 +43,7 @@ from streamlit_app.citas_booking_meta import (
     work_kind_infer_from_existing_row,
     work_kind_to_assignee_role,
 )
+from streamlit_app.citas_appointment_search import dialog_buscar_cita
 from streamlit_app.citas_detail_dialogs import (
     dialog_ajustar_montos,
     dialog_cancelar_cita,
@@ -244,37 +246,69 @@ def _artist_filter_labels_and_map() -> tuple[list[str], dict[str, int]]:
     return labels, id_by_label
 
 
-def _render_professional_calendar_filter() -> None:
-    """Filtro por tatuador/perforador para quien puede ver toda la agenda."""
+def _appointment_scope_caption() -> None:
+    """Texto de alcance cuando el operador no usa filtro de profesional."""
     from app.domain.panel_user_profile import PANEL_ROLE_LABEL_ES
 
-    if not _may_see_all_appointments():
-        if _panel_is_technician_role():
-            st.caption(
-                "Solo ves citas **activas** (agendada / reprogramada) **asignadas a ti**, "
-                "**desde la fecha de hoy en adelante** (las pasadas no aparecen). "
-                f"Rol: **{PANEL_ROLE_LABEL_ES.get(str(st.session_state.get('_panel_user_role') or ''), 'operador')}**."
+    role_lbl = PANEL_ROLE_LABEL_ES.get(str(st.session_state.get("_panel_user_role") or ""), "operador")
+    if _panel_is_technician_role():
+        st.caption(
+            "Solo ves citas **activas** (agendada / reprogramada) **asignadas a ti**, "
+            "**desde hoy en adelante**. "
+            f"Rol: **{role_lbl}**."
+        )
+    else:
+        st.caption(f"Solo ves citas asignadas a **tu usuario** del panel. Rol: **{role_lbl}**.")
+
+
+def _store_filter_format(store_id: int, labels: dict[int, str]) -> str:
+    if int(store_id or 0) <= 0:
+        return "Todos"
+    return labels.get(int(store_id), f"#{store_id}")
+
+
+def _render_calendar_filters_row(*, svc_values: list[str], status_values: list[str]) -> None:
+    """Tienda, servicio, estado y (si aplica) profesional en una sola línea."""
+    store_ids, store_labels = load_store_choices()
+    store_opts = [0] + list(store_ids)
+    may_all = _may_see_all_appointments()
+
+    if may_all:
+        labels, id_by_label = _artist_filter_labels_and_map()
+        c1, c2, c3, c4 = st.columns([1.15, 1.05, 1.0, 1.35], vertical_alignment="bottom")
+        with c1:
+            st.selectbox(
+                "Tienda",
+                options=store_opts,
+                format_func=lambda sid: _store_filter_format(sid, store_labels),
+                key="_ap_cal_f_store_id",
             )
-        else:
-            st.caption(
-                "Solo ves citas asignadas a **tu usuario** del panel ("
-                f"{PANEL_ROLE_LABEL_ES.get(str(st.session_state.get('_panel_user_role') or ''), 'operador')})."
+        with c2:
+            st.selectbox("Servicio", options=["Todos", *svc_values], key="_ap_cal_f_service")
+        with c3:
+            st.selectbox("Estado", options=["Todos", *status_values], key="_ap_cal_f_status")
+        with c4:
+            choice = st.selectbox(
+                "Profesional",
+                options=labels,
+                key="_ap_filt_artist_cal",
             )
+            st.session_state["_ap_filter_artist_id"] = id_by_label.get(str(choice), 0)
+    else:
         st.session_state["_ap_filter_artist_id"] = 0
-        return
-    labels, id_by_label = _artist_filter_labels_and_map()
-    sb_key = "_ap_filt_artist_cal"
-    if sb_key not in st.session_state:
-        st.session_state[sb_key] = "Todos"
-    choice = st.selectbox(
-        "Profesional (filtro de citas)",
-        options=labels,
-        key=sb_key,
-        help="Filtra qué citas se cargan desde la API. "
-        "Administrador y vendedor ven la agenda completa con este filtro; "
-        "tatuadores y perforadores solo cargan sus citas activas asignadas.",
-    )
-    st.session_state["_ap_filter_artist_id"] = id_by_label.get(str(choice), 0)
+        c1, c2, c3 = st.columns([1.2, 1.1, 1.05], vertical_alignment="bottom")
+        with c1:
+            st.selectbox(
+                "Tienda",
+                options=store_opts,
+                format_func=lambda sid: _store_filter_format(sid, store_labels),
+                key="_ap_cal_f_store_id",
+            )
+        with c2:
+            st.selectbox("Servicio", options=["Todos", *svc_values], key="_ap_cal_f_service")
+        with c3:
+            st.selectbox("Estado", options=["Todos", *status_values], key="_ap_cal_f_status")
+        _appointment_scope_caption()
 
 
 
@@ -570,13 +604,19 @@ def _apply_appointment_filters(
     name_key: str = "_ap_f_name",
     service_key: str = "_ap_f_service",
     status_key: str = "_ap_f_status",
+    store_key: str = "_ap_cal_f_store_id",
 ) -> list[dict[str, Any]]:
     """Lee filtros desde `session_state` y delega en `filter_appointment_rows` (lógica pura)."""
+    try:
+        store_id = int(st.session_state.get(store_key) or 0)
+    except (TypeError, ValueError):
+        store_id = 0
     return filter_appointment_rows(
         items,
         name_substr=str(st.session_state.get(name_key) or ""),
         service=str(st.session_state.get(service_key) or "Todos"),
         status=str(st.session_state.get(status_key) or "Todos"),
+        store_id=store_id,
         from_date=st.session_state.get("_ap_f_from") if use_date_range else None,
         to_date=st.session_state.get("_ap_f_to") if use_date_range else None,
     )
@@ -605,12 +645,18 @@ def _init_appt_tab_session_state() -> None:
         st.session_state["_ap_f_from"] = None
     if "_ap_f_to" not in st.session_state:
         st.session_state["_ap_f_to"] = None
-    if "_ap_cal_f_name" not in st.session_state:
-        st.session_state["_ap_cal_f_name"] = ""
+    if "_ap_cal_f_store_id" not in st.session_state:
+        st.session_state["_ap_cal_f_store_id"] = 0
     if "_ap_cal_f_service" not in st.session_state:
         st.session_state["_ap_cal_f_service"] = "Todos"
     if "_ap_cal_f_status" not in st.session_state:
         st.session_state["_ap_cal_f_status"] = "Todos"
+    if "_ap_search_field" not in st.session_state:
+        st.session_state["_ap_search_field"] = "name"
+    if "_ap_search_q" not in st.session_state:
+        st.session_state["_ap_search_q"] = ""
+    if "_ap_search_page" not in st.session_state:
+        st.session_state["_ap_search_page"] = 0
 
 
 def warm_session_after_login(allowed_module_keys: frozenset[str]) -> None:
@@ -676,6 +722,11 @@ def _invoke_citas_tab_dialogs(
             dialog_calendar_day_appointments(by_day, hist_counts)
     else:
         clear_calendar_focus_session_deps()
+    if st.session_state.get("_ap_search_dlg"):
+        dialog_buscar_cita(
+            query_assigned_user_id=_appointments_query_assigned_user_id,
+            filter_for_role=_filter_appointments_for_session_role,
+        )
     if st.session_state.get("_ap_dlg") == "create":
         dialog_agendar_cita()
 
@@ -797,11 +848,25 @@ def render_citas_tab() -> None:
     ):
         _render_citas_color_legend()
 
-    filt_head_l, filt_head_r = st.columns([4.2, 1.35])
+    filt_head_l, filt_head_m, filt_head_r = st.columns([3.4, 1.15, 1.35])
     with filt_head_l:
         st.markdown("##### Filtros del calendario")
+    with filt_head_m:
+        st.write("")
+        st.write("")
+        if st.button(
+            "Buscar cita",
+            use_container_width=True,
+            icon=":material/search:",
+            key="btn_buscar_cita_cal",
+        ):
+            st.session_state["_ap_search_dlg"] = True
+            st.session_state.pop("_ap_search_result", None)
+            st.session_state.pop("_ap_search_err", None)
     with filt_head_r:
         _cex_disabled = _panel_is_technician_role()
+        st.write("")
+        st.write("")
         if st.button(
             "Cita express",
             type="primary",
@@ -815,15 +880,7 @@ def render_citas_tab() -> None:
             ),
         ):
             open_contract_express_piercing()
-    cf1, cf2, cf3 = st.columns([1.3, 1.0, 1.0])
-    with cf1:
-        st.text_input("Filtrar nombre", key="_ap_cal_f_name", placeholder="Nombre cliente")
-    with cf2:
-        st.selectbox("Servicio", options=["Todos", *svc_values], key="_ap_cal_f_service")
-    with cf3:
-        st.selectbox("Estado", options=["Todos", *status_values], key="_ap_cal_f_status")
-
-    _render_professional_calendar_filter()
+    _render_calendar_filters_row(svc_values=svc_values, status_values=status_values)
 
     vista_compact = "Mes — compacta"
     vista_team = "Mes — por equipo"
@@ -867,13 +924,6 @@ def render_citas_tab() -> None:
         vista_options,
         horizontal=True,
         key="_ap_cal_vista",
-        help=(
-            "**Mes compacta**: filas del día sin agrupar. "
-            "**Mes por equipo**: agrupa por profesional cuando el filtro permite ver a todos; "
-            "si cambias el filtro, vuelves a compacta. "
-            "**Semana**: columnas Lun–Dom con franjas de **30 min** (*Outlook / Teams*). "
-            "Al cambiar desde el mes a la vista semana, la primera semana se alinea con el mes abierto."
-        ),
     )
 
     vista = str(st.session_state.get("_ap_cal_vista") or vista_compact)
@@ -908,9 +958,10 @@ def render_citas_tab() -> None:
     cal_filtered = _apply_appointment_filters(
         items,
         use_date_range=False,
-        name_key="_ap_cal_f_name",
+        name_key="_ap_f_name",
         service_key="_ap_cal_f_service",
         status_key="_ap_cal_f_status",
+        store_key="_ap_cal_f_store_id",
     )
     hc_raw = st.session_state.get("_ap_hist_counts")
     hist_counts: dict[str, int] = dict(hc_raw) if isinstance(hc_raw, dict) else {}

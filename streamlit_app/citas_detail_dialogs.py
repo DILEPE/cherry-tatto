@@ -439,8 +439,7 @@ def dialog_recibos_cita() -> None:
     name = str(appt.get("customer_name") or appt.get("name") or "").strip()
     st.markdown(f"**Cita #{appt_id}** · {name or '—'}")
     st.caption(
-        "Si al crear la cita hubo abono y el servicio es **tatuaje** (u otro no piercing), se genera un recibo inicial; "
-        "en **piercing / limpieza / cambio** no se envía recibo PDF al agendar (solo notificación de cita). "
+        "Si al crear la cita hubo abono mayor a cero, se genera un recibo PDF inicial; "
         "Cada abono adicional puede generar otro PDF. Los archivos se guardan en el servidor."
     )
 
@@ -489,16 +488,46 @@ def dialog_recibos_cita() -> None:
         got = st.session_state.get(pdf_key)
         if isinstance(got, tuple) and len(got) == 2 and got[0]:
             blob, fname = got[0], got[1]
-            st.download_button(
-                "Descargar PDF",
-                data=blob,
-                file_name=str(fname or f"recibo_{appt_id}_{rid}.pdf"),
-                mime="application/pdf",
-                use_container_width=True,
-                key=f"ap_rec_dl_{appt_id}_{rid}",
-            )
+            b_dl, b_rs = st.columns(2)
+            with b_dl:
+                st.download_button(
+                    "Descargar PDF",
+                    data=blob,
+                    file_name=str(fname or f"recibo_{appt_id}_{rid}.pdf"),
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key=f"ap_rec_dl_{appt_id}_{rid}",
+                )
+            with b_rs:
+                if st.button(
+                    "Reenviar",
+                    use_container_width=True,
+                    key=f"ap_rec_resend_{appt_id}_{rid}",
+                    help="Vuelve a enviar este recibo por n8n.",
+                ):
+                    with st.spinner("Reenviando…"):
+                        ok_rs, code_rs, body_rs = api_client.post_resend_appointment_receipt(appt_id, rid)
+                    if ok_rs:
+                        st.success("Recibo reenviado.")
+                    else:
+                        st.error(
+                            f"No se pudo reenviar (HTTP {code_rs}): {format_http_error_detail(body_rs)}"
+                        )
         else:
             st.caption("No se pudo cargar el archivo PDF.")
+            if st.button(
+                "Reenviar",
+                use_container_width=True,
+                key=f"ap_rec_resend_nofile_{appt_id}_{rid}",
+            ):
+                with st.spinner("Reenviando…"):
+                    ok_rs, code_rs, body_rs = api_client.post_resend_appointment_receipt(appt_id, rid)
+                if ok_rs:
+                    st.success("Recibo reenviado.")
+                else:
+                    st.error(
+                        f"No se pudo reenviar (HTTP {code_rs}): {format_http_error_detail(body_rs)}"
+                    )
         st.divider()
 
     if st.button("Cerrar", use_container_width=True, key="ap_rec_close_main"):

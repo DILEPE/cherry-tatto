@@ -38,6 +38,25 @@ def _request(
     return ok, r.status_code, data
 
 
+def search_appointments(
+    *,
+    field: str,
+    q: str,
+    limit: int = 10,
+    offset: int = 0,
+    assigned_panel_user_id: Optional[int] = None,
+) -> Tuple[bool, int, Any]:
+    params: Dict[str, Any] = {
+        "field": field,
+        "q": q,
+        "limit": int(limit),
+        "offset": int(offset),
+    }
+    if assigned_panel_user_id is not None:
+        params["assigned_panel_user_id"] = int(assigned_panel_user_id)
+    return _request("GET", "/api/appointments/search", params=params)
+
+
 def get_appointments(assigned_panel_user_id: Optional[int] = None) -> Tuple[bool, int, Any]:
     params: Optional[Dict[str, Any]] = None
     if assigned_panel_user_id is not None:
@@ -191,6 +210,13 @@ def fetch_appointment_receipt_pdf(appointment_id: int, receipt_id: int) -> Tuple
         if part:
             fname = part.split(";", 1)[0].strip('"')
     return True, r.status_code, r.content, fname
+
+
+def post_resend_appointment_receipt(appointment_id: int, receipt_id: int) -> Tuple[bool, int, Any]:
+    return _request(
+        "POST",
+        f"/api/appointments/{int(appointment_id)}/receipts/{int(receipt_id)}/resend",
+    )
 
 
 def post_contract(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:

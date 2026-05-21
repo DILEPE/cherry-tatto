@@ -96,8 +96,8 @@ section.main:has(.cal-cell--month) div[data-testid="element-container"]:has(ifra
     border: 1px solid rgba(148, 163, 184, 0.36);
     border-radius: 0;
     padding: 0;
-    height: 12.75rem;
-    max-height: 12.75rem;
+    height: 20rem;
+    max-height: 20rem;
     margin-bottom: 0;
     margin-right: -1px;
     margin-top: -1px;
@@ -159,10 +159,11 @@ section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell-spacer--month) >
     margin: 0;
     flex: 1 1 auto;
     min-height: 0;
-    padding: 0.12rem 0.12rem;
+    padding: 0.2rem 0.22rem;
     border: none;
     border-bottom: 1px solid rgba(148, 163, 184, 0.18);
     margin-bottom: 0;
+    gap: 0.28rem;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: thin;
 }
@@ -257,6 +258,9 @@ button.cal-footer-book:hover {
     gap: 0.12rem;
     min-width: 0;
 }
+.cal-team-lines--slots {
+    gap: 0.28rem;
+}
 .cal-appt-line {
     display: grid;
     grid-template-columns: 2rem minmax(0, 1fr) minmax(0, auto);
@@ -320,8 +324,8 @@ button.cal-footer-book:hover {
 }
 /* Casilla vacía: alto alineado a la celda con pie (solo espaciador superior, sin footer) */
 .cal-cell-spacer.cal-cell-spacer--month {
-    height: 12.75rem;
-    max-height: 12.75rem;
+    height: 20rem;
+    max-height: 20rem;
     margin-bottom: 0;
     margin-right: -1px;
     margin-top: -1px;
@@ -451,8 +455,8 @@ button.cal-footer-book:hover {
 }
 .twg-appt-client {
     font-weight: 600;
-    font-size: 0.62rem;
-    line-height: 1.12;
+    font-size: 0.72rem;
+    line-height: 1.18;
     color: rgba(248, 250, 252, 0.96);
     white-space: normal;
     word-break: break-word;
@@ -463,39 +467,29 @@ button.cal-footer-book:hover {
     min-height: 0;
     flex: 1 1 auto;
 }
-.twg-appt--compact {
-    flex-direction: row !important;
-    align-items: center !important;
-    justify-content: flex-start !important;
-    gap: 4px !important;
-    padding: 1px 3px !important;
+.twg-appt--single-slot {
+    padding: 3px 5px 2px;
+    gap: 2px;
+    justify-content: flex-start;
 }
-.twg-appt-time-compact {
-    flex-shrink: 0;
-    font-weight: 700;
-    font-size: 9px;
-    line-height: 1.05;
-    color: rgba(248, 250, 252, 0.98);
+.twg-appt--single-slot .twg-appt-body-stack {
+    flex: 0 1 auto;
+    gap: 2px;
 }
-.twg-appt-client-compact {
-    flex: 1 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-weight: 600;
-    font-size: 8.5px;
-    line-height: 1.05;
-    color: rgba(248, 250, 252, 0.95);
+.twg-appt--single-slot .twg-appt-head-time {
+    font-size: 0.78rem;
+    line-height: 1.12;
 }
-.twg-appt-link--compact {
-    flex-shrink: 0 !important;
-    align-self: center !important;
-    width: auto !important;
-    min-height: 0 !important;
-    padding: 0 3px !important;
-    margin-top: 0 !important;
-    gap: 0 !important;
+.twg-appt--single-slot .twg-appt-client {
+    font-size: 0.72rem;
+    line-height: 1.16;
+    -webkit-line-clamp: 2;
+}
+.twg-appt--single-slot .twg-appt-link {
+    margin-top: auto;
+    min-height: 1.35rem;
+    font-size: 0.6rem;
+    padding: 3px 4px;
 }
 .twg-appt-link {
     flex-shrink: 0;
@@ -542,8 +536,8 @@ button.twg-appt-link {
     position: absolute;
     border-width: 1px;
     border-style: solid;
-    font-size: 10px;
-    line-height: 1.2;
+    font-size: 11px;
+    line-height: 1.22;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -553,28 +547,106 @@ button.twg-appt-link {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 }
 
-/* Bloques semana (.twg-appt): tema por clase cli-pill (sin dict Python _CAL_PILL_THEME) */
-.twg-cli-pill-cancelada {
+/* Bloques mes (.cal-appt-slot) y semana (.twg-appt): tema por clase cli-pill */
+.cal-appt-slot {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 2px;
+    min-height: 4.5rem;
+    padding: 4px 5px 3px;
+    border-radius: 5px;
+    border-width: 1px;
+    border-style: solid;
+    box-sizing: border-box;
+    min-width: 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+}
+.cal-appt-slot-time {
+    font-weight: 700;
+    font-size: 0.78rem;
+    line-height: 1.12;
+    color: rgba(248, 250, 252, 0.98);
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+}
+.cal-appt-slot-client {
+    font-weight: 600;
+    font-size: 0.72rem;
+    line-height: 1.16;
+    color: rgba(248, 250, 252, 0.96);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    min-height: 0;
+    flex: 1 1 auto;
+}
+button.cal-appt-slot-link {
+    flex-shrink: 0;
+    width: 100%;
+    appearance: none;
+    -webkit-appearance: none;
+    margin-top: auto;
+    min-height: 1.35rem;
+    text-align: center;
+    font-size: 0.6rem;
+    font-weight: 700;
+    padding: 3px 4px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.38);
+    color: #f8fafc !important;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    line-height: 1.1;
+    font-family: inherit;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    box-sizing: border-box;
+}
+.cal-appt-slot-link:hover {
+    background: rgba(255, 255, 255, 0.18);
+    color: #ffffff !important;
+}
+.cal-appt-slot-link-play {
+    font-size: 0.55rem;
+    line-height: 1;
+    opacity: 0.95;
+    flex-shrink: 0;
+}
+.cal-appt-slot.cal-appt-line--muted,
+.cal-appt-slot.twg-cancelada-soft {
+    opacity: 0.48;
+}
+.twg-appt.twg-cli-pill-cancelada,
+.cal-appt-slot.twg-cli-pill-cancelada {
     border-color: #dc2626 !important;
     background: #ef4444 !important;
     color: #ffffff !important;
 }
-.twg-cli-pill-reprogramada {
+.twg-appt.twg-cli-pill-reprogramada,
+.cal-appt-slot.twg-cli-pill-reprogramada {
     border-color: #d97706 !important;
     background: #f59e0b !important;
     color: #ffffff !important;
 }
-.twg-cli-pill-priority {
+.twg-appt.twg-cli-pill-priority,
+.cal-appt-slot.twg-cli-pill-priority {
     border-color: #be185d !important;
     background: #db2777 !important;
     color: #ffffff !important;
 }
-.twg-cli-pill-returning {
+.twg-appt.twg-cli-pill-returning,
+.cal-appt-slot.twg-cli-pill-returning {
     border-color: #1d4ed8 !important;
     background: #2563eb !important;
     color: #ffffff !important;
 }
-.twg-cli-pill-new {
+.twg-appt.twg-cli-pill-new,
+.cal-appt-slot.twg-cli-pill-new {
     border-color: #6d28d9 !important;
     background: #7c3aed !important;
     color: #ffffff !important;
@@ -590,6 +662,13 @@ button.twg-appt-link {
     overflow: hidden;
     flex: 1 1 auto;
     width: 100%;
+}
+.twg-appt-head-time {
+    font-weight: 700;
+    flex-shrink: 0;
+    font-size: 0.75rem;
+    line-height: 1.12;
+    color: rgba(248, 250, 252, 0.98);
 }
 .twg-appt-body-stack > .twg-appt-head-time {
     font-weight: 700;

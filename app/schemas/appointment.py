@@ -111,6 +111,7 @@ class AppointmentListItem(BaseModel):
     assigned_first_name: Optional[str] = None
     assigned_last_name: Optional[str] = None
     assigned_role: Optional[str] = None
+    assigned_store_id: Optional[int] = None
 
 
 class AppointmentStatusUpdateRequest(BaseModel):
@@ -236,6 +237,34 @@ class AppointmentPaymentItem(BaseModel):
     note: Optional[str] = None
     paid_on: Optional[date] = None
     created_at: Optional[datetime | str] = None
+
+
+class AppointmentSearchHit(BaseModel):
+    """Resultado de búsqueda global de citas (fila lista + etiqueta de recibo)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    customer_name: Optional[str] = None
+    appointment_date: Optional[date | datetime | str] = None
+    receipt_label: Optional[str] = None
+    assigned_username: Optional[str] = None
+    assigned_first_name: Optional[str] = None
+    assigned_last_name: Optional[str] = None
+    assigned_role: Optional[str] = None
+    assigned_panel_user_id: Optional[int] = None
+    assigned_store_id: Optional[int] = None
+    service_type: Optional[str] = None
+    status: Optional[str] = None
+    has_signed_contract: bool = False
+    contract_pending_artist_signature: bool = False
+
+
+class AppointmentSearchResponse(BaseModel):
+    items: list[AppointmentSearchHit]
+    total: int
+    limit: int
+    offset: int
 
 
 class AppointmentPaymentReceiptListItem(BaseModel):
