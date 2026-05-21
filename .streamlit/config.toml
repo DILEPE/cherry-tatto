@@ -1,4 +1,5 @@
 [theme]
+# Base oscura; en modo claro el panel fuerza texto/inputs vía _theme_panel.css.
 primaryColor = "#FF007F"
 backgroundColor = "#3c3c48"
 secondaryBackgroundColor = "#484854"

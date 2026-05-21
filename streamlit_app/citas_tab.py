@@ -30,6 +30,7 @@ from streamlit_app.components.calendar_focus_dialogs import (
     set_calendar_focus_session_deps,
 )
 from streamlit_app.components.calendar_main_month import render_main_calendar as _render_main_calendar_impl
+from streamlit_app.components.calendar_query_nav import inject_calendar_query_nav_bridge
 from streamlit_app.components.calendar_week_schedule import render_week_schedule_grid, week_monday as _monday_of_week
 from streamlit_app.components.citas_legend import render_citas_color_legend as _render_citas_color_legend
 from streamlit_app.components.pills import client_history_key as _client_history_key
@@ -362,7 +363,7 @@ def _rebuild_detail_for_patch(
 
 
 def _consume_cal_appt_query_param() -> None:
-    """Abre el diálogo de una cita desde enlaces dentro de la rejilla (`?cal_appt_id=`)."""
+    """Abre el diálogo de una cita (`cal_appt_id` en URL, params fusionados desde el calendario)."""
     raw = st.query_params.get("cal_appt_id")
     if raw is None:
         return
@@ -373,7 +374,39 @@ def _consume_cal_appt_query_param() -> None:
             st.session_state.pop("_cal_overflow_day", None)
     except ValueError:
         pass
-    st.query_params.pop("cal_appt_id", None)
+    try:
+        st.query_params.pop("cal_appt_id", None)
+    except Exception:
+        pass
+
+
+def _consume_cal_book_query_param() -> None:
+    """Abre agendar cita desde el pie del calendario mensual (`?cal_book=YYYY-MM-DD`)."""
+    raw = st.query_params.get("cal_book")
+    if raw is None:
+        return
+    try:
+        parts = str(raw).strip().split("-")
+        if len(parts) != 3:
+            raise ValueError("formato")
+        y, m, d = int(parts[0]), int(parts[1]), int(parts[2])
+        picked = date(y, m, d)
+        if picked < date.today() or _panel_is_technician_role():
+            try:
+                st.query_params.pop("cal_book", None)
+            except Exception:
+                pass
+            return
+        _clear_calendar_dialog_focus()
+        _pop_booking_document_session()
+        st.session_state["ap_ad"] = picked
+        st.session_state["_ap_dlg"] = "create"
+    except (ValueError, TypeError):
+        pass
+    try:
+        st.query_params.pop("cal_book", None)
+    except Exception:
+        pass
 
 
 def _sync_week_monday_for_agenda_context() -> None:
@@ -438,14 +471,13 @@ def _render_main_calendar(
     *,
     team_layout: bool = False,
 ) -> None:
-    """Delega en el `@st.fragment` del calendario mensual (`calendar_main_month`)."""
+    """Rejilla mensual en fragment (`calendar_main_month`)."""
     _render_main_calendar_impl(
         buckets,
         counts_by_client,
         team_layout=team_layout,
         clear_calendar_dialog_focus=_clear_calendar_dialog_focus,
         panel_is_technician_role=_panel_is_technician_role,
-        pop_booking_document_session=_pop_booking_document_session,
     )
 
 
@@ -672,7 +704,7 @@ def _invoke_citas_tab_dialogs(
     by_day: dict[tuple[int, int, int], list[dict[str, Any]]],
     hist_counts: dict[str, int],
 ) -> None:
-    """Invoca diálogos al inicio del flujo para que el overlay no quede al final del DOM."""
+    """Abre diálogos si hay foco de calendario o acciones pendientes (p. ej. tras ?cal_appt_id=)."""
     _technician_clear_disallowed_dialog_states()
     if (
         st.session_state.get("_ap_fin_item")
@@ -829,6 +861,7 @@ def render_citas_tab() -> None:
     """Calendario, agendar y diálogo de citas del día; datos financieros y tabla en **Reporte**."""
     _init_appt_tab_session_state()
     _consume_cal_appt_query_param()
+    _consume_cal_book_query_param()
     _inject_citas_shared_styles()
     _sync_appointments_from_api()
 
@@ -976,8 +1009,10 @@ def render_citas_tab() -> None:
             by_day,
             hist_counts,
             clear_calendar_dialog_focus=_clear_calendar_dialog_focus,
-            pop_booking_document_session=_pop_booking_document_session,
             panel_is_technician_role=_panel_is_technician_role,
+            pop_booking_document_session=_pop_booking_document_session,
         )
     else:
         _render_main_calendar(by_day, hist_counts, team_layout=team_layout)
+
+    inject_calendar_query_nav_bridge()

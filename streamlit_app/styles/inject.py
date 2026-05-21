@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 
 _CSS_ORDER = (
     "_tokens.css",
+    "_theme_citas.css",
     "_pills.css",
     "_calendar.css",
     "_flags.css",
@@ -24,11 +25,16 @@ def _styles_directory() -> Path:
 
 
 def build_citas_style_tag() -> str:
+    from streamlit_app.theme import compile_citas_theme_css
+
     chunks: list[str] = []
     d = _styles_directory()
     for name in _CSS_ORDER:
         p = d / name
-        chunks.append(p.read_text(encoding="utf-8"))
+        raw = p.read_text(encoding="utf-8")
+        if name == "_theme_citas.css":
+            raw = compile_citas_theme_css(raw)
+        chunks.append(raw)
     return "<style>\n" + "\n".join(chunks) + "\n</style>"
 
 

@@ -12,6 +12,7 @@ from app.domain.appointment_money import (
 )
 from streamlit_app.appointment_dates import appointment_time_hm
 from streamlit_app.appointment_staff_labels import assigned_artist_display_name, assigned_staff_label
+from streamlit_app.components.calendar_query_nav import calendar_appt_open_control_html
 from streamlit_app.components.pills import client_pill_class, customer_name_pill_html
 from streamlit_app.components.service_flags import service_type_flag_html
 
@@ -90,11 +91,18 @@ def calendar_overflow_row_html(row: dict[str, Any], counts_by_client: dict[str, 
     return f'<div class="cal-overflow-row{muted}">{left_cluster}{total_box}</div>'
 
 
+def calendar_appt_total_chip_html(row: dict[str, Any]) -> str:
+    """Total del trabajo (compacto) para bloques de cita en mes y semana."""
+    total_amt, _, _ = appointment_financial_totals(row)
+    price_lbl = calendar_month_compact_label(total_amt)
+    return f'<span class="cal-appt-total">{html_mod.escape(price_lbl)}</span>'
+
+
 def calendar_appt_month_slot_html(
     row: dict[str, Any],
     counts_by_client: dict[str, int],
 ) -> str:
-    """Bloque en celda mensual: hora, cliente y «Ver cita» (estilo rejilla semanal)."""
+    """Bloque en celda mensual: hora, cliente, total y «Ver cita»."""
     hm = appointment_time_hm(row.get("appointment_date", row.get("date")))
     nm = str(row.get("customer_name") or row.get("name") or "").strip() or "—"
     short = calendar_cell_customer_label(nm, long_from_len=22)
@@ -103,23 +111,17 @@ def calendar_appt_month_slot_html(
     dim_cls = " cal-appt-line--muted" if st_cl == "cancelada" else ""
     ap_id = int(row.get("id", 0) or 0)
     staff_lbl = assigned_staff_label(row)
+    total_amt, _, _ = appointment_financial_totals(row)
+    staff_part = f" · {staff_lbl}" if staff_lbl != "—" else ""
     title = html_mod.escape(
-        f"{hm} · {nm}"
-        + (f" · {staff_lbl}" if staff_lbl != "—" else "")
+        f"{hm} · {nm}{staff_part} · Total: {format_cop(total_amt)}"
     )
-    link_html = ""
-    if ap_id > 0:
-        link_html = (
-            f'<button type="button" class="cal-appt-slot-link" data-cal-appt-id="{ap_id}" '
-            'aria-label="Ver cita">'
-            '<span class="cal-appt-slot-link-play" aria-hidden="true">▶</span>'
-            "<span>Ver cita</span>"
-            "</button>"
-        )
+    link_html = calendar_appt_open_control_html(ap_id) if ap_id > 0 else ""
     return (
         f"<div class='cal-appt-slot twg-{cls}{dim_cls}' title='{title}'>"
         f'<span class="cal-appt-slot-time">{html_mod.escape(hm)}</span>'
         f'<span class="cal-appt-slot-client">{html_mod.escape(short)}</span>'
+        f"{calendar_appt_total_chip_html(row)}"
         f"{link_html}"
         "</div>"
     )
@@ -139,7 +141,6 @@ def calendar_appt_line_html(
     st_cl = str(row.get("status") or "").strip().lower()
     dim_cls = " cal-appt-line--muted" if st_cl == "cancelada" else ""
     total_amt, _, _ = appointment_financial_totals(row)
-    price_lbl = calendar_month_compact_label(total_amt)
     pill_inner = (
         f'<span class="cli-pill {cls} cli-pill--cal-cell">{html_mod.escape(short)}</span>'
     )
@@ -147,12 +148,11 @@ def calendar_appt_line_html(
     staff_lbl = assigned_staff_label(row)
     staff_part = f" · {staff_lbl}" if staff_lbl != "—" else ""
     title = html_mod.escape(f"{hm} · {nm}{staff_part} · Total: {format_cop(total_amt)}")
-    price_esc = html_mod.escape(price_lbl)
     return (
         f"<div class='cal-appt-line{dim_cls}' title='{title}'>"
         f"<span class='cal-appt-time'>{t_s}</span>"
         f"<span class='cal-appt-pill-wrap'>{pill_inner}</span>"
-        f"<span class='cal-appt-total'>{price_esc}</span>"
+        f"{calendar_appt_total_chip_html(row)}"
         "</div>"
     )
 
@@ -193,6 +193,7 @@ def calendar_day_inner_body_html(
 __all__ = [
     "calendar_appt_line_html",
     "calendar_appt_month_slot_html",
+    "calendar_appt_total_chip_html",
     "calendar_cell_customer_label",
     "calendar_day_inner_body_html",
     "calendar_overflow_row_html",

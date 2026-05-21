@@ -5,6 +5,8 @@ perdiendo `_panel_auth_ok` y mostrando el login al volver del flujo de firma.
 """
 from __future__ import annotations
 
+from datetime import date
+
 import streamlit as st
 
 
@@ -38,6 +40,35 @@ def open_contract_express_piercing() -> None:
 def open_contract_read(contract_id: int) -> None:
     st.query_params["view"] = "contract_read"
     st.query_params["contract_id"] = str(int(contract_id))
+    st.rerun()
+
+
+def open_calendar_appointment_focus(appt_id: int) -> None:
+    """Abre la ficha de cita en Gestión citas (misma sesión, sin recarga del navegador)."""
+    aid = int(appt_id)
+    if aid <= 0:
+        return
+    st.session_state["_cal_focus_appt_id"] = aid
+    st.session_state.pop("_cal_overflow_day", None)
+    for key in ("cal_appt_id", "cal_book"):
+        try:
+            st.query_params.pop(key, None)
+        except Exception:
+            pass
+    st.rerun()
+
+
+def open_calendar_booking_day(picked: date) -> None:
+    """Abre el diálogo de agendar cita con el día precargado."""
+    st.session_state.pop("_cal_focus_appt_id", None)
+    st.session_state.pop("_cal_overflow_day", None)
+    st.session_state["ap_ad"] = picked
+    st.session_state["_ap_dlg"] = "create"
+    for key in ("cal_appt_id", "cal_book"):
+        try:
+            st.query_params.pop(key, None)
+        except Exception:
+            pass
     st.rerun()
 
 
