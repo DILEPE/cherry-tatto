@@ -30,6 +30,7 @@ from streamlit_app.components.pills import row_is_priority, status_pill_html
 
 CAL_FOCUS_SESSION_KEY = "_cal_focus_sheet_deps"
 _APPT_BODY_SEED_KEY = "_fcd_seed_appt_id"
+_CAL_DLG_SCOPE_HTML = '<div class="cal-focus-dlg-root" aria-hidden="true"></div>'
 
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -507,6 +508,7 @@ def dialog_calendar_day_appointments(
     hist_counts: dict[str, int],
 ) -> None:
     """Lista del día: tarjetas HTML en un solo bloque + botones en pasada aparte (menos flash al scroll)."""
+    st.markdown(_CAL_DLG_SCOPE_HTML, unsafe_allow_html=True)
     tup = st.session_state.get("_cal_overflow_day")
     if not tup:
         return
@@ -632,6 +634,7 @@ def dialog_calendar_single_appointment(
     hist_counts: dict[str, int],
 ) -> None:
     """Diálogo para una sola cita (desde ▸ en rejilla semanal o mes)."""
+    st.markdown(_CAL_DLG_SCOPE_HTML, unsafe_allow_html=True)
     raw_id = st.session_state.get("_cal_focus_appt_id")
     try:
         aid = int(raw_id)

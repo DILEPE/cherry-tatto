@@ -8,11 +8,7 @@ from typing import Any, Callable
 
 import streamlit as st
 
-from app.domain.appointment_money import (
-    appointment_financial_totals,
-    customer_credit_from_row,
-    format_cop,
-)
+from app.domain.appointment_money import appointment_financial_totals, format_cop
 from streamlit_app import report_charts
 from streamlit_app.appointment_filters import filter_appointment_rows
 from streamlit_app.appointment_staff_labels import assigned_artist_display_name
@@ -160,19 +156,16 @@ def render_reporte_financiero_citas_body(
     total_trabajo = 0.0
     total_abonado = 0.0
     total_pendiente = 0.0
-    total_credito_favor = 0.0
     for row in filtered_items:
         row_total, row_abonado, row_pendiente = appointment_financial_totals(row)
         total_trabajo += row_total
         total_abonado += row_abonado
         total_pendiente += row_pendiente
-        total_credito_favor += customer_credit_from_row(row)
 
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3 = st.columns(3)
     m1.metric("Total trabajo", format_cop(total_trabajo))
     m2.metric("Total abonado", format_cop(total_abonado))
     m3.metric("Total saldo pendiente", format_cop(total_pendiente))
-    m4.metric("Saldo a favor (filtro)", format_cop(total_credito_favor))
 
     render_procedure_value_bar_chart(filtered_items)
 
@@ -210,8 +203,8 @@ def render_reporte_financiero_citas_body(
     start = page * limit
     rows = filtered_items[start : start + limit]
 
-    colw = [1.4, 1.0, 0.88, 1.12, 0.82, 0.78, 0.76, 0.78, 0.88, 0.82]
-    h1, h2, h3, h4, h5, h6, h7, h8, h9, h10 = st.columns(colw)
+    colw = [1.4, 1.0, 0.88, 1.12, 0.82, 0.78, 0.76, 0.78, 0.88]
+    h1, h2, h3, h4, h5, h6, h7, h8, h9 = st.columns(colw)
     h1.markdown('<span class="ap-col-title">Nombre</span>', unsafe_allow_html=True)
     h2.markdown('<span class="ap-col-title">Artista</span>', unsafe_allow_html=True)
     h3.markdown('<span class="ap-col-title">Servicio</span>', unsafe_allow_html=True)
@@ -220,23 +213,20 @@ def render_reporte_financiero_citas_body(
     h6.markdown('<span class="ap-col-title">Total</span>', unsafe_allow_html=True)
     h7.markdown('<span class="ap-col-title">Abonado</span>', unsafe_allow_html=True)
     h8.markdown('<span class="ap-col-title">Pendiente</span>', unsafe_allow_html=True)
-    h9.markdown('<span class="ap-col-title">A favor</span>', unsafe_allow_html=True)
-    h10.markdown('<span class="ap-col-title">Estado</span>', unsafe_allow_html=True)
+    h9.markdown('<span class="ap-col-title">Estado</span>', unsafe_allow_html=True)
     for r in rows:
-        c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 = st.columns(colw)
+        c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns(colw)
         c1.markdown(customer_name_pill_html(r, hist_counts), unsafe_allow_html=True)
         c2.write(assigned_artist_display_name(r))
         c3.write(r.get("service_type", r.get("service", "")))
         c4.write(report_work_performed_text(r, piercing_survey))
         c5.write(format_appt_when(r.get("appointment_date", r.get("date", ""))))
         total_amount, deposit_amount, pending_balance = appointment_financial_totals(r)
-        credito = customer_credit_from_row(r)
         c6.write(format_cop(total_amount))
         c7.write(format_cop(deposit_amount))
         c8.write(format_cop(pending_balance))
-        c9.write("—" if credito <= 0 else format_cop(credito))
         status = str(r.get("status") or "Agendada")
-        c10.markdown(status_pill_html(status), unsafe_allow_html=True)
+        c9.markdown(status_pill_html(status), unsafe_allow_html=True)
 
     p1, p2, p3 = st.columns([1, 1, 2.5])
     with p1:

@@ -411,11 +411,26 @@ def _light_portal_widgets_fix_script() -> str:
 """
 
 
+def _calendar_portal_fix_script() -> str:
+    """Placeholder — calendar fix is embedded inside _panel_light_dialog_fix_script."""
+    return ""
+
+
 def _panel_light_dialog_fix_script() -> str:
-    """Diálogos del panel en modo claro: superficie, etiquetas y botones primarios."""
+    """Diálogos modo claro + calendario BaseWeb (días/meses en español, celdas vacías)."""
     return """
 <script>
 (function () {
+  /* ── Calendario: constantes ── */
+  var DAY_MAP = {
+    "Su":"Do","Mo":"Lu","Tu":"Ma","We":"Mi","Th":"Ju","Fr":"Vi","Sa":"Sá",
+    "Sun":"Do","Mon":"Lu","Tue":"Ma","Wed":"Mi","Thu":"Ju","Fri":"Vi","Sat":"Sá"
+  };
+  var MONTHS_EN = ["January","February","March","April","May","June",
+                   "July","August","September","October","November","December"];
+  var MONTHS_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
+                   "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+
   var DIALOG_MARKERS =
     ".dlg-pu-root, [data-pu-dlg], .dlg-store-root, [data-store-dlg], " +
     ".dlg-cust-root, .ctadm-dlg-root, [data-ctadm-dlg]";
@@ -432,6 +447,73 @@ def _panel_light_dialog_fix_script() -> str:
   function isLight(doc) {
     var el = doc && doc.documentElement;
     return el && el.getAttribute("data-panel-theme") === "light";
+  }
+  /* ── Calendario: helpers ── */
+  function replaceMonthText(root, doc) {
+    if (!root) return;
+    try {
+      var walker = doc.createTreeWalker(root, 4 /* SHOW_TEXT */, null, false);
+      var node;
+      while ((node = walker.nextNode())) {
+        var t = node.textContent.trim();
+        var i = MONTHS_EN.indexOf(t);
+        if (i >= 0) node.textContent = MONTHS_ES[i];
+      }
+    } catch (e) {}
+  }
+  function fixCalendar(doc) {
+    var cals = doc.querySelectorAll('[data-baseweb="calendar"]');
+    if (!cals.length) return;
+    var light = isLight(doc);
+    cals.forEach(function (cal) {
+      /* Transparent grid containers (both themes). */
+      cal.querySelectorAll('[role="grid"],[role="rowgroup"],[role="row"]').forEach(function (el) {
+        el.style.setProperty("background", "transparent", "important");
+        el.style.setProperty("background-color", "transparent", "important");
+      });
+      /* Transparent ALL row children — catches empty cells whatever their role. */
+      cal.querySelectorAll('[role="row"] > *').forEach(function (cell) {
+        if (cell.tagName.toLowerCase() !== "button") {
+          cell.style.setProperty("background", "transparent", "important");
+          cell.style.setProperty("background-color", "transparent", "important");
+        }
+      });
+      /* Spanish weekday names — targets role="columnheader" AND data-baseweb="calendar-weekday". */
+      var seen = [];
+      var rawHeaders = cal.querySelectorAll(
+        '[role="columnheader"],[data-baseweb="calendar-weekday"]'
+      );
+      var headers = [];
+      for (var h = 0; h < rawHeaders.length; h++) {
+        if (seen.indexOf(rawHeaders[h]) === -1) { seen.push(rawHeaders[h]); headers.push(rawHeaders[h]); }
+      }
+      headers.forEach(function (el) {
+        var abbr = el.querySelector("abbr");
+        var target = abbr || el;
+        var orig = target.textContent.trim();
+        var es = DAY_MAP[orig];
+        if (es && orig !== es) {
+          target.textContent = es;
+          if (abbr) abbr.removeAttribute("title");
+        }
+        el.style.setProperty("font-size", "0.82rem", "important");
+        el.style.setProperty("color", light ? "#64748b" : "#94a3b8", "important");
+        el.style.setProperty("font-weight", "600", "important");
+      });
+      /* Spanish month name in header. */
+      var hdr = cal.querySelector('header,[data-baseweb="calendar-header"]');
+      if (hdr) replaceMonthText(hdr, doc);
+      /* Light mode: white popover + calendar surface. */
+      if (light) {
+        var pop = cal.closest('[data-baseweb="popover"]');
+        if (pop) pop.style.setProperty("background-color", "#ffffff", "important");
+        cal.style.setProperty("background-color", "#ffffff", "important");
+      }
+    });
+    /* Spanish month names in open month-select listbox. */
+    doc.querySelectorAll('[data-baseweb="menu"] [role="option"]').forEach(function (opt) {
+      replaceMonthText(opt, doc);
+    });
   }
   function paintDialogLight(doc) {
     if (!isLight(doc)) return;
@@ -522,6 +604,7 @@ def _panel_light_dialog_fix_script() -> str:
       paintDialogLight(doc);
       fixQuill(doc);
       fixReportMetrics(doc);
+      fixCalendar(doc);
     });
   }
   var pending = null;
@@ -562,7 +645,7 @@ def inject_panel_theme(streamlit_module: object) -> None:
     panel_css += "\n" + compile_theme_css(_read_theme_css("_theme_stores.css"), theme)
     panel_css += "\n" + compile_theme_css(_read_theme_css("_theme_panel_users.css"), theme)
     panel_css += "\n" + compile_theme_css(_read_theme_css("_theme_report.css"), theme)
-    portal_script = _panel_light_dialog_fix_script()
+    portal_script = _calendar_portal_fix_script() + _panel_light_dialog_fix_script()
     if theme == "light":
         panel_css += "\n" + _read_theme_css("_theme_light_portal_fix.css")
         panel_css += "\n" + compile_theme_css(_read_theme_css("_theme_calendar_light.css"), theme)
@@ -576,6 +659,74 @@ def inject_panel_theme(streamlit_module: object) -> None:
         + f"<style>\n{panel_css}\n{wm}\n</style>",
         unsafe_allow_html=True,
     )
+    _inject_calendar_fix_component(streamlit_module, theme)
+
+
+def _inject_calendar_fix_component(streamlit_module: object, theme: PanelThemeMode) -> None:
+    """Fix del calendario BaseWeb via st.html con unsafe_allow_javascript=True."""
+    html_fn = getattr(streamlit_module, "html", None)
+    if html_fn is None:
+        return
+    light_str = "true" if theme == "light" else "false"
+    try:
+        html_fn(
+            f"""<script>
+(function(){{
+  if(window._chCalDone)return;
+  window._chCalDone=true;
+  var DAY_MAP={{"Su":"Do","Mo":"Lu","Tu":"Ma","We":"Mi","Th":"Ju","Fr":"Vi","Sa":"Sá",
+               "Sun":"Do","Mon":"Lu","Tue":"Ma","Wed":"Mi","Thu":"Ju","Fri":"Vi","Sat":"Sá"}};
+  var MEN=["January","February","March","April","May","June","July","August","September","October","November","December"];
+  var MES=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  var light={light_str};
+  function replM(root){{
+    try{{var w=document.createTreeWalker(root,4,null,false),n;
+      while((n=w.nextNode())){{var orig=n.textContent.trim(),i=MEN.indexOf(orig);if(i>=0)n.textContent=MES[i];}}
+    }}catch(e){{}}
+  }}
+  function fix(){{
+    var cals=document.querySelectorAll('[data-baseweb="calendar"]');
+    if(!cals.length)return;
+    cals.forEach(function(cal){{
+      cal.querySelectorAll('[role="grid"],[role="rowgroup"],[role="row"]').forEach(function(el){{
+        el.style.setProperty("background","transparent","important");
+        el.style.setProperty("background-color","transparent","important");
+      }});
+      cal.querySelectorAll('[role="row"]>*').forEach(function(c){{
+        c.style.setProperty("background","transparent","important");
+        c.style.setProperty("background-color","transparent","important");
+      }});
+      var seen=[],raw=cal.querySelectorAll('[role="columnheader"],[data-baseweb="calendar-weekday"]'),hdrs=[];
+      for(var i=0;i<raw.length;i++){{if(seen.indexOf(raw[i])===-1){{seen.push(raw[i]);hdrs.push(raw[i]);}}}}
+      hdrs.forEach(function(el){{
+        var ab=el.querySelector("abbr"),t=ab||el;
+        var orig=t.textContent.trim(),es=DAY_MAP[orig];
+        if(es&&orig!==es){{t.textContent=es;if(ab)ab.removeAttribute("title");}}
+        el.style.setProperty("font-size","0.82rem","important");
+        el.style.setProperty("color",light?"#64748b":"#94a3b8","important");
+        el.style.setProperty("font-weight","600","important");
+      }});
+      var hdr=cal.querySelector('header,[data-baseweb="calendar-header"]');
+      if(hdr)replM(hdr);
+      if(light){{
+        var pop=cal.closest('[data-baseweb="popover"]');
+        if(pop)pop.style.setProperty("background-color","#ffffff","important");
+        cal.style.setProperty("background-color","#ffffff","important");
+      }}
+    }});
+    document.querySelectorAll('[data-baseweb="menu"] [role="option"]').forEach(function(o){{replM(o);}});
+  }}
+  new MutationObserver(function(ms){{
+    for(var i=0;i<ms.length;i++){{if(ms[i].type==="childList"){{fix();return;}}}}
+  }}).observe(document.body,{{childList:true,subtree:true}});
+  fix();
+  setInterval(fix,300);
+}})();
+</script>""",
+            unsafe_allow_javascript=True,
+        )
+    except Exception:
+        pass
 
 
 def _on_theme_mode_changed() -> None:

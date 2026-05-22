@@ -34,3 +34,39 @@
 :root[data-panel-theme="light"] [data-baseweb="calendar"] [role="gridcell"] {
     color: #334155 !important;
 }
+
+/* Celdas vacías (fuera del mes): refuerzo para modo claro
+   Usa > div igual que el selector global en _theme_panel.css */
+:root[data-panel-theme="light"] [data-baseweb="calendar"] [role="row"] > div {
+    background: transparent !important;
+    background-color: transparent !important;
+}
+
+/* Selectores de mes y año dentro del header: fondo y texto legibles */
+:root[data-panel-theme="light"] [data-baseweb="calendar"] [data-baseweb="select"] > div,
+:root[data-panel-theme="light"] [data-baseweb="calendar"] [data-baseweb="select"] > div > div,
+:root[data-panel-theme="light"] [data-baseweb="calendar"] [data-baseweb="select"] [role="button"] {
+    background-color: #e2e8f0 !important;
+    color: #1e293b !important;
+    border-color: rgba(15, 23, 42, 0.16) !important;
+}
+
+/* Botones de navegación (< >) del header */
+:root[data-panel-theme="light"] [data-baseweb="calendar"] header button {
+    background-color: transparent !important;
+    color: #1e293b !important;
+}
+:root[data-panel-theme="light"] [data-baseweb="calendar"] header button:hover {
+    background-color: #e2e8f0 !important;
+}
+
+/* Número de día normal: contraste sobre fondo blanco */
+:root[data-panel-theme="light"] [data-baseweb="calendar"] [role="gridcell"] button:not(:disabled) {
+    color: #334155 !important;
+}
+
+/* Día seleccionado: mantiene el fondo oscuro del botón pero texto blanco */
+:root[data-panel-theme="light"] [data-baseweb="calendar"] [role="gridcell"] button[aria-selected="true"],
+:root[data-panel-theme="light"] [data-baseweb="calendar"] [role="gridcell"] button[data-selected="true"] {
+    color: #ffffff !important;
+}
