@@ -45,12 +45,12 @@ from streamlit_app.panel_auth import (
     panel_auth_enabled,
     panel_auth_users_from_database,
     panel_is_operator_admin,
-    panel_logout_button,
     render_login_gate,
 )
 from streamlit_app.panel_users_admin import render_panel_users_tab
 from streamlit_app.stores_management import render_stores_management_tab
 from streamlit_app.survey_questions_admin import render_survey_questions_tab
+from streamlit_app.panel_sidebar import render_panel_sidebar
 from streamlit_app.theme import inject_panel_theme, render_theme_mode_control
 
 LOGO_CANDIDATES = [
@@ -96,12 +96,6 @@ def _page_icon() -> str:
         if p.is_file():
             return str(p.resolve())
     return "🍒"
-
-
-def _api_error(payload) -> str:
-    if isinstance(payload, dict):
-        return str(payload.get("detail", payload))
-    return str(payload)
 
 
 def main() -> None:
@@ -206,21 +200,7 @@ def main() -> None:
         st.session_state.pop("_panel_prev_module_key", None)
 
     with st.sidebar:
-        logo = _logo_path()
-        if logo:
-            st.image(str(logo), use_container_width=True)
-        else:
-            st.markdown('<p class="neon-title">CHERRY INK</p>', unsafe_allow_html=True)
-            st.markdown('<p class="sub-lavender">Rock City Piercing</p>', unsafe_allow_html=True)
-        render_theme_mode_control(st)
-        st.markdown("---")
-        if len(module_definitions) == 1:
-            active_module_key = module_definitions[0][0]
-        else:
-            labels = [row[1] for row in module_definitions]
-            key_by_label = {row[1]: row[0] for row in module_definitions}
-            picked = st.radio("Módulo activo", options=labels, key="panel_mod_radio")
-            active_module_key = key_by_label[picked]
+        active_module_key = render_panel_sidebar(module_definitions, _logo_path())
 
         prev_mod = st.session_state.get("_panel_prev_module_key")
         if prev_mod != active_module_key:
@@ -233,33 +213,6 @@ def main() -> None:
                     st.session_state["_ap_reload"] = True
                 if active_module_key == "clientes" or prev_mod == "clientes":
                     st.session_state["_cust_reload"] = True
-
-        st.markdown("---")
-        if st.button("Probar conexión", use_container_width=True):
-            ok, code, data = api_client.get_appointments()
-            if ok:
-                st.success(f"Conexión OK (HTTP {code})")
-            else:
-                detail = _api_error(data)
-                st.error(f"Sin respuesta correcta (HTTP {code}): {detail}")
-                if code == 0 or "10061" in detail or "Max retries" in detail or "Failed to establish" in detail:
-                    st.info(
-                        "No hay servidor en esa dirección. En **otra terminal** (mismo venv), "
-                        "desde la raíz del repo ejecuta: "
-                        "`python -m uvicorn app.main:app --host 127.0.0.1 --port 5000` "
-                        "y comprueba que el puerto coincida con la URL del panel (variable `PORT` en `.env`)."
-                    )
-
-        if st.button("Verificar n8n", use_container_width=True):
-            nivel, msg_n8n = api_client.check_n8n_webhook_connection()
-            if nivel == "success":
-                st.success(msg_n8n)
-            elif nivel == "warn":
-                st.warning(msg_n8n)
-            else:
-                st.error(msg_n8n)
-
-        panel_logout_button()
 
     st.markdown('<p class="neon-title">Panel de operaciones</p>', unsafe_allow_html=True)
 

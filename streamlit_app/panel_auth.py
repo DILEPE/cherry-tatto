@@ -828,10 +828,17 @@ def render_login_gate() -> bool:
     st.stop()
 
 
-def panel_logout_button() -> None:
+def panel_logout_button(*, compact: bool = False) -> None:
     """Botón en la barra lateral: solo tiene efecto si el login del panel está activo."""
     if not panel_auth_enabled() or not st.session_state.get("_panel_auth_ok"):
         return
-    if st.button("Cerrar sesión", use_container_width=True, key="_panel_logout_btn"):
+    label = "" if compact else "Cerrar sesión"
+    if st.button(
+        label,
+        icon=":material/logout:",
+        use_container_width=True,
+        key="_panel_logout_btn",
+        help="Cerrar sesión",
+    ):
         _logout_clear_all()
         st.rerun()
