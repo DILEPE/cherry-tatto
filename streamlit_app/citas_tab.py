@@ -56,6 +56,8 @@ from streamlit_app.citas_panel_staff import ensure_assignable_staff
 from streamlit_app.citas_row_policy import reprogram_disabled_for_row
 from streamlit_app.http_error_detail import format_http_error_detail
 from streamlit_app.panel_navigation import (
+    apply_pending_calendar_week_navigation,
+    request_calendar_week_for_date,
     open_contract_artist_signature,
     open_contract_express_piercing,
     open_contract_signing,
@@ -451,8 +453,38 @@ def _consume_cal_book_query_param() -> None:
         pass
 
 
+def _render_calendar_goto_week_row() -> None:
+    """Selector de fecha + botón para abrir la vista Semana de esa semana."""
+    if "_ap_goto_date" not in st.session_state:
+        st.session_state["_ap_goto_date"] = date.today()
+    c_date, c_btn, c_sp = st.columns([1.35, 1.0, 2.65], vertical_alignment="bottom")
+    with c_date:
+        st.date_input(
+            "Fecha",
+            key="_ap_goto_date",
+            format="DD/MM/YYYY",
+            help="Elige el día; al pulsar Ir a fecha se abre la agenda en vista Semana.",
+        )
+    with c_btn:
+        if st.button(
+            "Ir a fecha",
+            use_container_width=True,
+            icon=":material/calendar_month:",
+            key="btn_cal_goto_week",
+            help="Muestra la rejilla semanal que contiene el día elegido.",
+        ):
+            picked = st.session_state.get("_ap_goto_date")
+            target = picked if isinstance(picked, date) else date.today()
+            _clear_calendar_dialog_focus()
+            request_calendar_week_for_date(target)
+
+
 def _sync_week_monday_for_agenda_context() -> None:
-    """Deja `_ap_week_monday` coherente con el mes abierto en el calendario (o con hoy si es el mismo mes)."""
+    """Deja `_ap_week_monday` coherente con la fecha del selector «Ir a fecha» o el mes visible."""
+    picked = st.session_state.get("_ap_goto_date")
+    if isinstance(picked, date):
+        st.session_state["_ap_week_monday"] = _monday_of_week(picked).isoformat()
+        return
     ym_raw = st.session_state.get("_ap_cal_ym")
     if isinstance(ym_raw, (list, tuple)) and len(ym_raw) >= 2:
         try:
@@ -976,6 +1008,8 @@ def render_citas_tab() -> None:
         else:
             st.session_state["_ap_cal_vista"] = vista_compact
 
+    goto_week_applied = apply_pending_calendar_week_navigation()
+
     vista = str(st.session_state.get("_ap_cal_vista") or vista_compact)
     if vista == vista_team and not can_team:
         vista = vista_compact
@@ -985,7 +1019,7 @@ def render_citas_tab() -> None:
         st.session_state["_ap_cal_vista"] = vista_compact
 
     prev_vista = st.session_state.get("__ap_cal_vista_prev")
-    if vista == vista_week and prev_vista != vista_week:
+    if vista == vista_week and prev_vista != vista_week and not goto_week_applied:
         _clear_calendar_dialog_focus()
         _sync_week_monday_for_agenda_context()
 
@@ -1005,6 +1039,8 @@ def render_citas_tab() -> None:
         st.session_state["_ap_cal_vista"] = vista_compact
 
     st.session_state["__ap_cal_vista_prev"] = vista
+
+    _render_calendar_goto_week_row()
 
     team_layout = False
     if vista == vista_week:

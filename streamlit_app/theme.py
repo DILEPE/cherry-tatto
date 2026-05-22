@@ -434,7 +434,8 @@ def _panel_light_dialog_fix_script() -> str:
   var DIALOG_MARKERS =
     ".dlg-pu-root, [data-pu-dlg], .dlg-store-root, [data-store-dlg], " +
     ".dlg-cust-root, .ctadm-dlg-root, [data-ctadm-dlg], " +
-    ".dlg-survey-root, [data-survey-dlg]";
+    ".dlg-survey-root, [data-survey-dlg], " +
+    ".ap-search-dialog-root, [data-ap-search-dlg]";
   var MIN_QUILL_PX = 420;
   function docs() {
     var out = [document];

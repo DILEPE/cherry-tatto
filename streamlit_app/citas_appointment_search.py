@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 from typing import Any, Callable, Optional
 
 import streamlit as st
@@ -11,6 +11,11 @@ from streamlit_app import api_client
 from streamlit_app.appointment_dates import appointment_row_date, format_appointment_datetime_table_es
 from streamlit_app.appointment_staff_labels import assigned_artist_display_name
 from streamlit_app.http_error_detail import format_http_error_detail
+from streamlit_app.theme import get_panel_theme
+
+_AP_SEARCH_DLG_ROOT_HTML = (
+    '<div class="ap-search-dialog-root" data-ap-search-dlg="1" aria-hidden="true"></div>'
+)
 
 _SEARCH_FIELDS: dict[str, str] = {
     "name": "Nombre",
@@ -25,12 +30,58 @@ def _close_search_dialog() -> None:
     st.session_state.pop("_ap_search_dlg", None)
 
 
+def _mark_search_dialog_scope() -> None:
+    """Marcador para CSS modo claro (styles/_theme_citas.css + citas inject)."""
+    st.markdown(_AP_SEARCH_DLG_ROOT_HTML, unsafe_allow_html=True)
+    if get_panel_theme() == "light":
+        st.markdown(
+            """
+            <style>
+            div[data-testid="stDialog"]:has(.ap-search-dialog-root) [role="dialog"],
+            div[data-testid="stDialog"]:has([data-ap-search-dlg]) [role="dialog"] {
+              background: #ffffff !important;
+              background-color: #ffffff !important;
+              color: #1e293b !important;
+            }
+            div[data-testid="stDialog"]:has(.ap-search-dialog-root) [data-testid="stVerticalBlock"],
+            div[data-testid="stDialog"]:has(.ap-search-dialog-root) [data-testid="stHorizontalBlock"] {
+              background: #ffffff !important;
+              background-color: #ffffff !important;
+            }
+            div[data-testid="stDialog"]:has(.ap-search-dialog-root) [data-testid="stWidgetLabel"] p,
+            div[data-testid="stDialog"]:has(.ap-search-dialog-root) [data-testid="stMarkdownContainer"] p,
+            div[data-testid="stDialog"]:has(.ap-search-dialog-root) [data-testid="stMarkdown"] p {
+              color: #334155 !important;
+            }
+            div[data-testid="stDialog"]:has(.ap-search-dialog-root) [data-testid="stTextInput"] input,
+            div[data-testid="stDialog"]:has(.ap-search-dialog-root) [data-testid="stSelectbox"] [data-baseweb="select"] > div {
+              background: #ffffff !important;
+              color: #1e293b !important;
+              border-color: rgba(15, 23, 42, 0.18) !important;
+            }
+            div[data-testid="stDialog"]:has(.ap-search-dialog-root) [data-testid="stButton"] button[data-testid="baseButton-primary"],
+            div[data-testid="stDialog"]:has(.ap-search-dialog-root) [data-testid="stButton"] button[kind="primary"] {
+              background-image: linear-gradient(180deg, #ff5fb8 0%, #ff007f 52%, #d90064 100%) !important;
+              background-color: #ff007f !important;
+              color: #ffffff !important;
+            }
+            div[data-testid="stDialog"]:has(.ap-search-dialog-root) [data-testid="stButton"] button:not([data-testid="baseButton-primary"]) {
+              background: #ffffff !important;
+              color: #1e293b !important;
+              border: 1px solid rgba(167, 154, 255, 0.42) !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
 def navigate_calendar_to_appointment(
     hit: dict[str, Any],
     *,
     filter_for_role: Callable[[list[dict[str, Any]]], list[dict[str, Any]]],
 ) -> None:
-    """Cierra el buscador, posiciona el calendario en la fecha y abre la ficha de la cita."""
+    """Cierra el buscador y posiciona el calendario en la vista Semana de esa fecha."""
     aid = int(hit.get("id") or 0)
     if aid <= 0:
         return
@@ -57,13 +108,10 @@ def navigate_calendar_to_appointment(
         d = appointment_row_date(row.get("appointment_date", row.get("date")))
     except (TypeError, ValueError):
         d = date.today()
-    st.session_state["_ap_cal_ym"] = [d.year, d.month]
-    st.session_state["_ap_week_monday"] = d - timedelta(days=d.weekday())
-
     _close_search_dialog()
-    from streamlit_app.panel_navigation import open_calendar_appointment_focus
+    from streamlit_app.panel_navigation import request_calendar_week_for_date
 
-    open_calendar_appointment_focus(aid)
+    request_calendar_week_for_date(d)
 
 
 def _run_search(*, assigned_user_id: Optional[int]) -> None:
@@ -98,7 +146,7 @@ def dialog_buscar_cita(
     query_assigned_user_id: Callable[[], Optional[int]],
     filter_for_role: Callable[[list[dict[str, Any]]], list[dict[str, Any]]],
 ) -> None:
-    st.markdown('<div class="ap-search-dialog-root" aria-hidden="true"></div>', unsafe_allow_html=True)
+    _mark_search_dialog_scope()
 
     if "_ap_search_field" not in st.session_state:
         st.session_state["_ap_search_field"] = "name"

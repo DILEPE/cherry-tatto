@@ -43,6 +43,47 @@ def open_contract_read(contract_id: int) -> None:
     st.rerun()
 
 
+_AP_GOTO_WEEK_PENDING_KEY = "_ap_goto_week_pending_date"
+
+
+def request_calendar_week_for_date(target: date, *, close_dialog: bool = True) -> None:
+    """Programa salto a vista Semana (aplicar con `apply_pending_calendar_week_navigation` antes del radio)."""
+    st.session_state[_AP_GOTO_WEEK_PENDING_KEY] = target.isoformat()
+    if close_dialog:
+        st.session_state.pop("_cal_focus_appt_id", None)
+        st.session_state.pop("_cal_overflow_day", None)
+        for key in ("cal_appt_id", "cal_book"):
+            try:
+                st.query_params.pop(key, None)
+            except Exception:
+                pass
+    st.rerun()
+
+
+def apply_pending_calendar_week_navigation() -> bool:
+    """Aplica navegación pendiente; llamar antes de instanciar el radio `_ap_cal_vista`."""
+    raw = st.session_state.pop(_AP_GOTO_WEEK_PENDING_KEY, None)
+    if not raw:
+        return False
+    from streamlit_app.components.calendar_week_schedule import week_monday
+
+    try:
+        d = date.fromisoformat(str(raw))
+    except ValueError:
+        d = date.today()
+    st.session_state["_ap_cal_vista"] = "Semana"
+    st.session_state["_ap_cal_period"] = "Semana"
+    st.session_state["_ap_week_monday"] = week_monday(d).isoformat()
+    st.session_state["_ap_cal_ym"] = [d.year, d.month]
+    st.session_state["_ap_goto_date"] = d
+    return True
+
+
+def open_calendar_week_for_date(target: date, *, close_dialog: bool = True) -> None:
+    """Cambia a la vista Semana del calendario en la semana que contiene `target`."""
+    request_calendar_week_for_date(target, close_dialog=close_dialog)
+
+
 def open_calendar_appointment_focus(appt_id: int) -> None:
     """Abre la ficha de cita en Gestión citas (misma sesión, sin recarga del navegador)."""
     aid = int(appt_id)
