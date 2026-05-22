@@ -183,18 +183,39 @@ if ([string]::IsNullOrWhiteSpace($BindHost)) {
     $BindHost = "127.0.0.1"
 }
 
+function Get-LanIPv4Addresses {
+    Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.IPAddress -notmatch '^127\.' -and
+            $_.IPAddress -notmatch '^169\.254\.' -and
+            $_.PrefixOrigin -ne 'WellKnown'
+        } |
+        Select-Object -ExpandProperty IPAddress -Unique
+}
+
 $apiArgs = @("-m", "uvicorn", "app.main:app", "--host", $BindHost, "--port", "$ApiPort")
 $slArgs = @(
     "-m", "streamlit", "run", "streamlit_app/main.py",
     "--server.address", $BindHost,
-    "--server.port", "$StreamlitPort"
+    "--server.port", "$StreamlitPort",
+    "--server.enableCORS", "false",
+    "--server.enableXsrfProtection", "false"
 )
 
 Write-Host "[ok] API Litestar → http://127.0.0.1:$ApiPort (bind $BindHost)" -ForegroundColor Green
 Write-Host "[ok] Streamlit    → http://127.0.0.1:$StreamlitPort (bind $BindHost)" -ForegroundColor Green
 if ($BindHost -eq "0.0.0.0") {
-    Write-Host "[info] Desde otra máquina en la LAN: http://<IP-de-esta-PC>:$StreamlitPort (panel) y :$ApiPort (API)" -ForegroundColor DarkGray
-    Write-Host "[info] El panel sigue usando API en esta PC (API_BASE_URL en .env puede seguir en 127.0.0.1)." -ForegroundColor DarkGray
+    $lanIps = @(Get-LanIPv4Addresses)
+    if ($lanIps.Count -gt 0) {
+        foreach ($ip in $lanIps) {
+            Write-Host "[info] LAN panel → http://${ip}:$StreamlitPort" -ForegroundColor Cyan
+        }
+    }
+    else {
+        Write-Host "[info] LAN panel → http://<IP-de-esta-PC>:$StreamlitPort (ejecuta ipconfig)" -ForegroundColor DarkGray
+    }
+    Write-Host "[info] No uses http://0.0.0.0:$StreamlitPort en el navegador (en Windows no funciona)." -ForegroundColor Yellow
+    Write-Host "[info] API_BASE_URL en .env puede seguir en http://127.0.0.1:$ApiPort" -ForegroundColor DarkGray
 }
 
 $apiProc = $null
