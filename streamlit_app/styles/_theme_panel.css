@@ -401,6 +401,21 @@ div.stButton > button[kind="secondary"] {
     color: #ffffff !important;
 }
 
+/* ── DatePicker (BaseWeb calendar): correcciones globales (ambos temas) ──
+   Las celdas vacías y nombres de días se corrigen vía JS (_calendar_portal_fix_script).
+   Estas reglas CSS son un refuerzo extra contra el fondo oscuro heredado de
+   secondaryBackgroundColor (#484854 en config.toml). */
+[data-baseweb="calendar"] [role="grid"],
+[data-baseweb="calendar"] [role="rowgroup"],
+[data-baseweb="calendar"] [role="row"] {
+    background: transparent !important;
+    background-color: transparent !important;
+}
+[data-baseweb="calendar"] [role="row"] > * {
+    background: transparent !important;
+    background-color: transparent !important;
+}
+
 /* Steppers de number_input (tema Streamlit oscuro por defecto) */
 :root[data-panel-theme="light"] [data-testid="stNumberInput"] [data-baseweb="input"],
 :root[data-panel-theme="light"] [data-testid="stNumberInput"] input {

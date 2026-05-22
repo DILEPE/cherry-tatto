@@ -35,7 +35,7 @@
 
 :root[data-panel-theme="light"] {
     --ct-surface: #ffffff;
-    --ct-surface-strong: #e2e8f0;
+    --ct-surface-strong: #c4d2e3;
     --ct-surface-today: rgba(255, 0, 127, 0.08);
     --ct-surface-inner: #f8fafc;
     --ct-surface-spacer: #f1f5f9;
@@ -46,9 +46,9 @@
     --ct-text-week-num: #0f172a;
     --ct-text-week-tick: #94a3b8;
     --ct-text-week-tick-major: #475569;
-    --ct-border: rgba(15, 23, 42, 0.14);
-    --ct-border-slot: rgba(15, 23, 42, 0.12);
-    --ct-border-inner: rgba(15, 23, 42, 0.1);
+    --ct-border: rgba(15, 23, 42, 0.18);
+    --ct-border-slot: rgba(15, 23, 42, 0.15);
+    --ct-border-inner: rgba(15, 23, 42, 0.12);
     --ct-legend-bg: #ffffff;
     --ct-legend-border: rgba(15, 23, 42, 0.12);
     --ct-legend-shadow: 0 1px 3px rgba(15, 23, 42, 0.08), 0 4px 12px rgba(15, 23, 42, 0.05);
@@ -201,4 +201,75 @@
 :root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.ap-ficha-panel-root) [data-testid="stCheckbox"] input:checked + div {
     background: transparent !important;
     background-color: transparent !important;
+}
+
+/* ── Modo claro: diálogos de calendario (citas del día + cita única) ── */
+/* Marcador: cal-focus-dlg-root inyectado en ambas funciones @st.dialog  */
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.cal-focus-dlg-root) [role="dialog"] {
+    background: var(--panel-bg-surface) !important;
+    color: var(--panel-text) !important;
+    border: 1px solid var(--panel-border) !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.cal-focus-dlg-root) [data-testid="stMarkdownContainer"] p,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.cal-focus-dlg-root) [data-testid="stMarkdownContainer"] strong,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.cal-focus-dlg-root) [data-testid="stCaptionContainer"] p,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.cal-focus-dlg-root) label {
+    color: var(--panel-text) !important;
+}
+
+/* Fila de cita en diálogo: texto oscuro sobre fondo claro */
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.cal-focus-dlg-root) .cal-overflow-row {
+    border-bottom-color: rgba(15, 23, 42, 0.12) !important;
+    color: #1e293b;
+}
+
+/* Chip de total en diálogo claro: visible sobre fondo blanco */
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.cal-focus-dlg-root) .cal-overflow-total-chip {
+    background: #f1f5f9 !important;
+    border: 1px solid rgba(15, 23, 42, 0.18) !important;
+    color: #0f172a !important;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+
+/* Botones secundarios en diálogos de calendario */
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.cal-focus-dlg-root) [data-testid="stButton"] button:not([data-testid="baseButton-primary"]) {
+    background: var(--panel-btn-bg, #ffffff) !important;
+    color: var(--panel-btn-text, #1e293b) !important;
+    border: 1px solid var(--panel-btn-border, rgba(167, 154, 255, 0.42)) !important;
+    box-shadow: var(--panel-btn-shadow, 0 1px 2px rgba(15, 23, 42, 0.06)) !important;
+    border-radius: 8px !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.cal-focus-dlg-root) [data-testid="stButton"] button:not([data-testid="baseButton-primary"]) svg {
+    color: #475569 !important;
+    fill: currentColor !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.cal-focus-dlg-root) button[data-testid="baseButton-primary"],
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.cal-focus-dlg-root) button[data-testid="baseButton-primary"] p,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.cal-focus-dlg-root) button[data-testid="baseButton-primary"] span {
+    color: #ffffff !important;
+}
+
+/* ── Modo claro: vista principal del calendario ── */
+
+/* Chip de total dentro de bloques de cita (sobre fondo de color fuerte) */
+:root[data-panel-theme="light"] .cal-cell--month .cal-appt-total,
+:root[data-panel-theme="light"] .cal-appt-slot .cal-appt-total,
+:root[data-panel-theme="light"] .twg-appt .cal-appt-total {
+    color: #ffffff;
+    background: rgba(0, 0, 0, 0.24);
+    border-color: rgba(0, 0, 0, 0.30);
+    box-shadow: none;
+}
+
+/* Líneas de slot semanal: levemente más visibles en fondo claro */
+:root[data-panel-theme="light"] .twg-slot-line {
+    border-top-color: rgba(15, 23, 42, 0.09);
+}
+
+/* Separadores entre equipos: visibles en claro */
+:root[data-panel-theme="light"] .cal-team-block + .cal-team-block {
+    border-top-color: rgba(15, 23, 42, 0.14);
 }

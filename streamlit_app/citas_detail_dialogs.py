@@ -194,11 +194,6 @@ def dialog_reprogramar_cita() -> None:
             st.session_state.pop("_ap_reprogram_item", None)
             cleanup_reprogram_dialog_state()
             st.rerun()
-def label_cancel_abono(v: str) -> str:
-    if v == "credito_cliente":
-        return "Saldo a favor del cliente — el abono pasa a crédito interno y deja de contar como cobrado sobre la cita"
-    return "Devolución — el abono deja la cita como no cobrado (sin saldo a favor aquí)"
-
 @st.dialog("Confirmar anulación", width="medium", dismissible=False)
 def dialog_cancelar_cita() -> None:
     appt = st.session_state.get("_ap_cancel_item") or {}
@@ -217,25 +212,15 @@ def dialog_cancelar_cita() -> None:
         f"Artista asignado: **{art_nm}**. Esta acción cambia el estado a Cancelada."
     )
     if deposit > 0:
-        warning += f" Hay {format_cop(deposit)} abonados en esta fila."
+        warning += (
+            f" Hay {format_cop(deposit)} abonados en esta fila; al anular dejan de contar "
+            "en los totales de la cita (el abono no se devuelve)."
+        )
     else:
         warning += " No hay abonos registrados en esta cita."
     st.warning(warning)
 
-    cancel_abono: str
-    if deposit > 0:
-        st.markdown("Si hubo abono, cómo debe reflejarse para **resumen y totales**:", unsafe_allow_html=True)
-        cancel_abono = st.radio(
-            "Tratamiento del abono",
-            ("credito_cliente", "devolucion"),
-            format_func=label_cancel_abono,
-            horizontal=False,
-            key=f"dlg_cancel_abono_radio_{appt_id}",
-            label_visibility="visible",
-        )
-    else:
-        cancel_abono = "devolucion"
-        st.caption("Sin abono; la anulación solo cierra la cita en el sistema.")
+    cancel_abono = "devolucion"
 
     c1, c2 = st.columns(2)
     with c1:

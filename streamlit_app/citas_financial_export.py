@@ -6,10 +6,7 @@ from datetime import datetime
 from io import BytesIO
 from typing import Any, Optional
 
-from app.domain.appointment_money import (
-    appointment_financial_totals,
-    customer_credit_from_row,
-)
+from app.domain.appointment_money import appointment_financial_totals
 from streamlit_app.appointment_staff_labels import assigned_artist_display_name
 from streamlit_app.report_work_performed import report_work_performed_text
 
@@ -70,7 +67,6 @@ def citas_filtered_to_excel_bytes(
     datos: list[list[Any]] = []
     for r in rows:
         tot, abo, pend = appointment_financial_totals(r)
-        cred = customer_credit_from_row(r)
         nombre = str(r.get("customer_name") or r.get("name") or "").strip()
         artista = assigned_artist_display_name(r)
         servicio = str(r.get("service_type") or r.get("service") or "").strip()
@@ -84,7 +80,6 @@ def citas_filtered_to_excel_bytes(
                 round(tot, 2),
                 round(abo, 2),
                 round(pend, 2),
-                round(cred, 2),
             ]
         )
 
@@ -96,7 +91,6 @@ def citas_filtered_to_excel_bytes(
         "Valor total (COP)",
         "Abonado (COP)",
         "Pendiente (COP)",
-        "Saldo a favor (COP)",
     ]
     ncol = len(headers)
 
@@ -169,13 +163,12 @@ def citas_filtered_to_excel_bytes(
         ws1.column_dimensions[letter].width = w
 
     ws2 = wb.create_sheet("Resumen financiero", 1)
-    rtot = rabo = rpend = rfav = 0.0
+    rtot = rabo = rpend = 0.0
     for rr in rows:
         t, a, p = appointment_financial_totals(rr)
         rtot += t
         rabo += a
         rpend += p
-        rfav += customer_credit_from_row(rr)
 
     ws2.merge_cells(start_row=1, start_column=1, end_row=1, end_column=2)
     ws2.cell(1, 1, "Resumen financiero — mismos filtros que el panel")
@@ -190,14 +183,12 @@ def citas_filtered_to_excel_bytes(
         "Total valor trabajo (COP)",
         "Total abonado (COP)",
         "Total pendiente (COP)",
-        "Total saldo a favor (COP)",
         "Cantidad de citas",
     ]
     resumen_vals: list[Any] = [
         round(rtot, 2),
         round(rabo, 2),
         round(rpend, 2),
-        round(rfav, 2),
         len(rows) if rows else 0,
     ]
     hdr_r = 4
