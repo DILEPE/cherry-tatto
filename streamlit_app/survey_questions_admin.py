@@ -1,17 +1,36 @@
-"""Streamlit: administración de preguntas dinámicas para encuestas de satisfacción."""
+"""Gestión de encuestas — vista simulador de encuesta."""
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 import streamlit as st
 
-from app.domain.contract_kinds import SCOPE_LABEL_ES
-from app.domain.survey_question_helpers import (
-    QUESTION_TYPES_NEEDING_OPTIONS,
-    question_type_label_es,
-)
+from app.domain.survey_question_helpers import QUESTION_TYPES_NEEDING_OPTIONS
 from streamlit_app import api_client
+from streamlit_app.theme import get_panel_theme
 
+_DLG_SURVEY_ROOT_HTML = '<div class="dlg-survey-root" data-survey-dlg="1" aria-hidden="true"></div>'
+
+# ── Tipos ─────────────────────────────────────────────────────────────────
+
+_CREATE_TYPES: list[tuple[str, str]] = [
+    ("rating_1_5", "⭐ Estrellas 1–5"),
+    ("yes_no",     "✅ Sí o No"),
+    ("textarea",   "💬 Comentario"),
+    ("text_short", "📝 Texto corto"),
+    ("radio",      "📋 Una opción"),
+    ("checkbox",   "☑ Varias opciones"),
+    ("select",     "🔽 Lista"),
+    ("number",     "🔢 Número"),
+]
+_ALL_TYPES: list[tuple[str, str]] = _CREATE_TYPES + [("text", "📄 Texto (histór.)")]
+_TYPE_LABEL: dict[str, str] = dict(_ALL_TYPES)
+
+_SCOPE_ICON:  dict[str, str] = {"tattoo": "🖊️", "piercing": "💉", "both": "🔵"}
+_SCOPE_LABEL: dict[str, str] = {"tattoo": "Tatuaje", "piercing": "Piercing", "both": "Ambos"}
+_SCOPE_KEYS:  tuple[str, ...] = ("tattoo", "piercing", "both")
+
+# ── Helpers ───────────────────────────────────────────────────────────────
 
 def _api_msg(payload: Any) -> str:
     if isinstance(payload, dict):
@@ -32,352 +51,408 @@ def _api_msg(payload: Any) -> str:
     return str(payload)
 
 
-_TYPE_OPTIONS: tuple[str, ...] = (
-    "rating_1_5",
-    "yes_no",
-    "text",
-    "textarea",
-    "text_short",
-    "number",
-    "radio",
-    "checkbox",
-    "select",
-)
-
-_CONTRACT_KIND_OPTIONS: tuple[str, ...] = ("tattoo", "piercing", "both")
-
-
-def _options_from_lines(blob: str) -> List[str]:
+def _options_from_lines(blob: str) -> list[str]:
     return [ln.strip() for ln in blob.splitlines() if ln.strip()]
 
 
-def _fetch_questions(include_inactive: bool = True) -> List[Dict[str, Any]]:
-    ok, code, data = api_client.get_survey_questions(include_inactive=include_inactive)
+def _fetch_questions() -> list[dict[str, Any]]:
+    ok, code, data = api_client.get_survey_questions(include_inactive=True)
     if not ok or not isinstance(data, list):
         st.error(f"No se pudieron cargar las preguntas (HTTP {code}): {_api_msg(data)}")
         return []
     return data
 
 
-def render_survey_questions_tab() -> None:
-    st.markdown('<p class="neon-title" style="font-size:1.1rem;">Gestión de preguntas — encuesta</p>', unsafe_allow_html=True)
-    with st.expander("Tipos soportados (misma API que el backend)", expanded=False):
-        st.markdown(
-            "| Tipo en panel | Uso |\n"
-            "|---|---|\n"
-            "| Escala 1–5 | Calificación numérica fija 1–5 |\n"
-            "| Sí / No | Booleano |\n"
-            "| Texto libre (histórico) | Texto largo (compatibilidad) |\n"
-            "| Área de texto | Varias líneas |\n"
-            "| Texto en una línea | Campo corto |\n"
-            "| Numérico | Número decimal (respuesta en `answer_number`) |\n"
-            "| Radio | Una opción; rellena **opciones** (≥2 líneas) |\n"
-            "| Casillas | Varias opciones; mismo campo de opciones |\n"
-            "| Lista desplegable | Una opción; mismo campo de opciones |\n"
-        )
+def _preview_text(q: dict[str, Any]) -> str:
+    qtype = str(q.get("question_type") or "text_short")
+    opts: list[str] = [str(o) for o in (q.get("options") or [])]
+    if qtype == "rating_1_5":
+        return "☆  ☆  ☆  ☆  ☆  ← el cliente elige del 1 al 5"
+    if qtype == "yes_no":
+        return "○  Sí      ○  No"
+    if qtype in ("text", "textarea"):
+        return "_El cliente escribe un comentario…_"
+    if qtype == "text_short":
+        return "_El cliente escribe una respuesta corta…_"
+    if qtype == "number":
+        return "_El cliente escribe un número_"
+    if qtype == "radio":
+        return ("  ·  ".join(f"○ {o}" for o in opts[:5]) + ("…" if len(opts) > 5 else "")) if opts else "_⚠ Sin opciones — edita la pregunta para añadir_"
+    if qtype == "checkbox":
+        return ("  ·  ".join(f"□ {o}" for o in opts[:5]) + ("…" if len(opts) > 5 else "")) if opts else "_⚠ Sin opciones — edita la pregunta para añadir_"
+    if qtype == "select":
+        return f"▼  {opts[0]}  (lista desplegable)" if opts else "▼  (lista desplegable)"
+    return ""
 
-    questions = _fetch_questions(include_inactive=True)
 
-    st.markdown("##### Crear pregunta")
-    c_type, c_kind, c_hint = st.columns([1, 1, 1])
-    with c_type:
-        create_qtype = st.selectbox(
-            "Tipo de respuesta",
-            options=list(_TYPE_OPTIONS),
-            format_func=question_type_label_es,
-            index=0,
-            key="sq_create_qtype",
-            help="Radio, casillas y lista desplegable requieren al menos 2 opciones en el cuadro de abajo.",
-        )
-    with c_kind:
-        st.selectbox(
-            "Ámbito",
-            options=list(_CONTRACT_KIND_OPTIONS),
-            format_func=lambda k: SCOPE_LABEL_ES[str(k)],
-            index=0,
-            key="sq_create_contract_kind",
-            help="**Tatuaje**, **piercing** o **ambas**: en la firma se muestran las de su tipo más las marcadas para ambos servicios.",
-        )
-    with c_hint:
-        if create_qtype in QUESTION_TYPES_NEEDING_OPTIONS:
-            st.info("Rellena **Opciones** (una por línea) y luego el texto de la pregunta en el formulario.")
-
-    if create_qtype in QUESTION_TYPES_NEEDING_OPTIONS:
-        st.text_area(
-            "Opciones (una por línea)",
-            placeholder="Opción A\nOpción B\nOpción C",
-            height=160,
-            key="sq_create_opts",
-            help="Mínimo 2 líneas no vacías. Aparece en cuanto eliges lista desplegable, radio o casillas.",
-        )
-
-    with st.form("sq_create_form", clear_on_submit=True):
-        label = st.text_input(
-            "Texto de la pregunta",
-            placeholder="¿Cómo calificaría la limpieza del local?",
-            max_chars=500,
-            key="sq_create_label",
-        )
-        r1, r2 = st.columns(2)
-        with r1:
-            sort_order = st.number_input("Orden (menor = primero)", min_value=0, max_value=9999, value=0, step=1)
-        with r2:
-            is_active = st.checkbox("Pregunta activa", value=True)
-        submitted = st.form_submit_button("Crear pregunta", use_container_width=True)
-        if submitted:
-            qt = str(st.session_state.get("sq_create_qtype", create_qtype))
-            opts_raw = str(st.session_state.get("sq_create_opts", "")) if qt in QUESTION_TYPES_NEEDING_OPTIONS else ""
-            if not (label or "").strip():
-                st.warning("Escribe el texto de la pregunta.")
-            else:
-                opt_list: List[str] | None = None
-                if qt in QUESTION_TYPES_NEEDING_OPTIONS:
-                    opt_list = _options_from_lines(opts_raw)
-                    if len(opt_list) < 2:
-                        st.warning("Define al menos dos opciones (una por línea) en el cuadro de opciones.")
-                        opt_list = None
-                if opt_list is not None or qt not in QUESTION_TYPES_NEEDING_OPTIONS:
-                    payload: Dict[str, Any] = {
-                        "label": label.strip(),
-                        "question_type": qt,
-                        "sort_order": int(sort_order),
-                        "contract_kind": str(st.session_state.get("sq_create_contract_kind", "tattoo")),
-                        "is_active": bool(is_active),
-                    }
-                    if qt in QUESTION_TYPES_NEEDING_OPTIONS:
-                        payload["options"] = opt_list
-                    ok, code, data = api_client.post_survey_question(payload)
-                    if ok:
-                        st.success("Pregunta creada.")
-                        st.session_state["sq_create_qtype"] = _TYPE_OPTIONS[0]
-                        st.session_state["sq_create_contract_kind"] = "tattoo"
-                        st.session_state.pop("sq_create_opts", None)
-                        st.rerun()
-                    else:
-                        st.error(f"No se pudo crear (HTTP {code}): {_api_msg(data)}")
-
-    st.markdown("##### Editar pregunta")
-    if not questions:
-        st.info("Aún no hay preguntas. Crea la primera arriba.")
-        options: list[int] = []
-        labels_map: Dict[int, str] = {}
+def _swap_order(a: dict[str, Any], b: dict[str, Any]) -> None:
+    sa, sb = int(a.get("sort_order") or 0), int(b.get("sort_order") or 0)
+    new_sa, new_sb = (sb, sa) if sa != sb else (min(sa, sb), max(sa, sb) + 1)
+    ok1, _, _ = api_client.put_survey_question(int(a["id"]), {"sort_order": new_sa})
+    ok2, _, _ = api_client.put_survey_question(int(b["id"]), {"sort_order": new_sb})
+    if ok1 and ok2:
+        st.rerun()
     else:
-        by_id = {int(q["id"]): q for q in questions}
-        options = sorted(by_id.keys())
-        labels_map: Dict[int, str] = {}
-        for i in options:
-            q = by_id[i]
-            ck_lbl = SCOPE_LABEL_ES.get(str(q.get("contract_kind") or "tattoo"), "?")
-            labels_map[i] = f"{i} — [{ck_lbl}] {(q.get('label') or '')[:52]}"
-        edit_pick = st.selectbox(
-            "Seleccionar pregunta",
-            options=options,
-            format_func=lambda i: labels_map[i],
-            key="sq_edit_pick",
+        st.error("No se pudo reordenar.")
+
+# ── Diálogos ──────────────────────────────────────────────────────────────
+
+def _mark_survey_dialog_scope() -> None:
+    """Marcador para CSS de diálogo en modo claro (styles/_theme_survey_questions.css)."""
+    st.markdown(_DLG_SURVEY_ROOT_HTML, unsafe_allow_html=True)
+    if get_panel_theme() == "light":
+        st.markdown(
+            """
+            <style>
+            div[data-testid="stDialog"]:has(.dlg-survey-root) [role="dialog"],
+            div[data-testid="stDialog"]:has([data-survey-dlg]) [role="dialog"] {
+              background: #ffffff !important;
+              background-color: #ffffff !important;
+              color: #1e293b !important;
+            }
+            div[data-testid="stDialog"]:has(.dlg-survey-root) [data-testid="stVerticalBlock"],
+            div[data-testid="stDialog"]:has(.dlg-survey-root) [data-testid="stHorizontalBlock"] {
+              background: #ffffff !important;
+              background-color: #ffffff !important;
+            }
+            div[data-testid="stDialog"]:has(.dlg-survey-root) [data-testid="stMarkdownContainer"] p,
+            div[data-testid="stDialog"]:has(.dlg-survey-root) [data-testid="stMarkdownContainer"] strong,
+            div[data-testid="stDialog"]:has(.dlg-survey-root) [data-testid="stRadio"] label,
+            div[data-testid="stDialog"]:has(.dlg-survey-root) [data-testid="stRadio"] label p {
+              color: #334155 !important;
+            }
+            div[data-testid="stDialog"]:has(.dlg-survey-root) [data-testid="stTextInput"] input,
+            div[data-testid="stDialog"]:has(.dlg-survey-root) textarea {
+              background: #ffffff !important;
+              color: #1e293b !important;
+              border-color: rgba(15, 23, 42, 0.18) !important;
+            }
+            div[data-testid="stDialog"]:has(.dlg-survey-root) [data-testid="stButton"] button[data-testid="baseButton-primary"],
+            div[data-testid="stDialog"]:has(.dlg-survey-root) [data-testid="stButton"] button[kind="primary"] {
+              background-image: linear-gradient(180deg, #ff5fb8 0%, #ff007f 52%, #d90064 100%) !important;
+              background-color: #ff007f !important;
+              color: #ffffff !important;
+            }
+            div[data-testid="stDialog"]:has(.dlg-survey-root) [data-testid="stButton"] button[data-testid="baseButton-primary"] *,
+            div[data-testid="stDialog"]:has(.dlg-survey-root) [data-testid="stButton"] button[kind="primary"] * {
+              color: #ffffff !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
         )
-        qcur = by_id[edit_pick]
-        cur_type = str(qcur.get("question_type") or "text_short")
-        if cur_type not in _TYPE_OPTIONS:
-            cur_type = "text_short"
-        cur_opts = qcur.get("options")
-        if not isinstance(cur_opts, list):
-            cur_opts = []
-        opts_default = "\n".join(str(x) for x in cur_opts)
 
-        prev_id = st.session_state.get("sq_edit_prev_id")
-        if prev_id != edit_pick:
-            if prev_id is not None:
-                st.session_state.pop(f"sq_edit_et_{prev_id}", None)
-                st.session_state.pop(f"sq_edit_eo_{prev_id}", None)
-                st.session_state.pop(f"sq_edit_lab_{prev_id}", None)
-                st.session_state.pop(f"sq_edit_ck_{prev_id}", None)
-            st.session_state["sq_edit_prev_id"] = edit_pick
 
-        if not bool(qcur.get("is_active")):
-            st.warning(
-                "Esta pregunta está **inactiva**: no aparece en el cuestionario de firma de contrato. "
-                "Actívala para ver y editar tipo, opciones, texto y orden."
-            )
-            if st.button("Activar pregunta", key=f"sq_edit_activate_{edit_pick}"):
-                ok_a, code_a, data_a = api_client.put_survey_question(edit_pick, {"is_active": True})
-                if ok_a:
-                    st.success("Pregunta activada.")
-                    st.rerun()
-                else:
-                    st.error(f"No se pudo activar (HTTP {code_a}): {_api_msg(data_a)}")
-        else:
-            show_editor = st.checkbox(
-                "Editar contenido (tipo, opciones, ámbito, texto y orden)",
-                value=True,
-                key=f"sq_edit_show_{edit_pick}",
-                help="Desmarcar oculta el formulario si solo quieres revisar qué pregunta está seleccionada.",
-            )
-            if not show_editor:
-                st.caption("Marca **Editar contenido** para mostrar el cuerpo del formulario.")
-            else:
-                k_et = f"sq_edit_et_{edit_pick}"
-                k_eo = f"sq_edit_eo_{edit_pick}"
-                k_lab = f"sq_edit_lab_{edit_pick}"
-                k_ck = f"sq_edit_ck_{edit_pick}"
-                _cur_ck = str(qcur.get("contract_kind") or "tattoo").strip().lower()
-                if _cur_ck not in ("tattoo", "piercing", "both"):
-                    _cur_ck = "tattoo"
-                if k_et not in st.session_state:
-                    st.session_state[k_et] = cur_type
-                if k_eo not in st.session_state:
-                    st.session_state[k_eo] = opts_default
-                if k_lab not in st.session_state:
-                    st.session_state[k_lab] = str(qcur.get("label") or "")
-                if k_ck not in st.session_state:
-                    st.session_state[k_ck] = _cur_ck
-
-                st.caption(
-                    "Cambia el **tipo**, las **opciones** y el **ámbito** aquí; el texto y el orden van con **Guardar**."
-                )
-                ec1, ec2 = st.columns([1, 1])
-                with ec1:
-                    st.selectbox(
-                        "Tipo (edición)",
-                        options=list(_TYPE_OPTIONS),
-                        format_func=question_type_label_es,
-                        key=k_et,
-                    )
-                with ec2:
-                    et_now = str(st.session_state.get(k_et, cur_type))
-                    if et_now in QUESTION_TYPES_NEEDING_OPTIONS:
-                        st.info("Edita las opciones en el recuadro de abajo.")
-
-                if et_now in QUESTION_TYPES_NEEDING_OPTIONS:
-                    st.text_area(
-                        "Opciones (una por línea)",
-                        height=160,
-                        key=k_eo,
-                        help="Mínimo 2 opciones para radio, casillas o lista desplegable.",
-                    )
-
-                st.selectbox(
-                    "Ámbito (tatuaje / piercing / ambas)",
-                    options=list(_CONTRACT_KIND_OPTIONS),
-                    format_func=lambda k: SCOPE_LABEL_ES[str(k)],
-                    key=k_ck,
-                    help="Fuera del formulario para que el cambio se registre al primer clic al guardar.",
-                )
-
-                with st.form(f"sq_edit_form_{edit_pick}"):
-                    st.text_input("Texto de la pregunta", max_chars=500, key=k_lab)
-                    eo1, eo2 = st.columns(2)
-                    with eo1:
-                        esort = st.number_input(
-                            "Orden",
-                            min_value=0,
-                            max_value=9999,
-                            value=int(qcur.get("sort_order") or 0),
-                            step=1,
-                        )
-                    with eo2:
-                        eactive = st.checkbox("Activa", value=bool(qcur.get("is_active", True)))
-                    if st.form_submit_button("Guardar cambios", use_container_width=True):
-                        et = str(st.session_state.get(k_et, cur_type))
-                        el = str(st.session_state.get(k_lab, ""))
-                        ekind = str(st.session_state.get(k_ck, _cur_ck))
-                        if ekind not in ("tattoo", "piercing", "both"):
-                            ekind = _cur_ck
-                        if not el.strip():
-                            st.warning("El texto de la pregunta no puede estar vacío.")
-                        elif et in QUESTION_TYPES_NEEDING_OPTIONS:
-                            ol = _options_from_lines(str(st.session_state.get(k_eo, "")))
-                            if len(ol) < 2:
-                                st.warning("Define al menos dos opciones (una por línea).")
-                            else:
-                                body: Dict[str, Any] = {
-                                    "label": el.strip(),
-                                    "question_type": et,
-                                    "sort_order": int(esort),
-                                    "contract_kind": ekind,
-                                    "is_active": bool(eactive),
-                                    "options": ol,
-                                }
-                                ok, code, data = api_client.put_survey_question(edit_pick, body)
-                                if ok:
-                                    st.success("Cambios guardados.")
-                                    st.session_state.pop(k_et, None)
-                                    st.session_state.pop(k_eo, None)
-                                    st.session_state.pop(k_lab, None)
-                                    st.session_state.pop(k_ck, None)
-                                    st.rerun()
-                                else:
-                                    st.error(f"Error (HTTP {code}): {_api_msg(data)}")
-                        else:
-                            body = {
-                                "label": el.strip(),
-                                "question_type": et,
-                                "sort_order": int(esort),
-                                "contract_kind": ekind,
-                                "is_active": bool(eactive),
-                            }
-                            ok, code, data = api_client.put_survey_question(edit_pick, body)
-                            if ok:
-                                st.success("Cambios guardados.")
-                                st.session_state.pop(k_et, None)
-                                st.session_state.pop(k_eo, None)
-                                st.session_state.pop(k_lab, None)
-                                st.session_state.pop(k_ck, None)
-                                st.rerun()
-                            else:
-                                st.error(f"Error (HTTP {code}): {_api_msg(data)}")
-
-    st.markdown("##### Eliminar pregunta")
-    st.caption(
-        "Al eliminar se borran también todas las respuestas históricas vinculadas a esa pregunta "
-        "(no se pueden recuperar para el reporte)."
+def _type_picker(key: str, default_type: str, *, all_types: bool = False) -> str:
+    """Radio horizontal con tipos amigables. Devuelve el código de tipo seleccionado."""
+    types = _ALL_TYPES if all_types else _CREATE_TYPES
+    labels = [lbl for _, lbl in types]
+    keys   = [k   for k,  _ in types]
+    default_lbl = _TYPE_LABEL.get(default_type, labels[0])
+    if default_lbl not in labels:
+        default_lbl = labels[0]
+    picked = st.radio(
+        "Tipo",
+        options=labels,
+        index=labels.index(default_lbl),
+        horizontal=True,
+        label_visibility="collapsed",
+        key=key,
     )
-    if questions:
-        del_pick = st.selectbox(
-            "Pregunta a eliminar",
-            options=options,
-            format_func=lambda i: labels_map[i],
-            key="sq_del_pick",
-        )
-        if st.button("Revisar impacto antes de eliminar", key="sq_del_preview"):
-            st.session_state["_sq_del_impact_id"] = del_pick
-        impact_id: int | None = st.session_state.get("_sq_del_impact_id")
-        if impact_id == del_pick:
-            ok_i, code_i, raw_i = api_client.get_survey_question_deletion_impact(del_pick)
-            if ok_i and isinstance(raw_i, dict):
-                n = int(raw_i.get("registered_answers") or 0)
-                lbl = str(raw_i.get("label") or "")
-                st.warning(
-                    f"**«{lbl}»** tiene **{n}** respuesta(s) guardada(s) en encuestas. "
-                    "Si confirmas la eliminación, **esas mediciones desaparecerán** del reporte y de la base de datos."
-                )
-                confirm = st.checkbox(
-                    "Entiendo que se borrarán las estadísticas y respuestas de esta pregunta.",
-                    key="sq_del_confirm",
-                )
-                if st.button("Eliminar definitivamente", type="primary", disabled=not confirm, key="sq_del_go"):
-                    ok_d, code_d, raw_d = api_client.delete_survey_question(del_pick)
-                    if ok_d:
-                        st.session_state.pop("_sq_del_impact_id", None)
-                        st.success("Pregunta eliminada.")
-                        st.rerun()
-                    else:
-                        st.error(f"Error (HTTP {code_d}): {_api_msg(raw_d)}")
-            else:
-                st.error(f"No se pudo consultar el impacto (HTTP {code_i}): {_api_msg(raw_i)}")
+    return keys[labels.index(picked)] if picked in labels else default_type
 
-    st.markdown("##### Vista previa del orden")
-    active_sorted = sorted(
+
+def _scope_picker(key: str, default_scope: str) -> str:
+    safe = default_scope if default_scope in _SCOPE_KEYS else "both"
+    picked = st.radio(
+        "Servicio",
+        options=list(_SCOPE_KEYS),
+        format_func=lambda k: f"{_SCOPE_ICON[k]}  {_SCOPE_LABEL[k]}",
+        horizontal=True,
+        index=list(_SCOPE_KEYS).index(safe),
+        label_visibility="collapsed",
+        key=key,
+    )
+    return str(picked) if picked in _SCOPE_KEYS else safe
+
+
+@st.dialog("Agregar pregunta", width="large", dismissible=False)
+def _dlg_new() -> None:
+    _mark_survey_dialog_scope()
+    st.markdown("**1. ¿Qué tipo de respuesta quieres recoger?**")
+    chosen_type = _type_picker("sq_dlg_new_type", "rating_1_5")
+
+    st.markdown("**2. Escribe la pregunta que verá el cliente:**")
+    st.text_input(
+        "Texto",
+        placeholder="Ej: ¿Cómo calificarías tu experiencia con nosotros?",
+        max_chars=500,
+        label_visibility="collapsed",
+        key="sq_dlg_new_lbl",
+    )
+
+    if chosen_type in QUESTION_TYPES_NEEDING_OPTIONS:
+        st.markdown("**3. Opciones de respuesta** _(una por línea, mínimo 2)_")
+        st.text_area(
+            "Opciones",
+            placeholder="Muy buena\nBuena\nRegular\nMala",
+            height=110,
+            label_visibility="collapsed",
+            key="sq_dlg_new_opts",
+        )
+
+    st.markdown("**¿Para qué servicio aplica?**")
+    scope = _scope_picker("sq_dlg_new_scope", "both")
+
+    st.markdown("---")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Cancelar", use_container_width=True, key="sq_dlg_new_cancel"):
+            st.rerun()
+    with c2:
+        if st.button("💾 Guardar", type="primary", use_container_width=True, key="sq_dlg_new_save"):
+            lbl = str(st.session_state.get("sq_dlg_new_lbl") or "").strip()
+            if not lbl:
+                st.warning("Escribe el texto de la pregunta.")
+                return
+            payload: dict[str, Any] = {
+                "label": lbl,
+                "question_type": chosen_type,
+                "sort_order": 9999,
+                "contract_kind": scope,
+                "is_active": True,
+            }
+            if chosen_type in QUESTION_TYPES_NEEDING_OPTIONS:
+                opts = _options_from_lines(str(st.session_state.get("sq_dlg_new_opts") or ""))
+                if len(opts) < 2:
+                    st.warning("Añade al menos dos opciones.")
+                    return
+                payload["options"] = opts
+            ok, code, data = api_client.post_survey_question(payload)
+            if ok:
+                st.rerun()
+            else:
+                st.error(f"No se pudo crear (HTTP {code}): {_api_msg(data)}")
+
+
+@st.dialog("Editar pregunta", width="large", dismissible=False)
+def _dlg_edit(q: dict[str, Any]) -> None:
+    _mark_survey_dialog_scope()
+    qid = int(q["id"])
+    cur_type  = str(q.get("question_type") or "text_short")
+    cur_opts  = [str(o) for o in (q.get("options") or [])]
+    cur_scope = str(q.get("contract_kind") or "both")
+
+    st.markdown("**1. Tipo de respuesta:**")
+    chosen_type = _type_picker(f"sq_dlg_edit_type_{qid}", cur_type, all_types=True)
+
+    st.markdown("**2. Texto de la pregunta:**")
+    st.text_input(
+        "Texto",
+        value=str(q.get("label") or ""),
+        max_chars=500,
+        label_visibility="collapsed",
+        key=f"sq_dlg_edit_lbl_{qid}",
+    )
+
+    if chosen_type in QUESTION_TYPES_NEEDING_OPTIONS:
+        st.markdown("**3. Opciones** _(una por línea)_")
+        st.text_area(
+            "Opciones",
+            value="\n".join(cur_opts),
+            height=110,
+            label_visibility="collapsed",
+            key=f"sq_dlg_edit_opts_{qid}",
+        )
+
+    st.markdown("**¿Para qué servicio aplica?**")
+    scope = _scope_picker(f"sq_dlg_edit_scope_{qid}", cur_scope)
+
+    st.markdown("---")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Cancelar", use_container_width=True, key=f"sq_dlg_edit_cancel_{qid}"):
+            st.rerun()
+    with c2:
+        if st.button("💾 Guardar cambios", type="primary", use_container_width=True, key=f"sq_dlg_edit_save_{qid}"):
+            lbl = str(st.session_state.get(f"sq_dlg_edit_lbl_{qid}") or "").strip()
+            if not lbl:
+                st.warning("El texto no puede estar vacío.")
+                return
+            body: dict[str, Any] = {
+                "label": lbl,
+                "question_type": chosen_type,
+                "sort_order": int(q.get("sort_order") or 0),
+                "contract_kind": scope,
+                "is_active": bool(q.get("is_active", True)),
+            }
+            if chosen_type in QUESTION_TYPES_NEEDING_OPTIONS:
+                opts = _options_from_lines(str(st.session_state.get(f"sq_dlg_edit_opts_{qid}") or ""))
+                if len(opts) < 2:
+                    st.warning("Define al menos dos opciones.")
+                    return
+                body["options"] = opts
+            ok, code, data = api_client.put_survey_question(qid, body)
+            if ok:
+                st.rerun()
+            else:
+                st.error(f"No se pudo guardar (HTTP {code}): {_api_msg(data)}")
+
+
+@st.dialog("Eliminar pregunta", width="small", dismissible=False)
+def _dlg_delete(q: dict[str, Any]) -> None:
+    _mark_survey_dialog_scope()
+    qid = int(q["id"])
+    st.markdown(f"¿Eliminar esta pregunta?")
+    st.info(f"**«{q.get('label', '')}»**")
+
+    ok_i, _, raw_i = api_client.get_survey_question_deletion_impact(qid)
+    if ok_i and isinstance(raw_i, dict):
+        n = int(raw_i.get("registered_answers") or 0)
+        if n > 0:
+            st.warning(
+                f"Esta pregunta tiene **{n}** respuesta(s) de clientes guardadas. "
+                "Al eliminarla esas estadísticas se perderán del reporte."
+            )
+        else:
+            st.caption("Esta pregunta no tiene respuestas guardadas.")
+
+    confirm = st.checkbox("Sí, quiero eliminarla definitivamente", key=f"sq_dlg_del_confirm_{qid}")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Cancelar", use_container_width=True, key=f"sq_dlg_del_cancel_{qid}"):
+            st.rerun()
+    with c2:
+        if st.button(
+            "🗑 Eliminar",
+            type="primary",
+            disabled=not confirm,
+            use_container_width=True,
+            key=f"sq_dlg_del_go_{qid}",
+        ):
+            ok_d, code_d, raw_d = api_client.delete_survey_question(qid)
+            if ok_d:
+                st.rerun()
+            else:
+                st.error(f"Error (HTTP {code_d}): {_api_msg(raw_d)}")
+
+# ── Tarjeta de pregunta ───────────────────────────────────────────────────
+
+def _render_card(
+    q: dict[str, Any],
+    prev_q: dict[str, Any] | None,
+    next_q: dict[str, Any] | None,
+    *,
+    is_active: bool,
+) -> None:
+    qid   = int(q["id"])
+    scope = str(q.get("contract_kind") or "both")
+    if scope not in _SCOPE_LABEL:
+        scope = "both"
+    qtype = str(q.get("question_type") or "text_short")
+
+    with st.container(border=True):
+        col_text, col_btns = st.columns([6, 2])
+
+        with col_text:
+            st.markdown(f"**{q.get('label', '')}**")
+            prev = _preview_text(q)
+            if prev:
+                st.caption(prev)
+            type_lbl  = _TYPE_LABEL.get(qtype, qtype)
+            scope_str = f"{_SCOPE_ICON.get(scope, '')} {_SCOPE_LABEL.get(scope, scope)}"
+            st.caption(f"{scope_str}  ·  {type_lbl}")
+
+        with col_btns:
+            if is_active:
+                c1, c2, c3, c4 = st.columns(4)
+                with c1:
+                    if st.button("↑", key=f"sq_up_{qid}", disabled=prev_q is None,
+                                 help="Subir", use_container_width=True):
+                        if prev_q:
+                            _swap_order(q, prev_q)
+                with c2:
+                    if st.button("↓", key=f"sq_dn_{qid}", disabled=next_q is None,
+                                 help="Bajar", use_container_width=True):
+                        if next_q:
+                            _swap_order(q, next_q)
+                with c3:
+                    if st.button("✏️", key=f"sq_edit_{qid}", help="Editar",
+                                 use_container_width=True):
+                        _dlg_edit(q)
+                with c4:
+                    if st.button("🗑️", key=f"sq_del_{qid}", help="Eliminar",
+                                 use_container_width=True):
+                        _dlg_delete(q)
+            else:
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("✅ Activar", key=f"sq_act_{qid}", use_container_width=True):
+                        ok_a, _, err_a = api_client.put_survey_question(qid, {"is_active": True})
+                        if ok_a:
+                            st.rerun()
+                        else:
+                            st.error(_api_msg(err_a))
+                with c2:
+                    if st.button("🗑 Borrar", key=f"sq_del_i_{qid}", use_container_width=True):
+                        _dlg_delete(q)
+
+# ── Vista principal ───────────────────────────────────────────────────────
+
+def render_survey_questions_tab() -> None:
+    questions = _fetch_questions()
+
+    active = sorted(
         [q for q in questions if q.get("is_active")],
         key=lambda x: (int(x.get("sort_order") or 0), int(x.get("id") or 0)),
     )
-    if not active_sorted:
-        st.caption("No hay preguntas activas para mostrar.")
+    inactive = sorted(
+        [q for q in questions if not q.get("is_active")],
+        key=lambda x: (int(x.get("sort_order") or 0), int(x.get("id") or 0)),
+    )
+
+    # Encabezado
+    h1, h2 = st.columns([5, 2])
+    with h1:
+        st.markdown(
+            '<p class="neon-title" style="font-size:1.1rem;">Encuesta de satisfacción</p>',
+            unsafe_allow_html=True,
+        )
+        if active:
+            st.caption(
+                f"{len(active)} pregunta(s) activa(s)  ·  "
+                "usa ↑ ↓ para cambiar el orden en que las verá el cliente"
+            )
+        else:
+            st.caption("Crea la primera pregunta con el botón de la derecha.")
+    with h2:
+        if st.button("＋ Agregar pregunta", type="primary",
+                     use_container_width=True, key="sq_btn_add"):
+            _dlg_new()
+
+    st.markdown("---")
+
+    # Preguntas activas
+    if not active:
+        st.info(
+            "La encuesta está vacía. Cuando añadas preguntas activas, "
+            "aquí verás una vista previa de cómo las verá el cliente al firmar."
+        )
     else:
-        for q in active_sorted:
-            qt = question_type_label_es(str(q.get("question_type") or ""))
-            ck = SCOPE_LABEL_ES.get(str(q.get("contract_kind") or "tattoo"), "—")
-            o = q.get("options")
-            extra = ""
-            if isinstance(o, list) and o:
-                extra = f" — opciones: {', '.join(str(x) for x in o[:5])}{'…' if len(o) > 5 else ''}"
-            st.markdown(f"- **{ck}** · **{q.get('label')}** · _{qt}_{extra}")
+        for i, q in enumerate(active):
+            _render_card(
+                q,
+                prev_q=active[i - 1] if i > 0 else None,
+                next_q=active[i + 1] if i < len(active) - 1 else None,
+                is_active=True,
+            )
+
+    # Preguntas inactivas (plegadas)
+    if inactive:
+        st.markdown("---")
+        with st.expander(
+            f"Preguntas inactivas ({len(inactive)}) — no aparecen en la encuesta"
+        ):
+            st.caption("Actívalas para incluirlas en la encuesta al firmar contrato.")
+            for q in inactive:
+                _render_card(q, prev_q=None, next_q=None, is_active=False)

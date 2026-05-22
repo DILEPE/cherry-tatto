@@ -671,6 +671,7 @@ def render_login_gate() -> bool:
                         st.session_state["_panel_auth_ok"] = True
                         _set_env_operator_session()
                         st.session_state["_panel_warm_after_login"] = True
+                        st.session_state["_panel_reset_to_citas"] = True
                         _pop_login_curtain_ui_state()
                         st.rerun()
                     else:
@@ -736,6 +737,7 @@ def render_login_gate() -> bool:
                                 _clear_db_panel_identity()
                             st.session_state["_panel_auth_ok"] = True
                             st.session_state["_panel_warm_after_login"] = True
+                            st.session_state["_panel_reset_to_citas"] = True
                             _pop_login_curtain_ui_state()
                             st.rerun()
                         else:
