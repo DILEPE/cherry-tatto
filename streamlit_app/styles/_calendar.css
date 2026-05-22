@@ -32,10 +32,13 @@ section.main div[data-testid="stMarkdownContainer"]:has(.cal-m-whcell) {
     padding-left: 0 !important;
     padding-right: 0 !important;
 }
-/* iframes height=0 (puentes JS): sin hueco extra; no tocar overflow del main (mantiene scroll) */
+/* Componente bidireccional cal_nav_bridge (mes y semana): sin hueco visual */
 [data-testid="stMain"]:has(.cal-cell--month) iframe,
+[data-testid="stMain"]:has(.twg-shell) iframe,
 section.main:has(.cal-cell--month) iframe,
-section.main:has(.cal-cell--month) [data-testid="stCustomComponentV1"] iframe {
+section.main:has(.twg-shell) iframe,
+section.main:has(.cal-cell--month) [data-testid="stCustomComponentV1"] iframe,
+section.main:has(.twg-shell) [data-testid="stCustomComponentV1"] iframe {
     height: 0 !important;
     max-height: 0 !important;
     min-height: 0 !important;
@@ -45,11 +48,15 @@ section.main:has(.cal-cell--month) [data-testid="stCustomComponentV1"] iframe {
     border: none !important;
 }
 [data-testid="stMain"]:has(.cal-cell--month) [data-testid="stElementContainer"]:has(iframe),
-[data-testid="stMain"]:has(.cal-cell--month)
-    div[data-testid="element-container"]:has(iframe),
+[data-testid="stMain"]:has(.cal-cell--month) div[data-testid="element-container"]:has(iframe),
+[data-testid="stMain"]:has(.twg-shell) [data-testid="stElementContainer"]:has(iframe),
+[data-testid="stMain"]:has(.twg-shell) div[data-testid="element-container"]:has(iframe),
 section.main:has(.cal-cell--month) [data-testid="stElementContainer"]:has(iframe),
 section.main:has(.cal-cell--month) div[data-testid="element-container"]:has(iframe),
-section.main:has(.cal-cell--month) [data-testid="stCustomComponentV1"] {
+section.main:has(.cal-cell--month) [data-testid="stCustomComponentV1"],
+section.main:has(.twg-shell) [data-testid="stElementContainer"]:has(iframe),
+section.main:has(.twg-shell) div[data-testid="element-container"]:has(iframe),
+section.main:has(.twg-shell) [data-testid="stCustomComponentV1"] {
     min-height: 0 !important;
     height: auto !important;
     max-height: 0 !important;

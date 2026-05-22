@@ -362,8 +362,50 @@ def _rebuild_detail_for_patch(
     return _append_agenda_slots_marker(detail_for_api, slots)
 
 
+def _consume_cal_nav_component_result() -> None:
+    """Lee el resultado del componente cal_nav_bridge y abre el diálogo correspondiente.
+
+    El componente intercepta clics en .cal-query-nav sin navegar por URL,
+    evitando la pérdida de sesión. Cada acción lleva un ``_nonce`` único;
+    Python lo guarda en ``_cal_nav_consumed_nonce`` para no reprocesar la misma
+    acción aunque Streamlit restaure el widget state en reruns posteriores.
+    """
+    nav = st.session_state.get("cal_nav_bridge")
+    if isinstance(nav, dict):
+        nonce = nav.get("_nonce")
+        if nonce and nonce == st.session_state.get("_cal_nav_consumed_nonce"):
+            return  # ya procesado; Streamlit restauró el mismo widget state
+        if nonce:
+            st.session_state["_cal_nav_consumed_nonce"] = nonce
+        action_type = nav.get("type")
+        try:
+            if action_type == "appt":
+                aid = int(nav.get("id", 0) or 0)
+                if aid > 0:
+                    st.session_state["_cal_focus_appt_id"] = aid
+                    st.session_state.pop("_cal_overflow_day", None)
+            elif action_type == "book":
+                y = int(nav.get("y", 0) or 0)
+                m = int(nav.get("m", 0) or 0)
+                d = int(nav.get("d", 0) or 0)
+                if d > 0:
+                    picked = date(y, m, d)
+                    if picked >= date.today() and not _panel_is_technician_role():
+                        _clear_calendar_dialog_focus()
+                        _pop_booking_document_session()
+                        st.session_state["ap_ad"] = picked
+                        st.session_state["_ap_dlg"] = "create"
+        except (ValueError, TypeError):
+            pass
+        return
+
+    # Fallback: query params directos en la URL (acceso externo con ?cal_appt_id=)
+    _consume_cal_appt_query_param()
+    _consume_cal_book_query_param()
+
+
 def _consume_cal_appt_query_param() -> None:
-    """Abre el diálogo de una cita (`cal_appt_id` en URL, params fusionados desde el calendario)."""
+    """Fallback: abre diálogo de cita desde ``?cal_appt_id=`` en la URL."""
     raw = st.query_params.get("cal_appt_id")
     if raw is None:
         return
@@ -381,7 +423,7 @@ def _consume_cal_appt_query_param() -> None:
 
 
 def _consume_cal_book_query_param() -> None:
-    """Abre agendar cita desde el pie del calendario mensual (`?cal_book=YYYY-MM-DD`)."""
+    """Fallback: abre agendar cita desde ``?cal_book=YYYY-MM-DD`` en la URL."""
     raw = st.query_params.get("cal_book")
     if raw is None:
         return
@@ -835,7 +877,8 @@ def render_reporte_citas_tab() -> None:
     if st.session_state.get("_ap_receipts_item"):
         dialog_recibos_cita()
 
-    st.markdown("##### Reporte")
+    st.markdown('<div class="rep-tab-root" aria-hidden="true"></div>', unsafe_allow_html=True)
+    st.markdown("##### Gestión reportes")
     # st.tabs ejecuta cada pestaña en cada rerun; el radio solo dibuja una rama.
     rep_sec = st.radio(
         "Sección",
@@ -849,7 +892,6 @@ def render_reporte_citas_tab() -> None:
             svc_values,
             status_values,
             client_history_key=_client_history_key,
-            render_row_actions=_render_cita_row_actions,
         )
     else:
         st.markdown("##### Resumen por pregunta")
@@ -860,8 +902,7 @@ def render_reporte_citas_tab() -> None:
 def render_citas_tab() -> None:
     """Calendario, agendar y diálogo de citas del día; datos financieros y tabla en **Reporte**."""
     _init_appt_tab_session_state()
-    _consume_cal_appt_query_param()
-    _consume_cal_book_query_param()
+    _consume_cal_nav_component_result()
     _inject_citas_shared_styles()
     _sync_appointments_from_api()
 
@@ -873,17 +914,9 @@ def render_citas_tab() -> None:
     svc_values = list(st.session_state.get("_ap_svc_values") or [])
     status_values = ["Agendada", "Reprogramada", "Finalizada", "Cancelada"]
 
-    st.markdown("##### Gestión citas — calendario")
+    _render_citas_color_legend()
 
-    with st.expander(
-        "Leyenda de colores — citas",
-        expanded=True,
-    ):
-        _render_citas_color_legend()
-
-    filt_head_l, filt_head_m, filt_head_r = st.columns([3.4, 1.15, 1.35])
-    with filt_head_l:
-        st.markdown("##### Filtros del calendario")
+    _, filt_head_m, filt_head_r = st.columns([3.4, 1.15, 1.35])
     with filt_head_m:
         st.write("")
         st.write("")
@@ -917,7 +950,11 @@ def render_citas_tab() -> None:
 
     vista_compact = "Mes — compacta"
     vista_team = "Mes — por equipo"
-    vista_week = "Semana (rejilla)"
+    vista_week = "Semana"
+    if st.session_state.get("_ap_cal_vista") == "Semana (rejilla)":
+        st.session_state["_ap_cal_vista"] = vista_week
+    if st.session_state.get("_ap_cal_period") == "Semana (rejilla)":
+        st.session_state["_ap_cal_period"] = "Semana"
 
     fid = int(st.session_state.get("_ap_filter_artist_id") or 0)
     may_all = _may_see_all_appointments()
@@ -932,7 +969,7 @@ def render_citas_tab() -> None:
     if "_ap_cal_vista" not in st.session_state:
         pk = str(st.session_state.get(period_key) or "Mes")
         lk = str(st.session_state.get(layout_key) or "Compacta")
-        if pk == "Semana (rejilla)":
+        if pk in ("Semana (rejilla)", "Semana"):
             st.session_state["_ap_cal_vista"] = vista_week
         elif lk == "Por equipo" and can_team:
             st.session_state["_ap_cal_vista"] = vista_team
@@ -971,13 +1008,7 @@ def render_citas_tab() -> None:
 
     team_layout = False
     if vista == vista_week:
-        period_sel = "Semana (rejilla)"
-        st.markdown(
-            "<div style=\"opacity:.58;font-size:0.74rem;line-height:1.35;"
-            'padding-top:0.08rem;margin-bottom:0.35rem">Semana compacta · <strong>Lun–Dom</strong> · franjas 30 min'
-            "</div>",
-            unsafe_allow_html=True,
-        )
+        period_sel = "Semana"
     elif vista == vista_team:
         period_sel = "Mes"
         team_layout = True
@@ -1004,7 +1035,7 @@ def render_citas_tab() -> None:
 
     _invoke_citas_tab_dialogs(by_day, hist_counts)
 
-    if period_sel == "Semana (rejilla)":
+    if period_sel == "Semana":
         render_week_schedule_grid(
             by_day,
             hist_counts,

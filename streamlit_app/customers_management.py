@@ -36,7 +36,12 @@ def _doc_type_index(val: Any) -> int:
     return opts.index(v)
 
 
-def _is_minor_by_birth_date(birth_date: date) -> bool:
+def _is_minor_by_birth_date(birth_date: date | None) -> bool:
+    """False si no hay fecha válida o es el sentinela de nacimiento pendiente."""
+    if not isinstance(birth_date, date):
+        return False
+    if birth_date == CUSTOMER_BIRTH_PENDING:
+        return False
     today = date.today()
     years = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
     return years < 18
@@ -122,6 +127,14 @@ def _fetch_list(search: str, limit: int, page: int) -> None:
     else:
         st.session_state["_cust_list"] = None
         st.session_state["_cust_last_error"] = (code, _detail(data))
+
+
+_DLG_CUST_ROOT_HTML = '<div class="dlg-cust-root" aria-hidden="true"></div>'
+
+
+def _mark_customer_dialog_scope() -> None:
+    """Marcador para CSS de diálogo en modo claro (ver styles/_theme_customers.css)."""
+    st.markdown(_DLG_CUST_ROOT_HTML, unsafe_allow_html=True)
 
 
 def _inject_customer_table_styles() -> None:
@@ -298,6 +311,7 @@ def _reset_create_customer_form_state() -> None:
 
 @st.dialog("Registrar cliente", width="large", dismissible=False)
 def _dialog_crear_cliente() -> None:
+    _mark_customer_dialog_scope()
     min_date_100, max_date_today = _date_range_100y()
     st.markdown("##### Datos personales")
     a, b = st.columns(2)
@@ -475,7 +489,7 @@ def _dialog_crear_cliente() -> None:
             st.rerun()
 
 
-@st.dialog("Editar cliente", width="large")
+@st.dialog("Editar cliente", width="large", dismissible=False)
 def _dialog_editar_cliente(cliente_id: int) -> None:
     if "_dlg_edit_payload" not in st.session_state or st.session_state.get("_dlg_edit_id") != cliente_id:
         ok, code, data = api_client.get_customer(cliente_id)
@@ -490,6 +504,7 @@ def _dialog_editar_cliente(cliente_id: int) -> None:
         st.session_state["_dlg_edit_payload"] = data
         st.session_state["_dlg_edit_id"] = cliente_id
 
+    _mark_customer_dialog_scope()
     ed = st.session_state["_dlg_edit_payload"]
 
     if _parse_date(ed.get("birth_date")) == CUSTOMER_BIRTH_PENDING:
@@ -693,7 +708,6 @@ def _dialog_editar_cliente(cliente_id: int) -> None:
 @st.dialog("Eliminar cliente", width="medium")
 def _dialog_eliminar_cliente(cliente_id: int, nombre: str) -> None:
     st.warning(f"¿Eliminar de forma lógica al cliente **{nombre}** (ID {cliente_id})?")
-    st.caption("El registro quedará marcado como eliminado (soft delete).")
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Sí, eliminar", type="primary", use_container_width=True, key="dlg_del_yes"):
@@ -751,6 +765,7 @@ def _dialog_contracts_cliente(cliente_id: int, nombre: str) -> None:
 
 
 def render_customers_management_tab() -> None:
+    st.markdown('<div class="cust-tab-root" aria-hidden="true"></div>', unsafe_allow_html=True)
     st.subheader("Gestión de clientes")
 
     if "_cust_page" not in st.session_state:

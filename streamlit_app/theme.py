@@ -82,6 +82,37 @@ def _read_theme_css(name: str) -> str:
     return (_styles_directory() / name).read_text(encoding="utf-8")
 
 
+def _join_multiline_theme_selectors(css: str) -> str:
+    """Une selectores :root[data-panel-theme] en varias líneas antes de `{`."""
+    lines = css.splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if ":root[data-panel-theme=" not in line:
+            out.append(line)
+            i += 1
+            continue
+        selectors: list[str] = []
+        while i < len(lines):
+            ln = lines[i]
+            if "{" in ln:
+                before, _, after = ln.partition("{")
+                if ":root[data-panel-theme=" in before:
+                    selectors.append(before.strip().rstrip(","))
+                out.append(", ".join(selectors) + " {" + after)
+                i += 1
+                break
+            if ":root[data-panel-theme=" in ln:
+                selectors.append(ln.strip().rstrip(","))
+                i += 1
+                continue
+            break
+        else:
+            out.extend(selectors)
+    return "\n".join(out)
+
+
 def _extract_brace_block(css: str, open_brace: int) -> tuple[str, int]:
     depth = 0
     i = open_brace
@@ -99,6 +130,7 @@ def _extract_brace_block(css: str, open_brace: int) -> tuple[str, int]:
 
 def compile_theme_css(raw: str, theme: PanelThemeMode) -> str:
     inactive: PanelThemeMode = "dark" if theme == "light" else "light"
+    raw = _join_multiline_theme_selectors(raw)
     out: list[str] = []
     pos = 0
     for match in _THEME_ROOT_RE.finditer(raw):
@@ -108,11 +140,9 @@ def compile_theme_css(raw: str, theme: PanelThemeMode) -> str:
         inner, end = _extract_brace_block(raw, brace)
         if block_theme == theme:
             header = raw[match.start() : brace].strip()
-            header = header.replace(
-                f':root[data-panel-theme="{theme}"]',
-                _ROOT_SELECTOR,
-                1,
-            )
+            token = f':root[data-panel-theme="{theme}"]'
+            while token in header:
+                header = header.replace(token, _ROOT_SELECTOR, 1)
             out.append(f"{header} {inner}")
         pos = end
     out.append(raw[pos:])
@@ -123,6 +153,7 @@ def compile_theme_css(raw: str, theme: PanelThemeMode) -> str:
             continue
         if f'data-panel-theme="{theme}"' in line:
             line = line.replace(f':root[data-panel-theme="{theme}"]', ":root")
+            line = line.replace(f'html[data-panel-theme="{theme}"]', "html")
         lines.append(line)
     return "\n".join(lines)
 
@@ -194,11 +225,12 @@ def _theme_dom_sync_script(theme: PanelThemeMode) -> str:
   try {{
     localStorage.setItem(lsKey, t);
   }} catch (e) {{}}
+  try {{ apply(document); }} catch (e) {{}}
   try {{
-    apply(window.parent.document);
-  }} catch (e) {{
-    apply(document);
-  }}
+    if (window.parent && window.parent.document && window.parent.document !== document) {{
+      apply(window.parent.document);
+    }}
+  }} catch (e) {{}}
 }})();
 </script>
 """
@@ -212,18 +244,309 @@ def _bootstrap_theme_from_local_storage_script() -> str:
 (function () {{
   var lsKey = "{_LS_KEY}";
   var server = "{server}";
-  try {{
+    try {{
     var stored = localStorage.getItem(lsKey);
     if (!stored && server) localStorage.setItem(lsKey, server);
     if (stored === "light" || stored === "dark") {{
-      var doc = window.parent && window.parent.document ? window.parent.document : document;
-      if (doc && doc.documentElement) {{
-        doc.documentElement.setAttribute("data-panel-theme", stored);
-        if (doc.body) doc.body.setAttribute("data-panel-theme", stored);
+      function applyTheme(doc) {{
+        if (doc && doc.documentElement) {{
+          doc.documentElement.setAttribute("data-panel-theme", stored);
+          if (doc.body) doc.body.setAttribute("data-panel-theme", stored);
+        }}
       }}
+      applyTheme(document);
+      try {{
+        if (window.parent && window.parent.document && window.parent.document !== document) {{
+          applyTheme(window.parent.document);
+        }}
+      }} catch (e2) {{}}
     }}
   }} catch (e) {{}}
 }})();
+</script>
+"""
+
+
+def _light_portal_widgets_fix_script() -> str:
+    """Select (portal) y alertas con fondos oscuros inline de Streamlit en modo claro."""
+    return """
+<script>
+(function () {
+  var pending = null;
+  var rafLoop = null;
+  function docs() {
+    var out = [document];
+    try {
+      if (window.parent && window.parent.document && window.parent.document !== document) {
+        out.push(window.parent.document);
+      }
+    } catch (e) {}
+    return out;
+  }
+  function isLight(doc) {
+    var el = doc && doc.documentElement;
+    return el && el.getAttribute("data-panel-theme") === "light";
+  }
+  function paintOption(el, active) {
+    var bg = active ? "#f1f5f9" : "#ffffff";
+    var fg = active ? "#0f172a" : "#1e293b";
+    el.style.setProperty("background", bg, "important");
+    el.style.setProperty("background-color", bg, "important");
+    el.style.setProperty("color", fg, "important");
+    el.querySelectorAll("*").forEach(function (node) {
+      if (node.tagName === "SVG" || node.closest("svg")) return;
+      node.style.setProperty("background", "transparent", "important");
+      node.style.setProperty("background-color", "transparent", "important");
+      node.style.setProperty("color", "inherit", "important");
+      node.style.setProperty("box-shadow", "none", "important");
+    });
+  }
+  function fixSelectPopovers(doc) {
+    if (!isLight(doc)) return;
+    doc.querySelectorAll('[data-baseweb="popover"]').forEach(function (pop) {
+      if (pop.querySelector('[data-baseweb="calendar"]')) return;
+      pop.style.setProperty("background-color", "#ffffff", "important");
+      pop.querySelectorAll("li, [role=option]").forEach(function (el) {
+        var active =
+          el.hasAttribute("data-highlighted") ||
+          el.getAttribute("aria-selected") === "true" ||
+          el.matches(":hover");
+        paintOption(el, active);
+      });
+    });
+  }
+  function fixAlerts(doc) {
+    if (!isLight(doc)) return;
+    doc.querySelectorAll('[data-testid="stAlert"]').forEach(function (alert) {
+      var body =
+        alert.querySelector('[data-baseweb="notification"]') || alert.firstElementChild;
+      if (!body) return;
+      var text = (alert.textContent || "").toLowerCase();
+      var palette;
+      if (/error|no se pudo|obligatorio|no coincide|no puede/.test(text)) {
+        palette = { bg: "#fef2f2", border: "#fecaca", color: "#991b1b" };
+      } else if (/recomendado/.test(text)) {
+        palette = { bg: "#fffbeb", border: "#fcd34d", color: "#92400e" };
+      } else {
+        palette = { bg: "#eff6ff", border: "#93c5fd", color: "#1e40af" };
+      }
+      [alert, body].forEach(function (el) {
+        el.style.setProperty("background-color", palette.bg, "important");
+        el.style.setProperty("border", "1px solid " + palette.border, "important");
+        el.style.setProperty("color", palette.color, "important");
+      });
+      alert.querySelectorAll("p, span, div, strong").forEach(function (n) {
+        n.style.setProperty("color", palette.color, "important");
+      });
+    });
+  }
+  function hasSelectPopover() {
+    return docs().some(function (doc) {
+      return (
+        isLight(doc) &&
+        doc.querySelector(
+          '[data-baseweb="popover"]:not(:has([data-baseweb="calendar"]))'
+        )
+      );
+    });
+  }
+  function portalLoop() {
+    docs().forEach(function (doc) {
+      if (!isLight(doc)) return;
+      fixSelectPopovers(doc);
+      fixAlerts(doc);
+    });
+    if (hasSelectPopover()) rafLoop = requestAnimationFrame(portalLoop);
+    else rafLoop = null;
+  }
+  function ensurePortalLoop() {
+    if (!rafLoop) rafLoop = requestAnimationFrame(portalLoop);
+  }
+  function run() {
+    docs().forEach(function (doc) {
+      if (!isLight(doc)) return;
+      fixSelectPopovers(doc);
+      fixAlerts(doc);
+    });
+    ensurePortalLoop();
+  }
+  function schedule() {
+    if (pending) return;
+    pending = requestAnimationFrame(function () {
+      pending = null;
+      run();
+    });
+  }
+  function onMutations(mutations) {
+    for (var i = 0; i < mutations.length; i++) {
+      var m = mutations[i];
+      if (m.type === "childList") {
+        schedule();
+        return;
+      }
+      if (m.type === "attributes") {
+        var t = m.target;
+        if (t && t.closest && t.closest('[data-baseweb="popover"]')) {
+          schedule();
+          return;
+        }
+      }
+    }
+  }
+  docs().forEach(function (doc) {
+    if (!doc.body) return;
+    try {
+      new MutationObserver(onMutations).observe(doc.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["data-highlighted", "aria-selected", "style"],
+      });
+    } catch (e) {}
+    doc.body.addEventListener("mouseover", schedule, true);
+  });
+  run();
+})();
+</script>
+"""
+
+
+def _panel_light_dialog_fix_script() -> str:
+    """Diálogos del panel en modo claro: superficie, etiquetas y botones primarios."""
+    return """
+<script>
+(function () {
+  var DIALOG_MARKERS =
+    ".dlg-pu-root, [data-pu-dlg], .dlg-store-root, [data-store-dlg], " +
+    ".dlg-cust-root, .ctadm-dlg-root, [data-ctadm-dlg]";
+  var MIN_QUILL_PX = 420;
+  function docs() {
+    var out = [document];
+    try {
+      if (window.parent && window.parent.document && window.parent.document !== document) {
+        out.push(window.parent.document);
+      }
+    } catch (e) {}
+    return out;
+  }
+  function isLight(doc) {
+    var el = doc && doc.documentElement;
+    return el && el.getAttribute("data-panel-theme") === "light";
+  }
+  function paintDialogLight(doc) {
+    if (!isLight(doc)) return;
+    var grad =
+      "linear-gradient(180deg, #ff5fb8 0%, #ff007f 52%, #d90064 100%)";
+    doc.querySelectorAll(DIALOG_MARKERS).forEach(function (marker) {
+      var dlg = marker.closest('div[data-testid="stDialog"]');
+      if (!dlg) return;
+      var shell = dlg.querySelector('[role="dialog"]') || dlg;
+      shell.style.setProperty("background-color", "#ffffff", "important");
+      shell.style.setProperty("color", "#1e293b", "important");
+      dlg.querySelectorAll(
+        '[data-testid="stWidgetLabel"] p, [data-testid="stWidgetLabel"] label, ' +
+          '[data-testid="stCaptionContainer"] p, [data-testid="stMarkdownContainer"] p, ' +
+          '[data-testid="stMarkdownContainer"] h5, [data-testid="stMarkdownContainer"] strong'
+      ).forEach(function (el) {
+        el.style.setProperty("color", "#334155", "important");
+      });
+      dlg.querySelectorAll(
+        '[data-testid="stButton"] button[data-testid="baseButton-primary"], ' +
+          '[data-testid="stButton"] button[kind="primary"], ' +
+          'button[data-testid="baseButton-primary"][class*="st-emotion-cache"]'
+      ).forEach(function (btn) {
+        btn.style.setProperty("background-image", grad, "important");
+        btn.style.setProperty("background-color", "#ff007f", "important");
+        btn.style.setProperty("color", "#ffffff", "important");
+        btn.style.setProperty("border", "1px solid rgba(255, 0, 127, 0.35)", "important");
+        btn.style.setProperty("box-shadow", "0 4px 14px rgba(255, 0, 127, 0.38)", "important");
+        btn.querySelectorAll("*").forEach(function (node) {
+          node.style.setProperty("color", "#ffffff", "important");
+          node.style.setProperty("background", "transparent", "important");
+          node.style.setProperty("background-color", "transparent", "important");
+        });
+      });
+    });
+  }
+  function fixQuill(doc) {
+    doc.querySelectorAll(
+      'div[data-testid="stDialog"] [data-testid="stCustomComponentV1"]'
+    ).forEach(function (host) {
+      var dlg = host.closest('div[data-testid="stDialog"]');
+      if (!dlg || !dlg.querySelector(DIALOG_MARKERS)) {
+        return;
+      }
+      host.style.setProperty("width", "100%", "important");
+      host.style.setProperty("max-width", "100%", "important");
+      var inner = host.firstElementChild;
+      if (inner) {
+        inner.style.setProperty("width", "100%", "important");
+        inner.style.setProperty("max-width", "100%", "important");
+      }
+      var iframe = host.querySelector("iframe");
+      if (!iframe) return;
+      var w = host.getBoundingClientRect().width;
+      if (w > 48) {
+        iframe.style.setProperty("width", w + "px", "important");
+      }
+      iframe.style.setProperty("min-width", "100%", "important");
+      iframe.style.setProperty("display", "block", "important");
+      var h = Math.max(MIN_QUILL_PX, parseInt(iframe.style.height, 10) || 0);
+      if (h < MIN_QUILL_PX) {
+        iframe.style.setProperty("min-height", MIN_QUILL_PX + "px", "important");
+        iframe.style.setProperty("height", MIN_QUILL_PX + "px", "important");
+      }
+    });
+  }
+  function fixReportMetrics(doc) {
+    if (!isLight(doc)) return;
+    doc.querySelectorAll(
+      '[data-testid="stMain"]:has(.rep-tab-root) [data-testid="stMetric"]'
+    ).forEach(function (metric) {
+      metric.style.setProperty("background-color", "#ffffff", "important");
+      metric.style.setProperty("border", "1px solid rgba(15, 23, 42, 0.12)", "important");
+      metric.querySelectorAll(
+        '[data-testid="stMetricLabel"] p, [data-testid="stMetricLabel"] div, [data-testid="stMetricLabel"] label'
+      ).forEach(function (el) {
+        el.style.setProperty("color", "#475569", "important");
+      });
+      metric.querySelectorAll(
+        '[data-testid="stMetricValue"], [data-testid="stMetricValue"] div'
+      ).forEach(function (el) {
+        el.style.setProperty("color", "#0f172a", "important");
+      });
+    });
+  }
+  function run() {
+    docs().forEach(function (doc) {
+      paintDialogLight(doc);
+      fixQuill(doc);
+      fixReportMetrics(doc);
+    });
+  }
+  var pending = null;
+  function schedule() {
+    if (pending) return;
+    pending = requestAnimationFrame(function () {
+      pending = null;
+      run();
+    });
+  }
+  docs().forEach(function (doc) {
+    if (!doc.body) return;
+    try {
+      new MutationObserver(schedule).observe(doc.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["style", "class"],
+      });
+    } catch (e) {}
+    window.addEventListener("resize", schedule);
+  });
+  run();
+  setInterval(run, 350);
+})();
 </script>
 """
 
@@ -235,10 +558,21 @@ def inject_panel_theme(streamlit_module: object) -> None:
     if markdown is None:
         raise TypeError("inject_panel_theme requiere el módulo streamlit.")
     panel_css = compile_theme_css(_read_theme_css("_theme_panel.css"), theme)
+    panel_css += "\n" + compile_theme_css(_read_theme_css("_theme_contracts.css"), theme)
+    panel_css += "\n" + compile_theme_css(_read_theme_css("_theme_stores.css"), theme)
+    panel_css += "\n" + compile_theme_css(_read_theme_css("_theme_panel_users.css"), theme)
+    panel_css += "\n" + compile_theme_css(_read_theme_css("_theme_report.css"), theme)
+    portal_script = _panel_light_dialog_fix_script()
+    if theme == "light":
+        panel_css += "\n" + _read_theme_css("_theme_light_portal_fix.css")
+        panel_css += "\n" + compile_theme_css(_read_theme_css("_theme_calendar_light.css"), theme)
+        panel_css += "\n" + compile_theme_css(_read_theme_css("_theme_customers.css"), theme)
+        portal_script += _light_portal_widgets_fix_script()
     wm = build_watermark_css(theme)
     markdown(
         _bootstrap_theme_from_local_storage_script()
         + _theme_dom_sync_script(theme)
+        + portal_script
         + f"<style>\n{panel_css}\n{wm}\n</style>",
         unsafe_allow_html=True,
     )

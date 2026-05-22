@@ -29,6 +29,13 @@ from streamlit_app.components.calendar_cells import calendar_overflow_row_html
 from streamlit_app.components.pills import row_is_priority, status_pill_html
 
 CAL_FOCUS_SESSION_KEY = "_cal_focus_sheet_deps"
+_APPT_BODY_SEED_KEY = "_fcd_seed_appt_id"
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _get_customer_cached(customer_id: int) -> tuple:
+    """Datos del cliente con caché de 2 min para evitar petición HTTP en cada widget."""
+    return api_client.get_customer(customer_id)
 
 
 @dataclass(frozen=True)
@@ -109,7 +116,7 @@ def render_calendar_focus_appointment_body(r: dict[str, Any], hist_counts: dict[
             deps.open_firma_contrato_nav(r, aid)
         return
 
-    seed_k = "_fcd_seed_appt_id"
+    seed_k = _APPT_BODY_SEED_KEY
     slot_opts = time_slot_options()
     today_d = date.today()
     if st.session_state.get(seed_k) != aid:
@@ -198,7 +205,7 @@ def render_calendar_focus_appointment_body(r: dict[str, Any], hist_counts: dict[
         cid_raw = r.get("customer_id")
         if cid_raw:
             cid = int(cid_raw)
-            ok_c, _, cdata = api_client.get_customer(cid)
+            ok_c, _, cdata = _get_customer_cached(cid)
             if ok_c and isinstance(cdata, dict):
                 cust = cdata
     except (TypeError, ValueError):
@@ -652,4 +659,9 @@ def dialog_calendar_single_appointment(
             "Como **tatuador / perforador** solo ves citas **desde hoy** con estado activo; aquí solo puedes "
             "**Completar firma profesional** cuando recepción ya guardó el contrato del cliente."
         )
-    render_calendar_focus_appointment_body(r, hist_counts)
+    is_first_load = st.session_state.get(_APPT_BODY_SEED_KEY) != aid
+    if is_first_load:
+        with st.spinner("Cargando información de la cita…"):
+            render_calendar_focus_appointment_body(r, hist_counts)
+    else:
+        render_calendar_focus_appointment_body(r, hist_counts)

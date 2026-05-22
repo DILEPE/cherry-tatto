@@ -190,7 +190,7 @@ def main() -> None:
         module_definitions.append(("tiendas", "Gestión de tiendas", render_stores_management_tab))
         module_definitions.append(("usuarios_panel", "Gestión de usuarios", render_panel_users_tab))
     if "reporte" in allowed_modules:
-        module_definitions.append(("reporte", "Reporte", render_reporte_citas_tab))
+        module_definitions.append(("reporte", "Gestión reportes", render_reporte_citas_tab))
 
     if not module_definitions:
         st.error("No hay módulos visibles para tu usuario.")

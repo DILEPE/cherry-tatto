@@ -1,6 +1,8 @@
 """Editor enriquecido opcional (Quill) para plantillas y contrato en firma."""
 from __future__ import annotations
 
+import html as html_mod
+
 import streamlit as st
 
 try:
@@ -25,6 +27,7 @@ def contract_rich_editor(
     value: str,
     key: str,
     show_placeholders: bool = True,
+    fallback_height: int = 420,
 ) -> str:
     """Devuelve HTML (si Quill está instalado) o texto plano."""
     if show_placeholders:
@@ -32,9 +35,10 @@ def contract_rich_editor(
     v = value if value is not None else ""
     if HAS_QUILL and st_quill is not None:
         st.markdown(
-            f'<p style="margin:0 0 0.35rem 0;font-weight:600;color:#374151">{label}</p>',
+            f'<p class="ctadm-editor-label">{html_mod.escape(label)}</p>',
             unsafe_allow_html=True,
         )
+        st.markdown('<div class="ctadm-quill-slot" aria-hidden="true"></div>', unsafe_allow_html=True)
         out = st_quill(
             value=v,
             placeholder="Redacta aquí…",
@@ -43,8 +47,14 @@ def contract_rich_editor(
         )
         return (out or "").strip()
     st.markdown(
-        f'<p style="margin:0 0 0.35rem 0;font-weight:600;color:#374151">{label}</p>',
+        f'<p class="ctadm-editor-label">{html_mod.escape(label)}</p>',
         unsafe_allow_html=True,
     )
     st.caption("Instala `streamlit-quill` para tamaño de letra, negritas y encabezados en el editor.")
-    return st.text_area(label, value=v, height=320, label_visibility="collapsed", key=key).strip()
+    return st.text_area(
+        label,
+        value=v,
+        height=int(fallback_height),
+        label_visibility="collapsed",
+        key=key,
+    ).strip()

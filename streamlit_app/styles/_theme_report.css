@@ -1,0 +1,55 @@
+/* Gestión reportes — requiere .rep-tab-root en la pestaña */
+
+/* Métricas financieras (modo claro): etiquetas y valores legibles */
+:root[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) [data-testid="stMetric"],
+html[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) [data-testid="stMetric"] {
+    background: #ffffff !important;
+    border: 1px solid var(--panel-border, rgba(15, 23, 42, 0.12)) !important;
+    border-radius: 10px !important;
+    padding: 0.65rem 0.85rem !important;
+    box-shadow: var(--panel-shadow-surface, 0 1px 3px rgba(15, 23, 42, 0.08)) !important;
+}
+
+:root[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) [data-testid="stMetricLabel"],
+:root[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) [data-testid="stMetricLabel"] p,
+:root[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) [data-testid="stMetricLabel"] div,
+html[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) [data-testid="stMetricLabel"] p {
+    color: #475569 !important;
+}
+
+:root[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) [data-testid="stMetricValue"],
+:root[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) [data-testid="stMetricValue"] div,
+:root[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) [data-testid="stMetricDelta"],
+html[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) [data-testid="stMetricValue"] {
+    color: #0f172a !important;
+}
+
+:root[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) [data-testid="stMarkdownContainer"] h5,
+:root[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) [data-testid="stMarkdownContainer"] p,
+html[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) [data-testid="stMarkdownContainer"] h5 {
+    color: #1e293b !important;
+}
+
+:root[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) [data-testid="stCaptionContainer"] p {
+    color: #475569 !important;
+}
+
+:root[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) .ap-col-title,
+html[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) .ap-col-title {
+    color: #1e293b;
+    background: #f1f5f9;
+    border-color: var(--panel-border, rgba(15, 23, 42, 0.12));
+}
+
+:root[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) [data-testid="stDownloadButton"] button,
+html[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) [data-testid="stDownloadButton"] button {
+    background: #ffffff !important;
+    color: #166534 !important;
+    border: 1.5px solid #6ee7b7 !important;
+    font-weight: 600 !important;
+}
+
+:root[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) [data-testid="stDownloadButton"] button p,
+:root[data-panel-theme="light"] [data-testid="stMain"]:has(.rep-tab-root) [data-testid="stDownloadButton"] button span {
+    color: #166534 !important;
+}
