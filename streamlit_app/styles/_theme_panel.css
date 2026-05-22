@@ -944,3 +944,10 @@ div.stButton > button[kind="secondary"] {
     background-color: rgba(255, 0, 127, 0.1) !important;
     color: #831843 !important;
 }
+
+/* Barra lateral: fila de acciones (conexión, n8n, salir) */
+[data-testid="stSidebar"] button[data-testid="baseButton-secondary"][aria-label=""],
+[data-testid="stSidebar"] button[data-testid="baseButton-secondary"]:has([data-testid="stIconMaterial"]) {
+    min-height: 2.35rem;
+    padding: 0.35rem 0.5rem;
+}

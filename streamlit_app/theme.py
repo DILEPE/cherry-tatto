@@ -643,6 +643,7 @@ def inject_panel_theme(streamlit_module: object) -> None:
     if markdown is None:
         raise TypeError("inject_panel_theme requiere el módulo streamlit.")
     panel_css = compile_theme_css(_read_theme_css("_theme_panel.css"), theme)
+    panel_css += "\n" + _read_theme_css("_theme_sidebar_rail.css")
     panel_css += "\n" + compile_theme_css(_read_theme_css("_theme_contracts.css"), theme)
     panel_css += "\n" + compile_theme_css(_read_theme_css("_theme_stores.css"), theme)
     panel_css += "\n" + compile_theme_css(_read_theme_css("_theme_panel_users.css"), theme)
@@ -658,6 +659,7 @@ def inject_panel_theme(streamlit_module: object) -> None:
     markdown(
         _bootstrap_theme_from_local_storage_script()
         + _theme_dom_sync_script(theme)
+        + _panel_sidebar_rail_observer_script()
         + portal_script
         + f"<style>\n{panel_css}\n{wm}\n</style>",
         unsafe_allow_html=True,
@@ -737,9 +739,105 @@ def _on_theme_mode_changed() -> None:
     save_persisted_theme(mode)
 
 
+def _panel_sidebar_rail_observer_script() -> str:
+    """Detecta el sidebar nativo contraído (aria-expanded) para el rail de iconos."""
+    return """<script>
+(function(){
+  if(window._chPanelSbRail)return;
+  window._chPanelSbRail=true;
+  function sync(){
+    var sb=document.querySelector('[data-testid="stSidebar"]');
+    if(!sb)return;
+    var c=sb.getAttribute('aria-expanded')==='false';
+    document.documentElement.setAttribute('data-panel-sidebar-collapsed',c?'1':'0');
+    if(c){
+      sb.style.setProperty('width','7rem','important');
+      sb.style.setProperty('min-width','7rem','important');
+      sb.style.setProperty('max-width','7rem','important');
+      sb.style.setProperty('transform','none','important');
+      sb.style.setProperty('visibility','visible','important');
+      var uc=sb.querySelector('[data-testid="stSidebarUserContent"]');
+      if(uc){
+        uc.style.setProperty('display','flex','important');
+        uc.style.setProperty('visibility','visible','important');
+        uc.style.setProperty('opacity','1','important');
+      }
+    }else{
+      sb.style.removeProperty('width');
+      sb.style.removeProperty('min-width');
+      sb.style.removeProperty('max-width');
+      sb.style.removeProperty('transform');
+    }
+  }
+  function styleToggleButtons(){
+    var sel='button[aria-label="Collapse sidebar"],button[aria-label="Expand sidebar"],'
+      +'[data-testid="stSidebarCollapseButton"] button,[data-testid="collapsedControl"] button';
+    document.querySelectorAll(sel).forEach(function(btn){
+      btn.style.setProperty('display','inline-flex','important');
+      btn.style.setProperty('visibility','visible','important');
+      btn.style.setProperty('opacity','1','important');
+      btn.style.setProperty('pointer-events','auto','important');
+      btn.style.setProperty('z-index','1001','important');
+      btn.style.setProperty('line-height','1','important');
+      btn.style.setProperty('color',document.documentElement.getAttribute('data-panel-theme')==='light'?'#334155':'#f2f2f2','important');
+      btn.querySelectorAll('svg, [data-testid="stIconMaterial"]').forEach(function(ic){
+        ic.style.setProperty('display','inline-block','important');
+        ic.style.setProperty('visibility','visible','important');
+        ic.style.setProperty('opacity','1','important');
+        ic.style.setProperty('width','1.25rem','important');
+        ic.style.setProperty('height','1.25rem','important');
+      });
+    });
+    document.querySelectorAll('[data-testid="stSidebarCollapseButton"],[data-testid="collapsedControl"]').forEach(function(wrap){
+      wrap.style.setProperty('line-height','normal','important');
+      wrap.style.setProperty('background','transparent','important');
+      wrap.style.setProperty('box-shadow','none','important');
+    });
+  }
+  function watch(){
+    var sb=document.querySelector('[data-testid="stSidebar"]');
+    if(!sb){setTimeout(watch,200);return;}
+    new MutationObserver(sync).observe(sb,{attributes:true,attributeFilter:['aria-expanded']});
+    sync();
+    styleToggleButtons();
+  }
+  watch();
+  setInterval(function(){sync();styleToggleButtons();},400);
+  new MutationObserver(styleToggleButtons).observe(document.body,{childList:true,subtree:true});
+})();
+</script>"""
+
+
 def render_theme_mode_control(streamlit_module: object) -> None:
-    """Selector Claro / Oscuro (solo barra lateral, usuario dentro del panel)."""
+    """Selector Claro / Oscuro: radio expandido + iconos en rail contraído."""
     init_panel_theme()
+    button = getattr(streamlit_module, "button", None)
+    container = getattr(streamlit_module, "container", None)
+    theme = get_panel_theme()
+    if button is not None and container is not None:
+        with container(key="panel_sb_theme_icons"):
+            if button(
+                "",
+                icon=":material/light_mode:",
+                use_container_width=True,
+                key="_panel_theme_light_btn",
+                help="Modo claro",
+                type="primary" if theme == "light" else "secondary",
+            ):
+                st_session_state()[_KEY_THEME] = "light"
+                _on_theme_mode_changed()
+                streamlit_module.rerun()
+            if button(
+                "",
+                icon=":material/dark_mode:",
+                use_container_width=True,
+                key="_panel_theme_dark_btn",
+                help="Modo oscuro",
+                type="primary" if theme == "dark" else "secondary",
+            ):
+                st_session_state()[_KEY_THEME] = "dark"
+                _on_theme_mode_changed()
+                streamlit_module.rerun()
     radio = getattr(streamlit_module, "radio", None)
     if radio is None:
         return
