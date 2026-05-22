@@ -196,6 +196,15 @@ def main() -> None:
         st.error("No hay módulos visibles para tu usuario.")
         st.stop()
 
+    # Después de login siempre arrancar en citas (o primer módulo disponible).
+    # Seteamos explícitamente para sobreescribir el valor que Streamlit puede restaurar
+    # del frontend aunque la clave no esté en session_state.
+    if st.session_state.pop("_panel_reset_to_citas", False):
+        _citas_label = next((ml for mk, ml, _ in module_definitions if mk == "citas"), None)
+        _reset_label = _citas_label or module_definitions[0][1]
+        st.session_state["panel_mod_radio"] = _reset_label
+        st.session_state.pop("_panel_prev_module_key", None)
+
     with st.sidebar:
         logo = _logo_path()
         if logo:

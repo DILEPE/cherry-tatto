@@ -433,7 +433,8 @@ def _panel_light_dialog_fix_script() -> str:
 
   var DIALOG_MARKERS =
     ".dlg-pu-root, [data-pu-dlg], .dlg-store-root, [data-store-dlg], " +
-    ".dlg-cust-root, .ctadm-dlg-root, [data-ctadm-dlg]";
+    ".dlg-cust-root, .ctadm-dlg-root, [data-ctadm-dlg], " +
+    ".dlg-survey-root, [data-survey-dlg]";
   var MIN_QUILL_PX = 420;
   function docs() {
     var out = [document];
@@ -645,6 +646,7 @@ def inject_panel_theme(streamlit_module: object) -> None:
     panel_css += "\n" + compile_theme_css(_read_theme_css("_theme_stores.css"), theme)
     panel_css += "\n" + compile_theme_css(_read_theme_css("_theme_panel_users.css"), theme)
     panel_css += "\n" + compile_theme_css(_read_theme_css("_theme_report.css"), theme)
+    panel_css += "\n" + compile_theme_css(_read_theme_css("_theme_survey_questions.css"), theme)
     portal_script = _calendar_portal_fix_script() + _panel_light_dialog_fix_script()
     if theme == "light":
         panel_css += "\n" + _read_theme_css("_theme_light_portal_fix.css")
