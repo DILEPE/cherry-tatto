@@ -27,6 +27,7 @@ from streamlit_app.appointment_slots import time_slot_options
 from streamlit_app.appointment_staff_labels import assigned_staff_label
 
 from streamlit_app.components.calendar_cells import calendar_appt_total_chip_html
+from streamlit_app.components.calendar_main_month import calendar_fragment_rerun
 from streamlit_app.components.calendar_month_footer import calendar_week_header_book_strip_html
 from streamlit_app.components.calendar_query_nav import calendar_appt_open_control_html
 from app.domain.appointment_money import appointment_financial_totals, format_cop
@@ -415,6 +416,7 @@ def week_grid_html_for_week(
 
 
 
+@st.fragment
 def render_week_schedule_grid(
 
     buckets: dict[tuple[int, int, int], list[dict[str, Any]]],
@@ -431,7 +433,7 @@ def render_week_schedule_grid(
 
 ) -> None:
 
-    """Vista semanal con columnas por día y bloques proporcionales a la duración (30 min/slot)."""
+    """Vista semanal; fragment para que la navegación ◀/▶ no recargue la página completa."""
 
     anchor_key = "_ap_week_monday"
 
@@ -451,10 +453,6 @@ def render_week_schedule_grid(
 
 
 
-    st.markdown("##### Agenda semanal (rejilla horaria)")
-
-
-
     b1, b2, b3, b4 = st.columns([1.1, 1.1, 3.2, 1.1])
 
     with b1:
@@ -465,7 +463,7 @@ def render_week_schedule_grid(
 
             st.session_state[anchor_key] = (monday - timedelta(days=7)).isoformat()
 
-            st.rerun()
+            calendar_fragment_rerun()
 
     with b2:
 
@@ -475,7 +473,7 @@ def render_week_schedule_grid(
 
             st.session_state[anchor_key] = week_monday(date.today()).isoformat()
 
-            st.rerun()
+            calendar_fragment_rerun()
 
     with b3:
 
@@ -501,7 +499,7 @@ def render_week_schedule_grid(
 
             st.session_state[anchor_key] = (monday + timedelta(days=7)).isoformat()
 
-            st.rerun()
+            calendar_fragment_rerun()
 
 
 

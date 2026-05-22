@@ -117,10 +117,6 @@ def render_main_calendar(
 
 
 
-    st.markdown("##### Calendario de citas")
-
-
-
     n1, n2, n3 = st.columns([1, 3, 1])
 
     with n1:

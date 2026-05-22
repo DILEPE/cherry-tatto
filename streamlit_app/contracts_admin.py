@@ -8,6 +8,7 @@ import streamlit as st
 from app.domain.contract_kinds import KIND_LABEL_ES
 from streamlit_app import api_client
 from streamlit_app.rich_text import contract_rich_editor
+from streamlit_app.theme import get_panel_theme
 
 
 def _detail(payload: Any) -> str:
@@ -17,6 +18,52 @@ def _detail(payload: Any) -> str:
 
 
 _CTADM_ACTION_INFO_KEY = "_ctadm_action_info"
+_CTADM_DLG_ROOT_HTML = '<div class="ctadm-dlg-root" data-ctadm-dlg="1" aria-hidden="true"></div>'
+_CTADM_TAB_ROOT_HTML = '<div class="ctadm-tab-root" aria-hidden="true"></div>'
+
+
+def _mark_ctadm_dialog_scope() -> None:
+    st.markdown(_CTADM_DLG_ROOT_HTML, unsafe_allow_html=True)
+    if get_panel_theme() == "light":
+        st.markdown(
+            """
+            <style>
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [role="dialog"],
+            div[data-testid="stDialog"]:has([data-ctadm-dlg]) [role="dialog"] {
+              background: #ffffff !important;
+              background-color: #ffffff !important;
+              color: #1e293b !important;
+            }
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [data-testid="stButton"] button[data-testid="baseButton-primary"],
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [data-testid="stButton"] button[kind="primary"],
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) button[data-testid="baseButton-primary"][class*="st-emotion-cache"] {
+              background-image: linear-gradient(180deg, #ff5fb8 0%, #ff007f 52%, #d90064 100%) !important;
+              background-color: #ff007f !important;
+              color: #ffffff !important;
+              border: 1px solid rgba(255, 0, 127, 0.35) !important;
+              box-shadow: 0 4px 14px rgba(255, 0, 127, 0.38) !important;
+            }
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [data-testid="stButton"] button[data-testid="baseButton-primary"] *,
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [data-testid="stButton"] button[kind="primary"] * {
+              color: #ffffff !important;
+              background: transparent !important;
+              background-color: transparent !important;
+            }
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [data-testid="stWidgetLabel"],
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [data-testid="stWidgetLabel"] p,
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [data-testid="stWidgetLabel"] label,
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [data-testid="stCaptionContainer"] p,
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) .ctadm-editor-label {
+              color: #334155 !important;
+            }
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [data-testid="stCaptionContainer"] code {
+              background: #ecfdf5 !important;
+              color: #065f46 !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def _queue_ctadm_success(msg: str) -> None:
@@ -37,87 +84,6 @@ def _close_dialogs() -> None:
 
 def _kind_label(code: str) -> str:
     return KIND_LABEL_ES.get(code, code)  # type: ignore[arg-type]
-
-
-def _inject_ctadm_table_styles() -> None:
-    st.markdown(
-        """
-        <style>
-          .ctadm-col-title {
-            display: inline-block;
-            font-weight: 700;
-            letter-spacing: 0.02em;
-            color: #111827;
-            background: #f3f4f6;
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            padding: 0.18rem 0.45rem;
-            white-space: nowrap;
-            line-height: 1.35;
-          }
-          div[data-testid="stHorizontalBlock"]:has(
-              > div[data-testid="column"]:nth-child(5) [data-testid="stButton"]
-            )
-            > div[data-testid="column"]:nth-child(5)
-            [data-testid="stHorizontalBlock"] {
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            padding: 2px 4px;
-            background: #fafafa;
-            gap: 4px !important;
-            align-items: center;
-            margin: 0 !important;
-          }
-          div[data-testid="stHorizontalBlock"]:has(
-              > div[data-testid="column"]:nth-child(5) [data-testid="stButton"]
-            )
-            > div[data-testid="column"]:nth-child(5)
-            [data-testid="stHorizontalBlock"]
-            > div[data-testid="column"] {
-            border: 1px solid #e5e7eb;
-            border-radius: 6px;
-            background: #fff;
-            min-width: 2.35rem;
-          }
-          div[data-testid="stHorizontalBlock"]:has(
-              > div[data-testid="column"]:nth-child(5) [data-testid="stButton"]
-            )
-            > div[data-testid="column"]:nth-child(5)
-            [data-testid="stButton"] button {
-            border: none !important;
-            background: transparent !important;
-            box-shadow: none !important;
-            font-size: 1.05rem;
-            line-height: 1;
-            padding: 0.15rem 0.35rem !important;
-            min-height: 1.75rem;
-          }
-          div[data-testid="stHorizontalBlock"]:has(
-              > div[data-testid="column"]:nth-child(5) [data-testid="stButton"]
-            )
-            > div[data-testid="column"]:nth-child(5)
-            [data-testid="stButton"] button:hover {
-            background: #f3f4f6 !important;
-          }
-          div[data-testid="stHorizontalBlock"]:has(
-              > div[data-testid="column"]:nth-child(5) [data-testid="stButton"]
-            )
-            > div[data-testid="column"]:nth-child(5)
-            [data-testid="stElementContainer"] {
-            margin: 0 !important;
-          }
-          div[data-testid="stHorizontalBlock"]:has(
-              > div[data-testid="column"]:nth-child(5) [data-testid="stButton"]
-            )
-            > div[data-testid="column"]:nth-child(5)
-            > div[data-testid="stVerticalBlock"] {
-            gap: 0 !important;
-            justify-content: center !important;
-          }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
 
 
 def _render_template_row_actions(item: Dict[str, Any]) -> None:
@@ -175,6 +141,7 @@ def _load_templates(*, only_active: bool) -> None:
 
 @st.dialog("Nueva versión de contrato", width="large", dismissible=False)
 def _dialog_create_template() -> None:
+    _mark_ctadm_dialog_scope()
     name = st.text_input("Nombre *", key="ctadm_new_name")
     kind = st.selectbox(
         "Tipo de trabajo *",
@@ -218,6 +185,7 @@ def _dialog_create_template() -> None:
 
 @st.dialog("Editar versión de contrato", width="large", dismissible=False)
 def _dialog_edit_template(template_id: int) -> None:
+    _mark_ctadm_dialog_scope()
     if (
         "_ctadm_edit_payload" not in st.session_state
         or int(st.session_state.get("_ctadm_edit_id") or 0) != template_id
@@ -284,6 +252,7 @@ def _dialog_edit_template(template_id: int) -> None:
 
 
 def render_contract_admin_tab() -> None:
+    st.markdown(_CTADM_TAB_ROOT_HTML, unsafe_allow_html=True)
     st.subheader("Gestión de contratos")
 
     if "_ctadm_reload" not in st.session_state:
@@ -316,8 +285,6 @@ def render_contract_admin_tab() -> None:
 
     templates = list(st.session_state.get("_ctadm_templates") or [])
     st.markdown(f"**Versiones registradas:** {len(templates)}")
-
-    _inject_ctadm_table_styles()
 
     tpl_colw = [1.35, 1.12, 0.94, 1.12, 1.65]
     h1, h2, h3, h4, h5 = st.columns(tpl_colw, vertical_alignment="center")

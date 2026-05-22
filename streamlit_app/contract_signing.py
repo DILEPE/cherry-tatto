@@ -258,6 +258,10 @@ def _signature_pad_b64(
     canvas_height: int = 180,
 ) -> Optional[str]:
     st.markdown(f"**{label}**")
+    st.markdown(
+        f'<span class="ctsig-signature-marker" data-w="{int(canvas_width)}" aria-hidden="true"></span>',
+        unsafe_allow_html=True,
+    )
     canvas_impl = st_canvas
     if canvas_impl is None:
         try:
@@ -416,7 +420,7 @@ def _render_step1_personal(customer_id: int, customer: dict[str, Any], appointme
     with a:
         st.text_input("Nombre *", value=str(ed.get("first_name") or ""), key="ctsig_s1_fn")
         st.text_input("Apellido *", value=str(ed.get("last_name") or ""), key="ctsig_s1_ln")
-        bd = st.date_input(
+        bd_raw = st.date_input(
             "Fecha de nacimiento *",
             value=_clamp_date(_parse_date(ed.get("birth_date")), min_date_100, max_date_today),
             min_value=min_date_100,
@@ -424,7 +428,8 @@ def _render_step1_personal(customer_id: int, customer: dict[str, Any], appointme
             key="ctsig_s1_bd",
             format="DD/MM/YYYY",
         )
-        if _is_minor_by_birth_date(bd):
+        bd = bd_raw if isinstance(bd_raw, date) else _parse_date(bd_raw)
+        if bd != CUSTOMER_BIRTH_PENDING and _is_minor_by_birth_date(bd):
             st.warning(
                 "**Menor de edad:** en la **etapa 3 (Firma)** deberás completar los datos del tutor o representante "
                 "y la documentación requerida antes de guardar el contrato."
@@ -491,11 +496,6 @@ def _render_step1_personal(customer_id: int, customer: dict[str, Any], appointme
             help="10 dígitos (obligatorio para firmar desde esta vista).",
         )
 
-    st.info(
-        "**Tutor / representante:** no se registran en esta etapa. "
-        "Si aplica menor de edad, la **etapa 3 (firma)** solicitará nombre, documento y capturas del tutor además de las firmas."
-    )
-
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Guardar y continuar al cuestionario", type="primary", use_container_width=True, key="ctsig_s1_next"):
@@ -506,7 +506,10 @@ def _render_step1_personal(customer_id: int, customer: dict[str, Any], appointme
                 return
             bd_v = st.session_state.get("ctsig_s1_bd")
             if not isinstance(bd_v, date):
-                bd_v = _parse_date(bd_v)
+                bd_v = _parse_date(bd_v) if bd_v not in (None, "") else None
+            if bd_v is None:
+                st.error("La **fecha de nacimiento** es obligatoria.")
+                return
             if bd_v == CUSTOMER_BIRTH_PENDING:
                 st.error(
                     "Indica la **fecha de nacimiento real** del cliente (no la fecha provisional del agendamiento)."
@@ -941,6 +944,134 @@ def _panel_principal_from_step3() -> None:
     _exit_contract_signing_to_panel()
 
 
+def _survey_number_is_money(q: dict[str, Any]) -> bool:
+    lbl = str(q.get("label") or "").lower()
+    return "valor" in lbl and "procedimiento" in lbl
+
+
+def _survey_number_input_kwargs(q: dict[str, Any]) -> dict[str, Any]:
+    """COP entero para valor del procedimiento; floats evitan warning de Streamlit int/%.0f."""
+    if _survey_number_is_money(q):
+        return {"min_value": 0.0, "value": None, "step": 1000.0}
+    return {"min_value": 0.0, "value": None, "step": 1.0}
+
+
+def _parse_survey_number_value(q: dict[str, Any], raw: Any) -> float:
+    if raw is None or raw == "":
+        raise ValueError("vacío")
+    if _survey_number_is_money(q):
+        return float(int(round(float(raw))))
+    return float(raw)
+
+
+def _submit_ctsig_survey(appointment_id: int, qs: list[dict[str, Any]]) -> None:
+    errors: list[str] = []
+    wr_raw = str(st.session_state.get("ctsig_s3_would_rec") or "").strip()
+    if wr_raw == "" or wr_raw == _CTSIG_Q_UNSET:
+        errors.append("Indica si **recomendaría nuestros servicios**.")
+    would_rec = wr_raw == "Sí"
+    items: list[dict[str, Any]] = []
+    for q in qs:
+        qid = int(q["id"])
+        qt = str(q.get("question_type") or "text_short")
+        lbl = str(q.get("label") or "Pregunta")
+        raw_o = q.get("options")
+        opts = [str(x).strip() for x in raw_o] if isinstance(raw_o, list) else []
+        opts = [x for x in opts if x]
+        sk = f"ctsig3_{qid}"
+        if qt == "rating_1_5":
+            raw_r = str(st.session_state.get(f"{sk}_r") or "").strip()
+            if raw_r == "" or raw_r == _CTSIG_Q_UNSET:
+                errors.append(f"Selecciona una calificación (1–5) en «{lbl}».")
+            else:
+                items.append({"question_id": qid, "rating": int(raw_r)})
+        elif qt == "yes_no":
+            yn = str(st.session_state.get(f"{sk}_yn") or "").strip()
+            if yn == "" or yn == _CTSIG_Q_UNSET:
+                errors.append(f"Responde **sí o no** en «{lbl}».")
+            else:
+                items.append({"question_id": qid, "yes_no": yn == "Sí"})
+        elif qt in ("text", "textarea", "text_short"):
+            t = str(st.session_state.get(f"{sk}_t") or "").strip()
+            if not t:
+                errors.append(f"Completa «{lbl}».")
+            else:
+                items.append({"question_id": qid, "text": t})
+        elif qt == "number":
+            n_raw = st.session_state.get(f"{sk}_n")
+            try:
+                num_val = _parse_survey_number_value(q, n_raw)
+                if _survey_number_is_money(q) and num_val <= 0:
+                    errors.append(f"Indica el valor en «{lbl}».")
+                else:
+                    items.append({"question_id": qid, "number": num_val})
+            except (TypeError, ValueError):
+                errors.append(f"Indica un número válido en «{lbl}».")
+        elif qt in QUESTION_TYPES_NEEDING_OPTIONS:
+            if len(opts) < 2:
+                errors.append(f"La pregunta «{lbl}» no está bien configurada (faltan opciones).")
+                continue
+            if qt == "radio":
+                choice = st.session_state.get(f"{sk}_radio")
+                if choice is None or str(choice).strip() == "" or choice == _CTSIG_Q_UNSET:
+                    errors.append(f"Elige una opción en «{lbl}».")
+                else:
+                    items.append({"question_id": qid, "text": str(choice).strip()})
+            elif qt == "select":
+                choice = st.session_state.get(f"{sk}_sel")
+                if choice is None or str(choice).strip() == "" or choice == _CTSIG_Q_UNSET:
+                    errors.append(f"Elige una opción en «{lbl}».")
+                else:
+                    items.append({"question_id": qid, "text": str(choice).strip()})
+            else:
+                choice_list = st.session_state.get(f"{sk}_cb")
+                if choice_list is None:
+                    choice_list = []
+                if not isinstance(choice_list, list):
+                    choice_list = []
+                cleaned = [str(x).strip() for x in choice_list if str(x).strip()]
+                if not cleaned:
+                    errors.append(f"Marca **al menos una opción** en «{lbl}».")
+                else:
+                    items.append({"question_id": qid, "choices": cleaned})
+        else:
+            t = str(st.session_state.get(f"{sk}_t") or "").strip()
+            if not t:
+                errors.append(f"Completa «{lbl}».")
+            else:
+                items.append({"question_id": qid, "text": t})
+
+    if errors:
+        for e in errors:
+            st.error(e)
+        return
+
+    payload: dict[str, Any] = {
+        "appointment_id": int(appointment_id),
+        "would_recommend": bool(would_rec),
+        "answers": items,
+    }
+    ok_p, code_p, data_p = api_client.post_survey(payload)
+    if ok_p:
+        ok_a, code_a, fresh_appt = api_client.get_appointment(int(appointment_id))
+        if not ok_a or not isinstance(fresh_appt, dict):
+            st.error(f"No se pudo verificar pagos de la cita (HTTP {code_a}): {_detail(fresh_appt)}")
+        else:
+            ok_pay_go, pay_err_go = _appointment_payment_ready_for_signature(fresh_appt)
+            if not ok_pay_go:
+                st.error(pay_err_go or "Completa el abono antes de firmar el contrato.")
+                st.info(
+                    "El cuestionario quedó guardado. Registra **Montos** en la cita y vuelve aquí para continuar a la firma."
+                )
+            else:
+                st.session_state["_ctsig_pending_toast"] = "Encuesta completada y guardada correctamente."
+                st.success("Cuestionario enviado. Continúa con la firma del contrato (etapa 3).")
+                st.session_state["ctsig_step"] = 3
+                st.rerun()
+    else:
+        st.error(f"No se pudo guardar el cuestionario (HTTP {code_p}): {_detail(data_p)}")
+
+
 def _render_contract_survey_question(q: dict[str, Any]) -> None:
     """Etiqueta (altura mínima para alinear columnas) + widget; sin divisor."""
     lbl = str(q.get("label") or "Pregunta")
@@ -981,15 +1112,13 @@ def _render_contract_survey_question(q: dict[str, Any]) -> None:
             "Tu respuesta", max_chars=5000, height=120, key=f"{sk}_t", label_visibility="collapsed"
         )
     elif qt == "number":
+        num_kw = _survey_number_input_kwargs(q)
         st.number_input(
             "Valor numérico",
-            min_value=None,
-            value=None,
-            step=0.0001,
-            format="%.4f",
-            placeholder="Indica un número",
             key=f"{sk}_n",
             label_visibility="collapsed",
+            placeholder="0" if _survey_number_is_money(q) else None,
+            **num_kw,
         )
     elif qt == "radio":
         if len(opts) < 2:
@@ -1083,26 +1212,9 @@ def _render_step2_questionnaire(appointment_id: int, appt: dict[str, Any]) -> No
 
     st.markdown("Completa el siguiente formulario.")
 
-    st.markdown(
-        """<style>
-        .ctsig-survey-q-label {
-            min-height: 5.5rem;
-            max-height: 9rem;
-            overflow-y: auto;
-            margin: 0 0 0.35rem 0;
-            padding: 0.15rem 0.25rem 0.35rem 0;
-            line-height: 1.45;
-            font-weight: 600;
-            font-size: 0.95rem;
-            text-align: left;
-            border-bottom: 1px solid rgba(250, 250, 250, 0.08);
-            box-sizing: border-box;
-        }
-        </style>""",
-        unsafe_allow_html=True,
-    )
-
-    with st.form("ctsig_s3_survey"):
+    @st.fragment
+    def _fragment_ctsig_survey_form() -> None:
+        st.markdown('<div class="ctsig-survey-root" aria-hidden="true"></div>', unsafe_allow_html=True)
         for row_start in range(0, len(qs), 2):
             col_left, col_right = st.columns(2, gap="large")
             with col_left:
@@ -1118,114 +1230,10 @@ def _render_step2_questionnaire(appointment_id: int, appt: dict[str, Any]) -> No
             format_func=_fmt_survey_no_selection,
             key="ctsig_s3_would_rec",
         )
-        submitted = st.form_submit_button("Enviar cuestionario", type="primary", use_container_width=True)
+        if st.button("Enviar cuestionario", type="primary", use_container_width=True, key="ctsig_s3_submit"):
+            _submit_ctsig_survey(appointment_id, qs)
 
-        if submitted:
-            errors: list[str] = []
-            wr_raw = str(st.session_state.get("ctsig_s3_would_rec") or "").strip()
-            if wr_raw == "" or wr_raw == _CTSIG_Q_UNSET:
-                errors.append("Indica si **recomendaría nuestros servicios**.")
-            would_rec = wr_raw == "Sí"
-            items: list[dict[str, Any]] = []
-            for q in qs:
-                qid = int(q["id"])
-                qt = str(q.get("question_type") or "text_short")
-                lbl = str(q.get("label") or "Pregunta")
-                raw_o = q.get("options")
-                opts = [str(x).strip() for x in raw_o] if isinstance(raw_o, list) else []
-                opts = [x for x in opts if x]
-                sk = f"ctsig3_{qid}"
-                if qt == "rating_1_5":
-                    raw_r = str(st.session_state.get(f"{sk}_r") or "").strip()
-                    if raw_r == "" or raw_r == _CTSIG_Q_UNSET:
-                        errors.append(f"Selecciona una calificación (1–5) en «{lbl}».")
-                    else:
-                        items.append({"question_id": qid, "rating": int(raw_r)})
-                elif qt == "yes_no":
-                    yn = str(st.session_state.get(f"{sk}_yn") or "").strip()
-                    if yn == "" or yn == _CTSIG_Q_UNSET:
-                        errors.append(f"Responde **sí o no** en «{lbl}».")
-                    else:
-                        items.append({"question_id": qid, "yes_no": yn == "Sí"})
-                elif qt in ("text", "textarea", "text_short"):
-                    t = str(st.session_state.get(f"{sk}_t") or "").strip()
-                    if not t:
-                        errors.append(f"Completa «{lbl}».")
-                    else:
-                        items.append({"question_id": qid, "text": t})
-                elif qt == "number":
-                    n_raw = st.session_state.get(f"{sk}_n")
-                    if n_raw is None:
-                        errors.append(f"Indica un número en «{lbl}».")
-                    else:
-                        try:
-                            items.append({"question_id": qid, "number": float(n_raw)})
-                        except (TypeError, ValueError):
-                            errors.append(f"Número no válido en «{lbl}».")
-                elif qt in QUESTION_TYPES_NEEDING_OPTIONS:
-                    if len(opts) < 2:
-                        errors.append(f"La pregunta «{lbl}» no está bien configurada (faltan opciones).")
-                        continue
-                    if qt == "radio":
-                        choice = st.session_state.get(f"{sk}_radio")
-                        if choice is None or str(choice).strip() == "" or choice == _CTSIG_Q_UNSET:
-                            errors.append(f"Elige una opción en «{lbl}».")
-                        else:
-                            items.append({"question_id": qid, "text": str(choice).strip()})
-                    elif qt == "select":
-                        choice = st.session_state.get(f"{sk}_sel")
-                        if choice is None or str(choice).strip() == "" or choice == _CTSIG_Q_UNSET:
-                            errors.append(f"Elige una opción en «{lbl}».")
-                        else:
-                            items.append({"question_id": qid, "text": str(choice).strip()})
-                    else:
-                        choice_list = st.session_state.get(f"{sk}_cb")
-                        if choice_list is None:
-                            choice_list = []
-                        if not isinstance(choice_list, list):
-                            choice_list = []
-                        cleaned = [str(x).strip() for x in choice_list if str(x).strip()]
-                        if not cleaned:
-                            errors.append(f"Marca **al menos una opción** en «{lbl}».")
-                        else:
-                            items.append({"question_id": qid, "choices": cleaned})
-                else:
-                    t = str(st.session_state.get(f"{sk}_t") or "").strip()
-                    if not t:
-                        errors.append(f"Completa «{lbl}».")
-                    else:
-                        items.append({"question_id": qid, "text": t})
-
-            if errors:
-                for e in errors:
-                    st.error(e)
-            else:
-                payload: dict[str, Any] = {
-                    "appointment_id": int(appointment_id),
-                    "would_recommend": bool(would_rec),
-                    "answers": items,
-                }
-                ok_p, code_p, data_p = api_client.post_survey(payload)
-                if ok_p:
-                    ok_a, code_a, fresh_appt = api_client.get_appointment(int(appointment_id))
-                    if not ok_a or not isinstance(fresh_appt, dict):
-                        st.error(f"No se pudo verificar pagos de la cita (HTTP {code_a}): {_detail(fresh_appt)}")
-                    else:
-                        ok_pay_go, pay_err_go = _appointment_payment_ready_for_signature(fresh_appt)
-                        if not ok_pay_go:
-                            st.error(pay_err_go or "Completa el abono antes de firmar el contrato.")
-                            st.info(
-                                "El cuestionario quedó guardado. Registra **Montos** en la cita y vuelve aquí para continuar a la firma."
-                            )
-                        else:
-                            st.session_state["_ctsig_pending_toast"] = (
-                                "Encuesta completada y guardada correctamente."
-                            )
-                            st.success("Cuestionario enviado. Continúa con la firma del contrato (etapa 3).")
-                            st.session_state["ctsig_step"] = 3
-                            st.rerun()
-                else:
-                    st.error(f"No se pudo guardar el cuestionario (HTTP {code_p}): {_detail(data_p)}")
+    _fragment_ctsig_survey_form()
 
     nav_q1, nav_q2 = st.columns(2)
     with nav_q1:
@@ -1534,7 +1542,6 @@ def render_contract_express_piercing_view() -> None:
                     options=labels_p,
                     key=pick_key,
                     label_visibility="collapsed",
-                    help="Cada profesional tiene su propia ocupación por día.",
                 )
                 idx_p = labels_p.index(str(choice_p))
                 assigned_id = int(staff_opts[idx_p]["id"])
@@ -1549,7 +1556,6 @@ def render_contract_express_piercing_view() -> None:
                 step=1,
                 key="ctsig_expr_slots",
                 label_visibility="collapsed",
-                help="Desde la hora de inicio se bloquean tantas franjas de media hora.",
             )
         need_slots = max(
             _MIN_BOOKING_DURATION_SLOTS,
@@ -1591,7 +1597,6 @@ def render_contract_express_piercing_view() -> None:
                     options=avail_slots,
                     key="ctsig_expr_slot",
                     label_visibility="collapsed",
-                    help=f"Se reservan {need_slots} franja(s) de 30 min desde esta hora.",
                 )
                 slot_vis = str(st.session_state.get("ctsig_expr_slot") or "").strip()
                 st.caption(f"Inicio **{slot_vis or '—'}** · duración **{need_slots * 30}** min")
@@ -1605,12 +1610,10 @@ def render_contract_express_piercing_view() -> None:
                 "Notas u observaciones (opcional)",
                 height=68,
                 key="ctsig_expr_det",
-                help="Texto adicional (indicaciones, zona, etc.).",
             )
             st.checkbox(
                 "Cita prioritaria",
                 key="ctsig_expr_priority",
-                help="Se muestra con etiqueta roja en calendario y listado.",
             )
         with cm2:
             st.number_input(
@@ -1626,7 +1629,6 @@ def render_contract_express_piercing_view() -> None:
                 step=10000.0,
                 format="%.0f",
                 key="ctsig_expr_dep",
-                help="Para express, el abono debe cubrir el valor total (saldo pendiente cero).",
             )
             total_amount = float(st.session_state.get("ctsig_expr_total") or 0)
             deposit = max(0.0, round(float(st.session_state.get("ctsig_expr_dep") or 0), 2))
@@ -1705,7 +1707,7 @@ def render_contract_express_piercing_view() -> None:
     with a:
         st.text_input("Nombre *", value=str(ed.get("first_name") or ""), key="ctsig_expr_s1_fn")
         st.text_input("Apellido *", value=str(ed.get("last_name") or ""), key="ctsig_expr_s1_ln")
-        bd = st.date_input(
+        bd_raw = st.date_input(
             "Fecha de nacimiento *",
             value=_clamp_date(_parse_date(ed.get("birth_date")), min_date_100, max_date_today),
             min_value=min_date_100,
@@ -1713,7 +1715,8 @@ def render_contract_express_piercing_view() -> None:
             key="ctsig_expr_s1_bd",
             format="DD/MM/YYYY",
         )
-        if _is_minor_by_birth_date(bd):
+        bd = bd_raw if isinstance(bd_raw, date) else _parse_date(bd_raw)
+        if bd != CUSTOMER_BIRTH_PENDING and _is_minor_by_birth_date(bd):
             st.warning(
                 "**Menor de edad:** en la **etapa de firma** completarás datos del tutor o representante "
                 "y la documentación requerida antes de guardar el contrato."
@@ -1780,10 +1783,6 @@ def render_contract_express_piercing_view() -> None:
             help="10 dígitos (obligatorio para firmar desde esta vista).",
         )
 
-    st.info(
-        "**Tutor / representante:** si aplica menor de edad, la **etapa de firma** solicitará datos y capturas del tutor."
-    )
-
     if st.button("Crear cliente y cita, ir al cuestionario", type="primary", use_container_width=True, key="ctsig_expr_submit"):
         picked_d = bk["picked"]
         slot_str = str(bk["slot_str"] or "").strip()
@@ -1799,7 +1798,10 @@ def render_contract_express_piercing_view() -> None:
             return
         bd_v = st.session_state.get("ctsig_expr_s1_bd")
         if not isinstance(bd_v, date):
-            bd_v = _parse_date(bd_v)
+            bd_v = _parse_date(bd_v) if bd_v not in (None, "") else None
+        if bd_v is None:
+            st.error("La **fecha de nacimiento** es obligatoria.")
+            return
         if bd_v == CUSTOMER_BIRTH_PENDING:
             st.error(
                 "Indica la **fecha de nacimiento real** del cliente (no la fecha provisional del agendamiento)."

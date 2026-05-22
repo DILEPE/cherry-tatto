@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 _CSS_ORDER = (
     "_tokens.css",
     "_theme_citas.css",
+    "_theme_agendar.css",
     "_pills.css",
     "_calendar.css",
     "_flags.css",
@@ -32,7 +33,7 @@ def build_citas_style_tag() -> str:
     for name in _CSS_ORDER:
         p = d / name
         raw = p.read_text(encoding="utf-8")
-        if name == "_theme_citas.css":
+        if name in ("_theme_citas.css", "_theme_agendar.css"):
             raw = compile_citas_theme_css(raw)
         chunks.append(raw)
     return "<style>\n" + "\n".join(chunks) + "\n</style>"

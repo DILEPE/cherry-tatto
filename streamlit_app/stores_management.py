@@ -8,6 +8,7 @@ import streamlit as st
 
 from streamlit_app import api_client
 from streamlit_app.store_choices import invalidate_store_choices_cache, load_store_choices, store_display_label
+from streamlit_app.theme import get_panel_theme
 
 
 def _detail(payload: Any) -> str:
@@ -17,6 +18,44 @@ def _detail(payload: Any) -> str:
 
 
 _STORE_ACTION_INFO_KEY = "_store_action_info"
+_DLG_STORE_ROOT_HTML = '<div class="dlg-store-root" data-store-dlg="1" aria-hidden="true"></div>'
+_STORE_TAB_ROOT_HTML = '<div class="store-tab-root" aria-hidden="true"></div>'
+
+
+def _mark_store_dialog_scope() -> None:
+    """Marcador para CSS de diálogo en modo claro (ver styles/_theme_stores.css)."""
+    st.markdown(_DLG_STORE_ROOT_HTML, unsafe_allow_html=True)
+    if get_panel_theme() == "light":
+        st.markdown(
+            """
+            <style>
+            div[data-testid="stDialog"]:has(.dlg-store-root) [role="dialog"],
+            div[data-testid="stDialog"]:has([data-store-dlg]) [role="dialog"] {
+              background: #ffffff !important;
+              background-color: #ffffff !important;
+              color: #1e293b !important;
+            }
+            div[data-testid="stDialog"]:has(.dlg-store-root) [data-testid="stWidgetLabel"] p,
+            div[data-testid="stDialog"]:has(.dlg-store-root) [data-testid="stWidgetLabel"] label,
+            div[data-testid="stDialog"]:has(.dlg-store-root) [data-testid="stCaptionContainer"] p {
+              color: #334155 !important;
+            }
+            div[data-testid="stDialog"]:has(.dlg-store-root) [data-testid="stButton"] button[data-testid="baseButton-primary"],
+            div[data-testid="stDialog"]:has(.dlg-store-root) [data-testid="stButton"] button[kind="primary"],
+            div[data-testid="stDialog"]:has(.dlg-store-root) button[data-testid="baseButton-primary"][class*="st-emotion-cache"] {
+              background-image: linear-gradient(180deg, #ff5fb8 0%, #ff007f 52%, #d90064 100%) !important;
+              background-color: #ff007f !important;
+              color: #ffffff !important;
+            }
+            div[data-testid="stDialog"]:has(.dlg-store-root) [data-testid="stButton"] button[data-testid="baseButton-primary"] *,
+            div[data-testid="stDialog"]:has(.dlg-store-root) [data-testid="stButton"] button[kind="primary"] * {
+              color: #ffffff !important;
+              background: transparent !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def _queue_store_success(msg: str) -> None:
@@ -44,89 +83,9 @@ def _close_store_dialogs() -> None:
         st.session_state.pop(k, None)
 
 
-def _inject_store_table_styles() -> None:
-    st.markdown(
-        """
-        <style>
-          .cust-col-title {
-            display: inline-block;
-            font-weight: 700;
-            letter-spacing: 0.02em;
-            color: #111827;
-            background: #f3f4f6;
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            padding: 0.18rem 0.45rem;
-            white-space: nowrap;
-            line-height: 1.35;
-          }
-          div[data-testid="stHorizontalBlock"]:has(
-              > div[data-testid="column"]:nth-child(5) [data-testid="stButton"]
-            )
-            > div[data-testid="column"]:nth-child(5)
-            [data-testid="stHorizontalBlock"] {
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            padding: 2px 4px;
-            background: #fafafa;
-            gap: 4px !important;
-            align-items: center;
-            margin: 0 !important;
-          }
-          div[data-testid="stHorizontalBlock"]:has(
-              > div[data-testid="column"]:nth-child(5) [data-testid="stButton"]
-            )
-            > div[data-testid="column"]:nth-child(5)
-            [data-testid="stHorizontalBlock"]
-            > div[data-testid="column"] {
-            border: 1px solid #e5e7eb;
-            border-radius: 6px;
-            background: #fff;
-            min-width: 2.35rem;
-          }
-          div[data-testid="stHorizontalBlock"]:has(
-              > div[data-testid="column"]:nth-child(5) [data-testid="stButton"]
-            )
-            > div[data-testid="column"]:nth-child(5)
-            [data-testid="stButton"] button {
-            border: none !important;
-            background: transparent !important;
-            box-shadow: none !important;
-            font-size: 1.05rem;
-            line-height: 1;
-            padding: 0.15rem 0.35rem !important;
-            min-height: 1.75rem;
-          }
-          div[data-testid="stHorizontalBlock"]:has(
-              > div[data-testid="column"]:nth-child(5) [data-testid="stButton"]
-            )
-            > div[data-testid="column"]:nth-child(5)
-            [data-testid="stButton"] button:hover {
-            background: #f3f4f6 !important;
-          }
-          div[data-testid="stHorizontalBlock"]:has(
-              > div[data-testid="column"]:nth-child(5) [data-testid="stButton"]
-            )
-            > div[data-testid="column"]:nth-child(5)
-            [data-testid="stElementContainer"] {
-            margin: 0 !important;
-          }
-          div[data-testid="stHorizontalBlock"]:has(
-              > div[data-testid="column"]:nth-child(5) [data-testid="stButton"]
-            )
-            > div[data-testid="column"]:nth-child(5)
-            > div[data-testid="stVerticalBlock"] {
-            gap: 0 !important;
-            justify-content: center !important;
-          }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 @st.dialog("Nueva tienda", width="medium", dismissible=False)
 def _dialog_crear_tienda() -> None:
+    _mark_store_dialog_scope()
     name = st.text_input("Nombre *", key="dlg_store_name")
     address = st.text_input("Dirección", key="dlg_store_address")
     phone = st.text_input("Teléfono", key="dlg_store_phone")
@@ -163,6 +122,7 @@ def _dialog_crear_tienda() -> None:
 
 @st.dialog("Editar tienda", width="medium", dismissible=False)
 def _dialog_editar_tienda(store_id: int) -> None:
+    _mark_store_dialog_scope()
     ok, code_http, data = api_client.get_store(store_id)
     if not ok or not isinstance(data, dict):
         st.error(f"No se pudo cargar la tienda (HTTP {code_http}): {_detail(data)}")
@@ -211,6 +171,7 @@ def _dialog_editar_tienda(store_id: int) -> None:
 
 @st.dialog("Eliminar tienda", width="small", dismissible=False)
 def _dialog_eliminar_tienda(store_id: int, nombre: str) -> None:
+    _mark_store_dialog_scope()
     st.warning(
         f"¿Eliminar **{nombre}** del catálogo? "
         "No se puede si hay usuarios del panel asignados a esta tienda."
@@ -264,6 +225,7 @@ def _render_store_row_actions(sid: int, nombre: str) -> None:
 
 def render_stores_management_tab() -> None:
     """Catálogo de tiendas: alta, edición y baja (administrador)."""
+    st.markdown(_STORE_TAB_ROOT_HTML, unsafe_allow_html=True)
     st.subheader("Gestión de tiendas")
     st.caption(
         "Define las tiendas del negocio (Cherry Tattoo, Rock City, sucursales…). "
@@ -303,7 +265,6 @@ def render_stores_management_tab() -> None:
     items: List[Dict[str, Any]] = list(raw) if isinstance(raw, list) else []
     st.markdown(f"**{len(items)}** tienda(s) en catálogo")
 
-    _inject_store_table_styles()
     colw = [1.5, 1.6, 1.0, 0.7, 1.15]
     h1, h2, h3, h4, h5 = st.columns(colw, vertical_alignment="center")
     h1.markdown('<span class="cust-col-title">Nombre</span>', unsafe_allow_html=True)

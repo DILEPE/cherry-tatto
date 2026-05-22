@@ -13,9 +13,8 @@ def render_citas_color_legend() -> None:
         ("cli-pill-returning", "Activa cliente antiguo"),
         ("cli-pill-new", "Activa cliente nuevo"),
         ("cli-pill-priority", "Con prioridad"),
-        ("cli-pill-reprogramada", "Para reprogramar"),
+        ("cli-pill-reprogramada", "Reprogramada"),
         ("cli-pill-cancelada", "Cancelada"),
-        ("cita-legend-swatch-disponible", "Disponible"),
     )
     parts: list[str] = ['<div class="cita-legend-strip" role="group" aria-label="Leyenda de colores">']
     for cls, label in chips:

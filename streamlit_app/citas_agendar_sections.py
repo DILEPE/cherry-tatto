@@ -45,29 +45,7 @@ def sync_pending_booking_document_type() -> None:
 
 def render_agendar_required_banner_html() -> None:
     st.markdown(
-        """
-        <style>
-          .dlg-appt-req-banner {
-            border-left: 4px solid #FF007F;
-            padding: 0.5rem 0.85rem;
-            margin: 0.75rem 0 0.75rem 0;
-            background: rgba(255, 0, 127, 0.12);
-            border-radius: 8px;
-            font-size: 0.95rem;
-            line-height: 1.45;
-            color: #f3f4f6;
-          }
-          .dlg-appt-col-h {
-            font-size: 0.78rem;
-            font-weight: 700;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
-            color: #A79AFF;
-            margin: 0 0 0.5rem 0;
-          }
-        </style>
-        <div class="dlg-appt-req-banner">Campos obligatorios</div>
-        """,
+        '<div class="dlg-appt-req-banner">Campos obligatorios</div>',
         unsafe_allow_html=True,
     )
 
@@ -343,6 +321,7 @@ def render_agendar_design_notes_priority_and_amounts() -> None:
 
 def render_agendar_booking_form_body(*, picked: date) -> None:
     """Cuerpo completo del formulario (widgets). Asume día ya validado."""
+    st.markdown('<div class="dlg-appt-root" aria-hidden="true"></div>', unsafe_allow_html=True)
     sync_pending_booking_document_type()
     render_agendar_required_banner_html()
     render_agendar_work_kind_and_staff_pick()

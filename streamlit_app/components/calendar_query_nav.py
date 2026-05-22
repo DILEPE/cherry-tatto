@@ -1,13 +1,20 @@
-"""Clic en «Ver cita» / agendar dentro del HTML del calendario → query_params (misma sesión)."""
+"""Clic en «Ver cita» / agendar dentro del HTML del calendario → componente bidireccional."""
 
 from __future__ import annotations
 
 import html as html_mod
-import json
+import os
 from urllib.parse import urlencode
 
 import streamlit as st
 import streamlit.components.v1 as components
+
+# Componente bidireccional: intercepta clics en .cal-query-nav y devuelve la
+# acción a Python vía Streamlit.setComponentValue() sin navegar por URL.
+_CAL_NAV_COMPONENT_DIR = os.path.join(os.path.dirname(__file__), "_cal_nav_component")
+_cal_nav_component = components.declare_component(
+    "cherry_cal_nav_v5", path=_CAL_NAV_COMPONENT_DIR
+)
 
 
 def _query_params_flat() -> dict[str, str]:
@@ -87,146 +94,14 @@ def calendar_book_control_html(
     )
 
 
-_CAL_NAV_BRIDGE_INNER_JS = r"""
-(function () {
-  var NS = "__cherryCalNav_v3";
+def inject_calendar_query_nav_bridge() -> dict | None:
+    """Componente bidireccional: intercepta clics en .cal-query-nav y devuelve la acción.
 
-  function appWindow() {
-    try {
-      return window.top;
-    } catch (e0) {
-      return window;
-    }
-  }
-
-  function pad2(n) {
-    return n < 10 ? "0" + n : String(n);
-  }
-
-  function mergeNavigate(params) {
-    var w = appWindow();
-    var u = new URL(w.location.href);
-    for (var k in params) {
-      if (!Object.prototype.hasOwnProperty.call(params, k)) continue;
-      if (params[k] == null || params[k] === "") u.searchParams.delete(k);
-      else u.searchParams.set(k, String(params[k]));
-    }
-    w.location.assign(u.toString());
-  }
-
-  function navigateFromEl(el) {
-    var nav = el.getAttribute("data-cal-nav");
-    if (nav === "appt") {
-      var apptId = parseInt(el.getAttribute("data-cal-appt-id") || "", 10);
-      if (!apptId || apptId <= 0) return;
-      mergeNavigate({ cal_appt_id: String(apptId), cal_book: null });
-      return;
-    }
-    if (nav === "book") {
-      var cy = parseInt(el.getAttribute("data-cal-y") || "", 10);
-      var cm = parseInt(el.getAttribute("data-cal-m") || "", 10);
-      var cd = parseInt(el.getAttribute("data-cal-d") || "", 10);
-      if (!cd || cd <= 0) return;
-      mergeNavigate({
-        cal_book: String(cy) + "-" + pad2(cm) + "-" + pad2(cd),
-        cal_appt_id: null,
-      });
-    }
-  }
-
-  function onClick(ev) {
-    var t = ev.target;
-    if (!t || typeof t.closest !== "function") return;
-    var el = t.closest(".cal-query-nav,[data-cal-nav]");
-    if (!el || el.disabled || el.getAttribute("aria-disabled") === "true") return;
-    ev.preventDefault();
-    ev.stopPropagation();
-    navigateFromEl(el);
-  }
-
-  function bindRoot(doc) {
-    if (!doc || !doc.body) return;
-    var key = NS + "_bound";
-    if (doc.documentElement.getAttribute(key)) return;
-    doc.documentElement.setAttribute(key, "1");
-    doc.addEventListener("click", onClick, true);
-  }
-
-  function scanIframes() {
-    var w = appWindow();
-    var doc = w.document;
-    bindRoot(doc);
-    var frames = doc.querySelectorAll("iframe");
-    for (var i = 0; i < frames.length; i++) {
-      try {
-        var fdoc = frames[i].contentDocument;
-        if (fdoc) bindRoot(fdoc);
-      } catch (e) {}
-    }
-  }
-
-  scanIframes();
-  setTimeout(scanIframes, 0);
-  setTimeout(scanIframes, 200);
-  setTimeout(scanIframes, 600);
-  setTimeout(scanIframes, 1500);
-
-  try {
-    var w = appWindow();
-    var obs = new MutationObserver(function () {
-      scanIframes();
-    });
-    if (w.document && w.document.body) {
-      obs.observe(w.document.body, { childList: true, subtree: true });
-    }
-  } catch (eObs) {}
-})();
-"""
-
-
-def _cal_nav_bridge_component_html() -> str:
-    inner_lit = json.dumps(_CAL_NAV_BRIDGE_INNER_JS)
-    return f"""<script>
-(function () {{
-  function appDocument() {{
-    try {{
-      var t = window.top;
-      if (t && t.document && t.document.querySelector('[data-testid="stApp"]')) return t.document;
-    }} catch (e0) {{}}
-    var x = window;
-    for (var i = 0; i < 12; i++) {{
-      try {{
-        if (!x || !x.document) break;
-        var d = x.document;
-        if (d.querySelector('[data-testid="stApp"]')) return d;
-        if (x.parent === x) break;
-        x = x.parent;
-      }} catch (e) {{
-        break;
-      }}
-    }}
-    try {{
-      return window.top.document;
-    }} catch (e2) {{
-      return document;
-    }}
-  }}
-  function injectScript(doc, text) {{
-    try {{
-      var s = doc.createElement("script");
-      s.textContent = text;
-      (doc.head || doc.documentElement).appendChild(s);
-      s.remove();
-    }} catch (e) {{}}
-  }}
-  injectScript(appDocument(), {inner_lit});
-}})();
-</script>"""
-
-
-def inject_calendar_query_nav_bridge() -> None:
-    """Puente en documento principal + iframes (`st.html`); patrón login."""
-    components.html(_cal_nav_bridge_component_html(), height=0, width=0)
+    Retorna un dict ``{type: "appt", id: int}`` o ``{type: "book", y, m, d}`` cuando
+    el usuario hace clic en «Ver cita» o «Agendar», o ``None`` si no hubo acción.
+    La acción se lee desde ``st.session_state["cal_nav_bridge"]`` en el rerun siguiente.
+    """
+    return _cal_nav_component(key="cal_nav_bridge", default=None)
 
 
 __all__ = [
@@ -236,3 +111,7 @@ __all__ = [
     "calendar_book_open_href",
     "inject_calendar_query_nav_bridge",
 ]
+
+# calendar_appt_open_href / calendar_book_open_href se mantienen para que el HTML
+# incluya data-cal-href como metadato (sin usarlo para navegar).
+

@@ -132,7 +132,6 @@ def render_reporte_financiero_citas_body(
     status_values: list[str],
     *,
     client_history_key: Callable[..., str],
-    render_row_actions: Callable[..., None],
 ) -> None:
     """Filtros, métricas, export Excel y tabla paginada (solo finanzas)."""
     st.markdown("##### Filtros")
@@ -211,8 +210,8 @@ def render_reporte_financiero_citas_body(
     start = page * limit
     rows = filtered_items[start : start + limit]
 
-    colw = [1.35, 0.95, 0.82, 1.05, 0.78, 0.72, 0.72, 0.85, 0.78, 0.72, 1.4]
-    h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11 = st.columns(colw)
+    colw = [1.4, 1.0, 0.88, 1.12, 0.82, 0.78, 0.76, 0.78, 0.88, 0.82]
+    h1, h2, h3, h4, h5, h6, h7, h8, h9, h10 = st.columns(colw)
     h1.markdown('<span class="ap-col-title">Nombre</span>', unsafe_allow_html=True)
     h2.markdown('<span class="ap-col-title">Artista</span>', unsafe_allow_html=True)
     h3.markdown('<span class="ap-col-title">Servicio</span>', unsafe_allow_html=True)
@@ -223,9 +222,8 @@ def render_reporte_financiero_citas_body(
     h8.markdown('<span class="ap-col-title">Pendiente</span>', unsafe_allow_html=True)
     h9.markdown('<span class="ap-col-title">A favor</span>', unsafe_allow_html=True)
     h10.markdown('<span class="ap-col-title">Estado</span>', unsafe_allow_html=True)
-    h11.markdown('<span class="ap-col-title">Acciones</span>', unsafe_allow_html=True)
     for r in rows:
-        c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11 = st.columns(colw)
+        c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 = st.columns(colw)
         c1.markdown(customer_name_pill_html(r, hist_counts), unsafe_allow_html=True)
         c2.write(assigned_artist_display_name(r))
         c3.write(r.get("service_type", r.get("service", "")))
@@ -239,8 +237,6 @@ def render_reporte_financiero_citas_body(
         c9.write("—" if credito <= 0 else format_cop(credito))
         status = str(r.get("status") or "Agendada")
         c10.markdown(status_pill_html(status), unsafe_allow_html=True)
-        with c11:
-            render_row_actions(r, show_firma=False)
 
     p1, p2, p3 = st.columns([1, 1, 2.5])
     with p1:

@@ -1,0 +1,36 @@
+/* date_input — solo marco/cabecera en modo claro.
+   No tocar ::before/::after ni layout de [role=gridcell] (rompe clics y alineación). */
+
+:root[data-panel-theme="light"] [data-baseweb="popover"]:has([data-baseweb="calendar"]),
+:root[data-panel-theme="light"] [data-baseweb="popover"]:has([data-baseweb="calendar"]) > div {
+    background-color: #ffffff !important;
+    color: #1e293b !important;
+}
+
+:root[data-panel-theme="light"] [data-baseweb="calendar"],
+:root[data-panel-theme="light"] [data-baseweb="calendar"] > div,
+:root[data-panel-theme="light"] [data-baseweb="calendar"] [role="grid"] {
+    background-color: #ffffff !important;
+    color: #1e293b !important;
+}
+
+:root[data-panel-theme="light"] [data-baseweb="calendar"] header,
+:root[data-panel-theme="light"] [data-baseweb="calendar"] [data-baseweb="calendar-header"],
+:root[data-panel-theme="light"] [data-baseweb="calendar"] header *,
+:root[data-panel-theme="light"] [data-baseweb="calendar"] [data-baseweb="select"] > div,
+:root[data-panel-theme="light"] [data-baseweb="calendar"] [data-baseweb="select"] span,
+:root[data-panel-theme="light"] [data-baseweb="calendar"] header button {
+    background-color: #f8fafc !important;
+    color: #1e293b !important;
+}
+
+:root[data-panel-theme="light"] [data-baseweb="calendar"] [role="columnheader"],
+:root[data-panel-theme="light"] [data-baseweb="calendar"] [role="columnheader"] abbr {
+    background-color: #ffffff !important;
+    color: #64748b !important;
+}
+
+/* Legibilidad del número; sin pseudo-elementos ni pointer-events */
+:root[data-panel-theme="light"] [data-baseweb="calendar"] [role="gridcell"] {
+    color: #334155 !important;
+}

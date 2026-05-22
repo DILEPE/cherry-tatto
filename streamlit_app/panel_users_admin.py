@@ -10,6 +10,7 @@ from app.domain.panel_user_profile import PANEL_ROLE_CHOICES, PANEL_ROLE_LABEL_E
 from streamlit_app import api_client
 from streamlit_app.store_choices import load_store_choices, store_display_label
 from streamlit_app.panel_auth import panel_invalidate_module_cache, panel_is_operator_admin
+from streamlit_app.theme import get_panel_theme
 
 
 def _detail(payload: Any) -> str:
@@ -33,6 +34,46 @@ def _detail(payload: Any) -> str:
 
 _PU_ACTION_INFO_KEY = "_pu_action_info"
 _PU_ACTION_WARN_KEY = "_pu_action_warn"
+_DLG_PU_ROOT_HTML = '<div class="dlg-pu-root" data-pu-dlg="1" aria-hidden="true"></div>'
+_PU_TAB_ROOT_HTML = '<div class="pu-tab-root" aria-hidden="true"></div>'
+
+
+def _mark_pu_dialog_scope() -> None:
+    """Marcador para CSS de diálogo en modo claro (ver styles/_theme_panel_users.css)."""
+    st.markdown(_DLG_PU_ROOT_HTML, unsafe_allow_html=True)
+    if get_panel_theme() == "light":
+        st.markdown(
+            """
+            <style>
+            div[data-testid="stDialog"]:has(.dlg-pu-root) [role="dialog"],
+            div[data-testid="stDialog"]:has([data-pu-dlg]) [role="dialog"] {
+              background: #ffffff !important;
+              background-color: #ffffff !important;
+              color: #1e293b !important;
+            }
+            div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stWidgetLabel"] p,
+            div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stWidgetLabel"] label,
+            div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stCaptionContainer"] p,
+            div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stMarkdownContainer"] p,
+            div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stMarkdownContainer"] h5 {
+              color: #334155 !important;
+            }
+            div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stButton"] button[data-testid="baseButton-primary"],
+            div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stButton"] button[kind="primary"],
+            div[data-testid="stDialog"]:has(.dlg-pu-root) button[data-testid="baseButton-primary"][class*="st-emotion-cache"] {
+              background-image: linear-gradient(180deg, #ff5fb8 0%, #ff007f 52%, #d90064 100%) !important;
+              background-color: #ff007f !important;
+              color: #ffffff !important;
+            }
+            div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stButton"] button[data-testid="baseButton-primary"] *,
+            div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stButton"] button[kind="primary"] * {
+              color: #ffffff !important;
+              background: transparent !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def _queue_pu_success(msg: str) -> None:
@@ -64,29 +105,6 @@ def _fetch_panel_users() -> None:
         st.session_state["_pu_last_error"] = (code, _detail(data))
 
 
-def _inject_pu_table_styles() -> None:
-    """Mismas cabeceras de columna que en `customers_management`."""
-    st.markdown(
-        """
-        <style>
-          .cust-col-title {
-            display: inline-block;
-            font-weight: 700;
-            letter-spacing: 0.02em;
-            color: #111827;
-            background: #f3f4f6;
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            padding: 0.18rem 0.45rem;
-            white-space: nowrap;
-            line-height: 1.35;
-          }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def _close_pu_dialogs() -> None:
     for k in (
         "_pu_dlg",
@@ -114,11 +132,14 @@ def _reset_pu_create_keys() -> None:
 
 
 def _render_panel_user_row_actions(uid: int, etiqueta: str, *, is_active: bool) -> None:
+    """Casilla en línea con iconos Material (editar / activar o desactivar)."""
+
     def _go_edit() -> None:
         st.session_state["_pu_dlg"] = "edit"
         st.session_state["_pu_dlg_id"] = uid
         st.session_state.pop("_pu_dlg_edit", None)
         st.session_state.pop("_pu_dlg_edit_id", None)
+        st.rerun()
 
     me_raw = st.session_state.get("_panel_user_id")
     is_me = me_raw is not None and int(me_raw) == int(uid)
@@ -139,38 +160,40 @@ def _render_panel_user_row_actions(uid: int, etiqueta: str, *, is_active: bool) 
         else:
             st.toast(f"No se pudo cambiar el estado (HTTP {code}): {_detail(raw)}", icon="❌", duration="long")
 
-    pop = getattr(st, "popover", None)
-    if pop:
-        with pop("Acciones", use_container_width=True):
-            if uid > 0:
-                st.caption(f"Usuario #{uid}")
-            if etiqueta:
-                st.caption(etiqueta[:80] + ("…" if len(etiqueta) > 80 else ""))
-            if not is_active:
-                if st.button("Activar", key=f"pu_act_{uid}", use_container_width=True):
-                    _apply_active(True)
-            else:
-                if st.button("Desactivar", key=f"pu_deact_{uid}", use_container_width=True):
-                    _apply_active(False)
-            if st.button("Editar", key=f"pu_e_{uid}", use_container_width=True):
-                _go_edit()
-        return
-
-    row_act, row_ed = st.columns(2)
-    with row_act:
-        if not is_active:
-            if st.button("Activar", key=f"pu_fb_act_{uid}", use_container_width=True):
-                _apply_active(True)
-        else:
-            if st.button("Desactivar", key=f"pu_fb_deact_{uid}", use_container_width=True):
-                _apply_active(False)
-    with row_ed:
-        if st.button("Editar", key=f"pu_fb_e_{uid}", use_container_width=True):
+    c_edit, c_toggle = st.columns(2, gap="small", vertical_alignment="center")
+    with c_edit:
+        if st.button(
+            "",
+            key=f"pu_edit_{uid}",
+            help="Editar usuario",
+            icon=":material/edit:",
+            use_container_width=True,
+        ):
             _go_edit()
+    with c_toggle:
+        if is_active:
+            if st.button(
+                "",
+                key=f"pu_deact_{uid}",
+                help="Desactivar usuario",
+                icon=":material/person_off:",
+                use_container_width=True,
+            ):
+                _apply_active(False)
+        else:
+            if st.button(
+                "",
+                key=f"pu_act_{uid}",
+                help="Activar usuario",
+                icon=":material/person_add:",
+                use_container_width=True,
+            ):
+                _apply_active(True)
 
 
 @st.dialog("Registrar usuario del panel", width="large", dismissible=False)
 def _dialog_crear_usuario_panel() -> None:
+    _mark_pu_dialog_scope()
     st.markdown("##### Datos del operador")
     st.caption("Usuario de acceso: minúsculas, números, `.`, `_`, `-` (mín. 3 caracteres). Contraseña mín. 8 caracteres.")
     a, b = st.columns(2)
@@ -267,6 +290,7 @@ def _dialog_crear_usuario_panel() -> None:
 
 @st.dialog("Editar usuario del panel", width="large", dismissible=False)
 def _dialog_editar_usuario_panel(user_id: int) -> None:
+    _mark_pu_dialog_scope()
     if "_pu_dlg_edit" not in st.session_state or st.session_state.get("_pu_dlg_edit_id") != user_id:
         with st.spinner("Cargando usuario…"):
             ok, code, data = api_client.get_panel_user(user_id)
@@ -395,6 +419,7 @@ def render_panel_users_tab() -> None:
         st.warning("No tienes permiso para gestionar usuarios del panel.")
         return
 
+    st.markdown(_PU_TAB_ROOT_HTML, unsafe_allow_html=True)
     st.subheader("Gestión de usuarios del panel")
     with st.expander("Administración de acceso a módulos", expanded=False):
         st.markdown(
@@ -439,8 +464,7 @@ def render_panel_users_tab() -> None:
     total = len(items)
     st.markdown(f"**{total}** usuario(s) del panel")
 
-    _inject_pu_table_styles()
-    pu_colw = [1.55, 1.05, 1.05, 1.15, 1.05, 0.55, 1.0]
+    pu_colw = [1.55, 1.05, 1.05, 1.15, 1.05, 0.55, 1.15]
     h1, h2, h3, h4, h5, h6, h7 = st.columns(pu_colw)
     h1.markdown('<span class="cust-col-title">Nombre</span>', unsafe_allow_html=True)
     h2.markdown('<span class="cust-col-title">Usuario</span>', unsafe_allow_html=True)
