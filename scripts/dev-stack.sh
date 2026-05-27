@@ -123,4 +123,6 @@ echo "Cierra Streamlit (Ctrl+C) para detener también la API y el contenedor n8n
 
 python -m streamlit run streamlit_app/main.py \
   --server.address "$BIND_HOST" \
-  --server.port "$STREAMLIT_PORT"
+  --server.port "$STREAMLIT_PORT" \
+  --server.enableCORS false \
+  --server.enableXsrfProtection false
