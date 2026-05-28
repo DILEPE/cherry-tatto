@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app.domain.panel_user_profile import PANEL_ROLE_CHOICES
 
@@ -131,7 +131,19 @@ class PanelUserRegisteredResponse(BaseModel):
 
 
 class PanelUserModulesBody(BaseModel):
-    module_keys: list[str] = Field(default_factory=list)
+    """PUT /panel-users/{id}/modules — JSON con ``modules`` o ``module_keys``."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    modules: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("modules", "module_keys"),
+    )
+
+    @property
+    def module_keys(self) -> list[str]:
+        """Alias de lectura (servicio y clientes que usan ``module_keys``)."""
+        return self.modules
 
 
 class PanelUserUpdate(BaseModel):
