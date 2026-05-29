@@ -8,6 +8,7 @@ import streamlit as st
 from app.domain.contract_kinds import KIND_LABEL_ES
 from streamlit_app import api_client
 from streamlit_app.rich_text import contract_rich_editor
+from streamlit_app.theme import get_panel_theme
 
 
 def _detail(payload: Any) -> str:
@@ -17,6 +18,52 @@ def _detail(payload: Any) -> str:
 
 
 _CTADM_ACTION_INFO_KEY = "_ctadm_action_info"
+_CTADM_DLG_ROOT_HTML = '<div class="ctadm-dlg-root" data-ctadm-dlg="1" aria-hidden="true"></div>'
+_CTADM_TAB_ROOT_HTML = '<div class="ctadm-tab-root" aria-hidden="true"></div>'
+
+
+def _mark_ctadm_dialog_scope() -> None:
+    st.markdown(_CTADM_DLG_ROOT_HTML, unsafe_allow_html=True)
+    if get_panel_theme() == "light":
+        st.markdown(
+            """
+            <style>
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [role="dialog"],
+            div[data-testid="stDialog"]:has([data-ctadm-dlg]) [role="dialog"] {
+              background: #ffffff !important;
+              background-color: #ffffff !important;
+              color: #1e293b !important;
+            }
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [data-testid="stButton"] button[data-testid="baseButton-primary"],
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [data-testid="stButton"] button[kind="primary"],
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) button[data-testid="baseButton-primary"][class*="st-emotion-cache"] {
+              background-image: linear-gradient(180deg, #ff5fb8 0%, #ff007f 52%, #d90064 100%) !important;
+              background-color: #ff007f !important;
+              color: #ffffff !important;
+              border: 1px solid rgba(255, 0, 127, 0.35) !important;
+              box-shadow: 0 4px 14px rgba(255, 0, 127, 0.38) !important;
+            }
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [data-testid="stButton"] button[data-testid="baseButton-primary"] *,
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [data-testid="stButton"] button[kind="primary"] * {
+              color: #ffffff !important;
+              background: transparent !important;
+              background-color: transparent !important;
+            }
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [data-testid="stWidgetLabel"],
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [data-testid="stWidgetLabel"] p,
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [data-testid="stWidgetLabel"] label,
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [data-testid="stCaptionContainer"] p,
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) .ctadm-editor-label {
+              color: #334155 !important;
+            }
+            div[data-testid="stDialog"]:has(.ctadm-dlg-root) [data-testid="stCaptionContainer"] code {
+              background: #ecfdf5 !important;
+              color: #065f46 !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def _queue_ctadm_success(msg: str) -> None:
@@ -40,11 +87,8 @@ def _kind_label(code: str) -> str:
 
 
 def _render_template_row_actions(item: Dict[str, Any]) -> None:
+    """Casilla en línea con celdas internas e iconos Material (sin menú desplegable)."""
     tid = int(item.get("id", 0) or 0)
-    nm = str(item.get("name", "") or "")
-    vs = str(item.get("version", "") or "")
-    kind = str(item.get("contract_kind") or "tattoo")
-    nm_short = nm[:72] + ("…" if len(nm) > 72 else "")
 
     def _dispatch_edit() -> None:
         st.session_state.pop(f"ctadm_edit_quill_{tid}", None)
@@ -54,37 +98,35 @@ def _render_template_row_actions(item: Dict[str, Any]) -> None:
         st.session_state["_ctadm_dlg_id"] = tid
         st.rerun()
 
-    pop = getattr(st, "popover", None)
-    if pop:
-        with pop("Acciones", use_container_width=True):
-            if tid > 0:
-                st.caption(f"Plantilla #{tid}")
-                st.caption(f"{_kind_label(kind)} · {nm_short or '—'} · v{vs or '?'}")
-            if st.button("Editar", key=f"ctadm_pop_edit_{tid}", use_container_width=True):
-                _dispatch_edit()
-            if st.button("Eliminar", key=f"ctadm_pop_del_{tid}", use_container_width=True):
-                ok_d, code_d, data_d = api_client.delete_template(tid)
-                if ok_d:
-                    st.session_state["_ctadm_reload"] = True
-                    _queue_ctadm_success("Versión eliminada.")
-                    st.rerun()
-                else:
-                    st.toast(f"No se pudo eliminar (HTTP {code_d}): {_detail(data_d)}", icon="❌", duration="long")
-        return
-
-    ln1, ln2 = st.columns(2)
-    with ln1:
-        if st.button("Editar", key=f"ctadm_fb_edit_{tid}", use_container_width=True):
-            _dispatch_edit()
-    with ln2:
-        if st.button("Eliminar", key=f"ctadm_fb_del_{tid}", use_container_width=True):
+    def _dispatch_delete() -> None:
+        with st.spinner("Eliminando…"):
             ok_d, code_d, data_d = api_client.delete_template(tid)
-            if ok_d:
-                st.session_state["_ctadm_reload"] = True
-                _queue_ctadm_success("Versión eliminada.")
-                st.rerun()
-            else:
-                st.toast(f"No se pudo eliminar (HTTP {code_d}): {_detail(data_d)}", icon="❌", duration="long")
+        if ok_d:
+            st.session_state["_ctadm_reload"] = True
+            _queue_ctadm_success("Versión eliminada.")
+            st.rerun()
+        else:
+            st.toast(f"No se pudo eliminar (HTTP {code_d}): {_detail(data_d)}", icon="❌", duration="long")
+
+    c_edit, c_del = st.columns(2, gap="small", vertical_alignment="center")
+    with c_edit:
+        if st.button(
+            "",
+            key=f"ctadm_edit_{tid}",
+            help="Editar versión",
+            icon=":material/edit:",
+            use_container_width=True,
+        ):
+            _dispatch_edit()
+    with c_del:
+        if st.button(
+            "",
+            key=f"ctadm_del_{tid}",
+            help="Eliminar versión",
+            icon=":material/delete:",
+            use_container_width=True,
+        ):
+            _dispatch_delete()
 
 
 def _load_templates(*, only_active: bool) -> None:
@@ -99,6 +141,7 @@ def _load_templates(*, only_active: bool) -> None:
 
 @st.dialog("Nueva versión de contrato", width="large", dismissible=False)
 def _dialog_create_template() -> None:
+    _mark_ctadm_dialog_scope()
     name = st.text_input("Nombre *", key="ctadm_new_name")
     kind = st.selectbox(
         "Tipo de trabajo *",
@@ -142,6 +185,7 @@ def _dialog_create_template() -> None:
 
 @st.dialog("Editar versión de contrato", width="large", dismissible=False)
 def _dialog_edit_template(template_id: int) -> None:
+    _mark_ctadm_dialog_scope()
     if (
         "_ctadm_edit_payload" not in st.session_state
         or int(st.session_state.get("_ctadm_edit_id") or 0) != template_id
@@ -208,6 +252,7 @@ def _dialog_edit_template(template_id: int) -> None:
 
 
 def render_contract_admin_tab() -> None:
+    st.markdown(_CTADM_TAB_ROOT_HTML, unsafe_allow_html=True)
     st.subheader("Gestión de contratos")
 
     if "_ctadm_reload" not in st.session_state:
@@ -241,28 +286,8 @@ def render_contract_admin_tab() -> None:
     templates = list(st.session_state.get("_ctadm_templates") or [])
     st.markdown(f"**Versiones registradas:** {len(templates)}")
 
-    st.markdown(
-        """
-        <style>
-          .ctadm-col-title {
-            display: inline-block;
-            font-weight: 700;
-            letter-spacing: 0.02em;
-            color: #111827;
-            background: #f3f4f6;
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            padding: 0.18rem 0.45rem;
-            white-space: nowrap;
-            line-height: 1.35;
-          }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    tpl_colw = [1.35, 1.12, 0.94, 1.12, 1.52]
-    h1, h2, h3, h4, h5 = st.columns(tpl_colw)
+    tpl_colw = [1.35, 1.12, 0.94, 1.12, 1.65]
+    h1, h2, h3, h4, h5 = st.columns(tpl_colw, vertical_alignment="center")
     h1.markdown('<span class="ctadm-col-title">Nombre</span>', unsafe_allow_html=True)
     h2.markdown('<span class="ctadm-col-title">Tipo</span>', unsafe_allow_html=True)
     h3.markdown('<span class="ctadm-col-title">Versión</span>', unsafe_allow_html=True)
@@ -270,7 +295,7 @@ def render_contract_admin_tab() -> None:
     h5.markdown('<span class="ctadm-col-title">Acciones</span>', unsafe_allow_html=True)
 
     for item in templates:
-        c1, c2, c3, c4, c5 = st.columns(tpl_colw)
+        c1, c2, c3, c4, c5 = st.columns(tpl_colw, vertical_alignment="center")
         c1.write(item.get("name", ""))
         c2.write(_kind_label(str(item.get("contract_kind") or "tattoo")))
         c3.write(item.get("version", ""))

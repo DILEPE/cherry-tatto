@@ -1,0 +1,54 @@
+.cita-legend-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.65rem 1.15rem;
+    padding: 0.6rem 0.9rem;
+    background: var(--ct-legend-bg, rgba(15, 23, 42, 0.72));
+    border: 1px solid var(--ct-legend-border, rgba(255, 0, 127, 0.38));
+    border-radius: 10px;
+    margin: 0.15rem 0 0.35rem;
+    box-shadow: var(--ct-legend-shadow, inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 2px 8px rgba(0, 0, 0, 0.22));
+    box-sizing: border-box;
+}
+.cita-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.38rem;
+}
+.cita-legend-swatch {
+    display: inline-block;
+    width: 0.82rem;
+    height: 0.82rem;
+    border-radius: 4px;
+    flex-shrink: 0;
+    box-sizing: border-box;
+    border: 1px solid;
+    vertical-align: middle;
+}
+.cita-legend-swatch.cli-pill-returning {
+    background: #2563eb;
+    border-color: #1d4ed8;
+}
+.cita-legend-swatch.cli-pill-new {
+    background: #7c3aed;
+    border-color: #6d28d9;
+}
+.cita-legend-swatch.cli-pill-priority {
+    background: #db2777;
+    border-color: #be185d;
+}
+.cita-legend-swatch.cli-pill-reprogramada {
+    background: #f59e0b;
+    border-color: #d97706;
+}
+.cita-legend-swatch.cli-pill-cancelada {
+    background: #ef4444;
+    border-color: #dc2626;
+}
+.cita-legend-label {
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--ct-legend-label, #e2e8f0);
+    white-space: nowrap;
+}

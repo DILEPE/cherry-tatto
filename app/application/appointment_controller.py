@@ -14,8 +14,11 @@ from app.schemas.appointment import (
     AppointmentListItem,
     AppointmentPaymentCreateRequest,
     AppointmentPaymentItem,
+    AppointmentPaymentPatchRequest,
     AppointmentPaymentReceiptListItem,
     AppointmentRescheduleRequest,
+    AppointmentMetaPatchRequest,
+    AppointmentSearchResponse,
     AppointmentStatusUpdateRequest,
     appointment_request_to_domain,
 )
@@ -44,6 +47,71 @@ class AppointmentController(Controller):
             )
         except Exception as e:
             raise HTTPException(detail=f"Error al obtener citas: {str(e)}", status_code=500)
+
+    @get("/search")
+    async def search_appointments(
+        self,
+        state: State,
+        field: str = Parameter(
+            default="name",
+            query="field",
+            description="name | receipt | document",
+        ),
+        q: str = Parameter(min_length=1, max_length=120, query="q"),
+        limit: int = Parameter(default=10, ge=1, le=50, query="limit"),
+        offset: int = Parameter(default=0, ge=0, query="offset"),
+        assigned_panel_user_id: Optional[int] = Parameter(
+            default=None, ge=1, query="assigned_panel_user_id"
+        ),
+    ) -> AppointmentSearchResponse:
+        try:
+            return await state.service.search_appointments(
+                field=field.strip().lower(),
+                term=q.strip(),
+                limit=limit,
+                offset=offset,
+                assigned_panel_user_id=assigned_panel_user_id,
+            )
+        except ValueError as e:
+            if str(e) in ("SEARCH_TERM_EMPTY", "SEARCH_FIELD_INVALID"):
+                raise HTTPException(detail=str(e), status_code=400) from e
+            raise HTTPException(detail=str(e), status_code=400) from e
+        except Exception as e:
+            raise HTTPException(
+                detail=f"Error al buscar citas: {str(e)}",
+                status_code=500,
+            ) from e
+
+    @get("/work-performed-labels")
+    async def work_performed_labels(
+        self,
+        state: State,
+        ids: str = Parameter(
+            default="",
+            query="ids",
+            description="IDs de citas separados por coma (solo se consulta encuesta de tipo de perforación).",
+        ),
+    ) -> dict[str, str]:
+        """Mapa appointment_id → texto (perforación en encuesta), para reportes financieros."""
+        parsed: list[int] = []
+        for part in (ids or "").split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                n = int(part)
+            except ValueError:
+                continue
+            if n > 0:
+                parsed.append(n)
+        try:
+            labels = await state.service.work_performed_labels_for_appointments(parsed)
+            return {str(k): v for k, v in labels.items()}
+        except Exception as e:
+            raise HTTPException(
+                detail=f"Error al obtener tipos de trabajo: {str(e)}",
+                status_code=500,
+            ) from e
 
     @get("/{appointment_id:int}")
     async def get_one(self, appointment_id: int, state: State) -> AppointmentListItem:
@@ -113,6 +181,26 @@ class AppointmentController(Controller):
         except Exception as e:
             raise HTTPException(detail=f"Error al reprogramar cita: {str(e)}", status_code=400) from e
 
+    @patch("/{appointment_id:int}/meta")
+    async def patch_meta(
+        self,
+        appointment_id: int,
+        data: AppointmentMetaPatchRequest,
+        state: State,
+    ) -> MessageResponse:
+        try:
+            await state.service.patch_appointment_meta_details(
+                appointment_id,
+                assigned_panel_user_id=data.assigned_panel_user_id,
+                is_priority=bool(data.is_priority),
+                detail=data.detail,
+            )
+            return MessageResponse(status="success", message="Datos de la cita actualizados.")
+        except ValueError as e:
+            raise HTTPException(detail=str(e), status_code=400) from e
+        except Exception as e:
+            raise HTTPException(detail=f"Error al actualizar datos: {str(e)}", status_code=400) from e
+
     @patch("/{appointment_id:int}/financials")
     async def update_financials(
         self,
@@ -151,7 +239,9 @@ class AppointmentController(Controller):
         state: State,
     ) -> AppointmentPaymentCreatedResponse:
         try:
-            pid = await state.service.add_appointment_payment(appointment_id, data.amount, data.note)
+            pid = await state.service.add_appointment_payment(
+                appointment_id, data.amount, data.note, data.paid_on
+            )
             return AppointmentPaymentCreatedResponse(
                 status="success",
                 message="Abono registrado correctamente",
@@ -161,6 +251,22 @@ class AppointmentController(Controller):
             raise HTTPException(detail=str(e), status_code=400) from e
         except Exception as e:
             raise HTTPException(detail=f"Error al registrar abono: {str(e)}", status_code=400) from e
+
+    @patch("/{appointment_id:int}/payments/{payment_id:int}")
+    async def patch_payment(
+        self,
+        appointment_id: int,
+        payment_id: int,
+        data: AppointmentPaymentPatchRequest,
+        state: State,
+    ) -> MessageResponse:
+        try:
+            await state.service.patch_appointment_payment_row(appointment_id, payment_id, data)
+            return MessageResponse(status="success", message="Abono actualizado.")
+        except ValueError as e:
+            raise HTTPException(detail=str(e), status_code=400) from e
+        except Exception as e:
+            raise HTTPException(detail=f"Error al actualizar el abono: {str(e)}", status_code=400) from e
 
     @get("/{appointment_id:int}/receipts")
     async def list_receipts(
@@ -195,3 +301,18 @@ class AppointmentController(Controller):
             raise HTTPException(detail=str(e), status_code=404) from e
         except Exception as e:
             raise HTTPException(detail=f"Error al descargar recibo: {str(e)}", status_code=400) from e
+
+    @post("/{appointment_id:int}/receipts/{receipt_id:int}/resend")
+    async def resend_receipt_pdf(
+        self,
+        appointment_id: int,
+        receipt_id: int,
+        state: State,
+    ) -> MessageResponse:
+        try:
+            await state.service.resend_appointment_payment_receipt(appointment_id, receipt_id)
+            return MessageResponse(status="success", message="Recibo reenviado a n8n.")
+        except ValueError as e:
+            raise HTTPException(detail=str(e), status_code=404) from e
+        except Exception as e:
+            raise HTTPException(detail=f"Error al reenviar recibo: {str(e)}", status_code=400) from e

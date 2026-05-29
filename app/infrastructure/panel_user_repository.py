@@ -5,6 +5,17 @@ from typing import Any, Optional
 
 from mysql.connector.connection import MySQLConnection
 
+_USER_SELECT = """
+    pu.id, pu.username, pu.first_name, pu.last_name, pu.address, pu.phone,
+    pu.store_id, s.name AS store_name, pu.role, pu.is_active,
+    pu.created_at, pu.updated_at
+"""
+
+_USER_FROM = """
+    FROM panel_users pu
+    LEFT JOIN stores s ON s.id = pu.store_id AND s.deleted_at IS NULL
+"""
+
 
 class PanelUserRepository:
     def __init__(self, db_manager):
@@ -23,11 +34,10 @@ class PanelUserRepository:
         try:
             cur = conn.cursor(dictionary=True)
             cur.execute(
-                """
-                SELECT id, username, first_name, last_name, address, phone, store, role,
-                       password_hash, is_active
-                FROM panel_users
-                WHERE username = %s
+                f"""
+                SELECT {_USER_SELECT}, pu.password_hash
+                {_USER_FROM}
+                WHERE pu.username = %s
                 """,
                 (username,),
             )
@@ -50,11 +60,10 @@ class PanelUserRepository:
         try:
             cur = conn.cursor(dictionary=True)
             cur.execute(
-                """
-                SELECT id, username, first_name, last_name, address, phone, store, role,
-                       password_hash, is_active, created_at, updated_at
-                FROM panel_users
-                WHERE id = %s
+                f"""
+                SELECT {_USER_SELECT}, pu.password_hash
+                {_USER_FROM}
+                WHERE pu.id = %s
                 """,
                 (user_id,),
             )
@@ -76,11 +85,10 @@ class PanelUserRepository:
         try:
             cur = conn.cursor(dictionary=True)
             cur.execute(
-                """
-                SELECT id, username, first_name, last_name, address, phone, store, role,
-                       is_active, created_at, updated_at
-                FROM panel_users
-                ORDER BY id ASC
+                f"""
+                SELECT {_USER_SELECT}
+                {_USER_FROM}
+                ORDER BY pu.id ASC
                 """
             )
             rows = cur.fetchall()
@@ -123,7 +131,7 @@ class PanelUserRepository:
         last_name: str,
         address: Optional[str],
         phone: Optional[str],
-        store: str,
+        store_id: int,
         role: str,
         is_active: bool,
         conn: MySQLConnection,
@@ -132,7 +140,7 @@ class PanelUserRepository:
         cur.execute(
             """
             INSERT INTO panel_users (
-                username, first_name, last_name, address, phone, store, role,
+                username, first_name, last_name, address, phone, store_id, role,
                 password_hash, is_active
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -143,7 +151,7 @@ class PanelUserRepository:
                 last_name,
                 address,
                 phone,
-                store,
+                int(store_id),
                 role,
                 password_hash,
                 is_active,
@@ -157,7 +165,7 @@ class PanelUserRepository:
             "last_name",
             "address",
             "phone",
-            "store",
+            "store_id",
             "role",
             "is_active",
             "password_hash",

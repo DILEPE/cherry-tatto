@@ -5,12 +5,23 @@ perdiendo `_panel_auth_ok` y mostrando el login al volver del flujo de firma.
 """
 from __future__ import annotations
 
+from datetime import date
+
 import streamlit as st
 
 
 def open_contract_signing(appointment_id: int) -> None:
     st.query_params["view"] = "contract_sign"
     st.query_params["appointment_id"] = str(int(appointment_id))
+    st.query_params.pop("contract_artist_only", None)
+    st.rerun()
+
+
+def open_contract_artist_signature(appointment_id: int) -> None:
+    """Solo firma del profesional: sin datos ni encuesta (cliente ya firmó)."""
+    st.query_params["view"] = "contract_sign"
+    st.query_params["appointment_id"] = str(int(appointment_id))
+    st.query_params["contract_artist_only"] = "1"
     st.rerun()
 
 
@@ -32,10 +43,81 @@ def open_contract_read(contract_id: int) -> None:
     st.rerun()
 
 
+_AP_GOTO_WEEK_PENDING_KEY = "_ap_goto_week_pending_date"
+
+
+def request_calendar_week_for_date(target: date, *, close_dialog: bool = True) -> None:
+    """Programa salto a vista Semana (aplicar con `apply_pending_calendar_week_navigation` antes del radio)."""
+    st.session_state[_AP_GOTO_WEEK_PENDING_KEY] = target.isoformat()
+    if close_dialog:
+        st.session_state.pop("_cal_focus_appt_id", None)
+        st.session_state.pop("_cal_overflow_day", None)
+        for key in ("cal_appt_id", "cal_book"):
+            try:
+                st.query_params.pop(key, None)
+            except Exception:
+                pass
+    st.rerun()
+
+
+def apply_pending_calendar_week_navigation() -> bool:
+    """Aplica navegación pendiente; llamar antes de instanciar el radio `_ap_cal_vista`."""
+    raw = st.session_state.pop(_AP_GOTO_WEEK_PENDING_KEY, None)
+    if not raw:
+        return False
+    from streamlit_app.components.calendar_week_schedule import week_monday
+
+    try:
+        d = date.fromisoformat(str(raw))
+    except ValueError:
+        d = date.today()
+    st.session_state["_ap_cal_vista"] = "Semana"
+    st.session_state["_ap_cal_period"] = "Semana"
+    st.session_state["_ap_week_monday"] = week_monday(d).isoformat()
+    st.session_state["_ap_cal_ym"] = [d.year, d.month]
+    st.session_state["_ap_goto_date"] = d
+    return True
+
+
+def open_calendar_week_for_date(target: date, *, close_dialog: bool = True) -> None:
+    """Cambia a la vista Semana del calendario en la semana que contiene `target`."""
+    request_calendar_week_for_date(target, close_dialog=close_dialog)
+
+
+def open_calendar_appointment_focus(appt_id: int) -> None:
+    """Abre la ficha de cita en Gestión citas (misma sesión, sin recarga del navegador)."""
+    aid = int(appt_id)
+    if aid <= 0:
+        return
+    st.session_state["_cal_focus_appt_id"] = aid
+    st.session_state.pop("_cal_overflow_day", None)
+    for key in ("cal_appt_id", "cal_book"):
+        try:
+            st.query_params.pop(key, None)
+        except Exception:
+            pass
+    st.rerun()
+
+
+def open_calendar_booking_day(picked: date) -> None:
+    """Abre el diálogo de agendar cita con el día precargado."""
+    st.session_state.pop("_cal_focus_appt_id", None)
+    st.session_state.pop("_cal_overflow_day", None)
+    st.session_state["ap_ad"] = picked
+    st.session_state["_ap_dlg"] = "create"
+    for key in ("cal_appt_id", "cal_book"):
+        try:
+            st.query_params.pop(key, None)
+        except Exception:
+            pass
+    st.rerun()
+
+
 def leave_contract_view_to_panel() -> None:
     """Quita los query params de firma/lectura de contrato y vuelve al panel (misma sesión)."""
     st.query_params.pop("view", None)
     st.query_params.pop("appointment_id", None)
     st.query_params.pop("contract_id", None)
     st.query_params.pop("express_piercing", None)
+    st.query_params.pop("contract_artist_only", None)
     st.rerun()

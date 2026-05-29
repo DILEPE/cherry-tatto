@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import date, datetime
 from typing import Any, Optional
 from app.domain.models import (
@@ -47,10 +48,19 @@ class AppointmentRepository:
                     SELECT a.*,
                         EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
                             AS has_signed_contract,
+                        EXISTS (
+                            SELECT 1 FROM contracts c
+                            WHERE c.appointment_id = a.id
+                              AND (
+                                  c.artist_signature IS NULL
+                                  OR CHAR_LENGTH(TRIM(c.artist_signature)) < 80
+                              )
+                        ) AS contract_pending_artist_signature,
                         pu.username AS assigned_username,
                         pu.first_name AS assigned_first_name,
                         pu.last_name AS assigned_last_name,
-                        pu.role AS assigned_role
+                        pu.role AS assigned_role,
+                        pu.store_id AS assigned_store_id
                     FROM appointments a
                     LEFT JOIN panel_users pu ON pu.id = a.assigned_panel_user_id
                     ORDER BY a.created_at DESC
@@ -62,10 +72,19 @@ class AppointmentRepository:
                     SELECT a.*,
                         EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
                             AS has_signed_contract,
+                        EXISTS (
+                            SELECT 1 FROM contracts c
+                            WHERE c.appointment_id = a.id
+                              AND (
+                                  c.artist_signature IS NULL
+                                  OR CHAR_LENGTH(TRIM(c.artist_signature)) < 80
+                              )
+                        ) AS contract_pending_artist_signature,
                         pu.username AS assigned_username,
                         pu.first_name AS assigned_first_name,
                         pu.last_name AS assigned_last_name,
-                        pu.role AS assigned_role
+                        pu.role AS assigned_role,
+                        pu.store_id AS assigned_store_id
                     FROM appointments a
                     LEFT JOIN panel_users pu ON pu.id = a.assigned_panel_user_id
                     WHERE a.assigned_panel_user_id = %s
@@ -77,6 +96,8 @@ class AppointmentRepository:
             for row in rows:
                 raw = row.get("has_signed_contract")
                 row["has_signed_contract"] = bool(raw) if raw is not None else False
+                rawp = row.get("contract_pending_artist_signature")
+                row["contract_pending_artist_signature"] = bool(rawp) if rawp is not None else False
             return rows
         except Exception as e:
             err = str(e)
@@ -101,10 +122,19 @@ class AppointmentRepository:
                     SELECT a.*,
                         EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
                             AS has_signed_contract,
+                        EXISTS (
+                            SELECT 1 FROM contracts c
+                            WHERE c.appointment_id = a.id
+                              AND (
+                                  c.artist_signature IS NULL
+                                  OR CHAR_LENGTH(TRIM(c.artist_signature)) < 80
+                              )
+                        ) AS contract_pending_artist_signature,
                         pu.username AS assigned_username,
                         pu.first_name AS assigned_first_name,
                         pu.last_name AS assigned_last_name,
-                        pu.role AS assigned_role
+                        pu.role AS assigned_role,
+                        pu.store_id AS assigned_store_id
                     FROM appointments a
                     LEFT JOIN panel_users pu ON pu.id = a.assigned_panel_user_id
                     WHERE a.id = %s
@@ -122,7 +152,15 @@ class AppointmentRepository:
                         """
                         SELECT a.*,
                             EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
-                                AS has_signed_contract
+                                AS has_signed_contract,
+                            EXISTS (
+                                SELECT 1 FROM contracts c
+                                WHERE c.appointment_id = a.id
+                                  AND (
+                                      c.artist_signature IS NULL
+                                      OR CHAR_LENGTH(TRIM(c.artist_signature)) < 80
+                                  )
+                            ) AS contract_pending_artist_signature
                         FROM appointments a
                         WHERE a.id = %s
                         LIMIT 1
@@ -136,6 +174,8 @@ class AppointmentRepository:
                 return None
             raw = row.get("has_signed_contract")
             row["has_signed_contract"] = bool(raw) if raw is not None else False
+            rawp = row.get("contract_pending_artist_signature")
+            row["contract_pending_artist_signature"] = bool(rawp) if rawp is not None else False
             return row
         finally:
             if conn:
@@ -149,7 +189,15 @@ class AppointmentRepository:
                 """
                 SELECT a.*,
                     EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
-                        AS has_signed_contract
+                        AS has_signed_contract,
+                    EXISTS (
+                        SELECT 1 FROM contracts c
+                        WHERE c.appointment_id = a.id
+                          AND (
+                              c.artist_signature IS NULL
+                              OR CHAR_LENGTH(TRIM(c.artist_signature)) < 80
+                          )
+                    ) AS contract_pending_artist_signature
                 FROM appointments a
                 ORDER BY a.created_at DESC
                 """
@@ -158,7 +206,229 @@ class AppointmentRepository:
             for row in rows:
                 raw = row.get("has_signed_contract")
                 row["has_signed_contract"] = bool(raw) if raw is not None else False
+                rawp = row.get("contract_pending_artist_signature")
+                row["contract_pending_artist_signature"] = bool(rawp) if rawp is not None else False
             return rows
+        finally:
+            if conn:
+                conn.close()
+
+    def _appointment_list_select_sql(self) -> str:
+        return """
+            SELECT a.*,
+                EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
+                    AS has_signed_contract,
+                EXISTS (
+                    SELECT 1 FROM contracts c
+                    WHERE c.appointment_id = a.id
+                      AND (
+                          c.artist_signature IS NULL
+                          OR CHAR_LENGTH(TRIM(c.artist_signature)) < 80
+                      )
+                ) AS contract_pending_artist_signature,
+                pu.username AS assigned_username,
+                pu.first_name AS assigned_first_name,
+                pu.last_name AS assigned_last_name,
+                pu.role AS assigned_role,
+                pu.store_id AS assigned_store_id,
+                (
+                    SELECT CONCAT(a.id, '-', LPAD(MOD(apr.id, 100), 2, '0'))
+                    FROM appointment_payment_receipts apr
+                    WHERE apr.appointment_id = a.id
+                    ORDER BY apr.id DESC
+                    LIMIT 1
+                ) AS receipt_label
+            FROM appointments a
+            LEFT JOIN panel_users pu ON pu.id = a.assigned_panel_user_id
+        """
+
+    def _search_where_clause(
+        self,
+        field: str,
+        term: str,
+    ) -> tuple[str, list[object]]:
+        """Devuelve fragmento SQL `WHERE ...` y parámetros (sin incluir filtros de asignado)."""
+        f = (field or "name").strip().lower()
+        raw = (term or "").strip()
+        if not raw:
+            raise ValueError("SEARCH_TERM_EMPTY")
+
+        if f == "name":
+            like = f"%{raw}%"
+            clause = """
+                (
+                    a.customer_name LIKE %s
+                    OR EXISTS (
+                        SELECT 1 FROM customers c
+                        WHERE c.id = a.customer_id
+                          AND CONCAT(TRIM(c.first_name), ' ', TRIM(c.last_name)) LIKE %s
+                    )
+                )
+            """
+            return clause, [like, like]
+
+        if f == "document":
+            doc = re.sub(r"\s+", "", raw)
+            like = f"%{doc}%"
+            clause = """
+                EXISTS (
+                    SELECT 1 FROM customers c
+                    WHERE c.id = a.customer_id
+                      AND REPLACE(REPLACE(c.document_number, ' ', ''), '.', '') LIKE %s
+                )
+            """
+            return clause, [like]
+
+        if f == "receipt":
+            params: list[object] = []
+            parts: list[str] = []
+            m = re.match(r"^(\d+)\s*-\s*(\d+)$", raw)
+            if m:
+                appt_id = int(m.group(1))
+                rec_tail = int(m.group(2))
+                parts.append(
+                    """
+                    EXISTS (
+                        SELECT 1 FROM appointment_payment_receipts apr
+                        WHERE apr.appointment_id = a.id
+                          AND a.id = %s
+                          AND (apr.id = %s OR MOD(apr.id, 100) = %s)
+                    )
+                    """
+                )
+                params.extend([appt_id, rec_tail, rec_tail])
+            if raw.isdigit():
+                n = int(raw)
+                parts.append(
+                    """
+                    (
+                        a.id = %s
+                        OR EXISTS (
+                            SELECT 1 FROM appointment_payment_receipts apr
+                            WHERE apr.appointment_id = a.id AND apr.id = %s
+                        )
+                    )
+                    """
+                )
+                params.extend([n, n])
+            like = f"%{raw}%"
+            parts.append(
+                """
+                EXISTS (
+                    SELECT 1 FROM appointment_payment_receipts apr
+                    WHERE apr.appointment_id = a.id
+                      AND (
+                          CAST(apr.id AS CHAR) LIKE %s
+                          OR apr.file_name LIKE %s
+                          OR CONCAT(a.id, '-', apr.id) LIKE %s
+                      )
+                )
+                """
+            )
+            params.extend([like, like, like])
+            return "(" + " OR ".join(parts) + ")", params
+
+        raise ValueError("SEARCH_FIELD_INVALID")
+
+    def search_appointments(
+        self,
+        *,
+        field: str,
+        term: str,
+        limit: int = 10,
+        offset: int = 0,
+        assigned_panel_user_id: Optional[int] = None,
+    ) -> tuple[list[dict[str, object]], int]:
+        where_search, params = self._search_where_clause(field, term)
+        clauses = [where_search]
+        all_params: list[object] = list(params)
+        if assigned_panel_user_id is not None:
+            clauses.append("a.assigned_panel_user_id = %s")
+            all_params.append(int(assigned_panel_user_id))
+        where_sql = " AND ".join(f"({c})" for c in clauses)
+        base_from = self._appointment_list_select_sql()
+        lim = max(1, min(int(limit), 50))
+        off = max(0, int(offset))
+
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            try:
+                cursor.execute(
+                    f"SELECT COUNT(DISTINCT a.id) AS c FROM appointments a WHERE {where_sql}",
+                    tuple(all_params),
+                )
+                total_row = cursor.fetchone() or {}
+                total = int(total_row.get("c") or 0)
+                cursor.execute(
+                    f"""
+                    {base_from}
+                    WHERE {where_sql}
+                    ORDER BY a.appointment_date DESC, a.id DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    tuple(all_params) + (lim, off),
+                )
+                rows = cursor.fetchall()
+            except Exception as e:
+                err = str(e)
+                if "Unknown column 'pu.store_id'" in err:
+                    cursor.execute(
+                        f"""
+                        SELECT a.*,
+                            EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
+                                AS has_signed_contract,
+                            EXISTS (
+                                SELECT 1 FROM contracts c
+                                WHERE c.appointment_id = a.id
+                                  AND (
+                                      c.artist_signature IS NULL
+                                      OR CHAR_LENGTH(TRIM(c.artist_signature)) < 80
+                                  )
+                            ) AS contract_pending_artist_signature,
+                            pu.username AS assigned_username,
+                            pu.first_name AS assigned_first_name,
+                            pu.last_name AS assigned_last_name,
+                            pu.role AS assigned_role,
+                            (
+                                SELECT CONCAT(a.id, '-', LPAD(MOD(apr.id, 100), 2, '0'))
+                                FROM appointment_payment_receipts apr
+                                WHERE apr.appointment_id = a.id
+                                ORDER BY apr.id DESC
+                                LIMIT 1
+                            ) AS receipt_label
+                        FROM appointments a
+                        LEFT JOIN panel_users pu ON pu.id = a.assigned_panel_user_id
+                        WHERE {where_sql}
+                        ORDER BY a.appointment_date DESC, a.id DESC
+                        LIMIT %s OFFSET %s
+                        """,
+                        tuple(all_params) + (lim, off),
+                    )
+                    rows = cursor.fetchall()
+                    cursor.execute(
+                        f"SELECT COUNT(DISTINCT a.id) AS c FROM appointments a WHERE {where_sql}",
+                        tuple(all_params),
+                    )
+                    total_row = cursor.fetchone() or {}
+                    total = int(total_row.get("c") or 0)
+                elif (
+                    "appointment_payment_receipts" in err
+                    or "Unknown column 'a.assigned_panel_user_id'" in err
+                ):
+                    return [], 0
+                else:
+                    raise
+            for row in rows:
+                raw = row.get("has_signed_contract")
+                row["has_signed_contract"] = bool(raw) if raw is not None else False
+                rawp = row.get("contract_pending_artist_signature")
+                row["contract_pending_artist_signature"] = (
+                    bool(rawp) if rawp is not None else False
+                )
+                if not row.get("receipt_label"):
+                    row["receipt_label"] = None
+            return rows, total
         finally:
             if conn:
                 conn.close()
@@ -290,6 +560,67 @@ class AppointmentRepository:
         finally:
             if conn: conn.close()
 
+    def get_row_for_payment_receipt(self, appointment_id: int) -> Optional[Any]:
+        """Cita + datos de cliente para PDF de recibo (nombre/teléfono/correo)."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT
+                    a.id,
+                    a.customer_id,
+                    a.customer_name,
+                    a.phone,
+                    a.service_type,
+                    a.detail,
+                    a.appointment_date,
+                    a.deposit,
+                    a.total_amount,
+                    a.pending_balance,
+                    a.status,
+                    c.first_name AS customer_first_name,
+                    c.last_name AS customer_last_name,
+                    c.phone_number AS customer_phone_number,
+                    c.email AS customer_email
+                FROM appointments a
+                LEFT JOIN customers c
+                    ON c.id = a.customer_id AND c.deleted_at IS NULL
+                WHERE a.id = %s
+                """,
+                (appointment_id,),
+            )
+            res = cursor.fetchone()
+            if not res:
+                return None
+            from types import SimpleNamespace
+
+            cust_name = (
+                f"{str(res.get('customer_first_name') or '').strip()} "
+                f"{str(res.get('customer_last_name') or '').strip()}"
+            ).strip()
+            appt_name = str(res.get("customer_name") or "").strip()
+            appt_phone = str(res.get("phone") or "").strip()
+            cust_phone = str(res.get("customer_phone_number") or "").strip()
+            return SimpleNamespace(
+                id=res["id"],
+                name=appt_name or cust_name,
+                phone=appt_phone or cust_phone,
+                service=(res.get("service_type") or "") or "",
+                service_type=(res.get("service_type") or "") or "",
+                date=self._appointment_datetime_sql_string(res.get("appointment_date")),
+                status=res.get("status"),
+                deposit=float(res.get("deposit") or 0),
+                total_amount=float(res.get("total_amount") or 0),
+                pending_balance=float(res.get("pending_balance") or 0),
+                customer_id=res.get("customer_id"),
+                detail=(res.get("detail") or "") or "",
+                customer_email=str(res.get("customer_email") or "").strip(),
+            )
+        finally:
+            if conn:
+                conn.close()
+
     # --- Métodos de Contratos ---
 
     def create_contract(self, data: ContractSign) -> int:
@@ -345,6 +676,40 @@ class AppointmentRepository:
             return cursor.fetchone() is not None
         finally:
             if conn: conn.close()
+
+    def get_latest_contract_row_for_appointment(self, appointment_id: int) -> Optional[dict[str, object]]:
+        """Último contrato de la cita (mayor id)."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT id, appointment_id, template_id, is_minor, contract_text,
+                       client_signature, tutor_signature, artist_signature
+                FROM contracts
+                WHERE appointment_id = %s
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (int(appointment_id),),
+            )
+            return cursor.fetchone()
+        finally:
+            if conn:
+                conn.close()
+
+    def update_contract_artist_signature(self, contract_id: int, artist_signature: str) -> None:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                "UPDATE contracts SET artist_signature = %s WHERE id = %s",
+                (artist_signature, int(contract_id)),
+            )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
 
     def get_contracts_by_customer(self, customer_id: int) -> list[dict[str, object]]:
         """Lista contratos firmados vinculados a un cliente."""
@@ -403,6 +768,36 @@ class AppointmentRepository:
         finally:
             if conn: conn.close()
 
+    def patch_appointment_meta(
+        self,
+        appointment_id: int,
+        *,
+        is_priority: bool,
+        assigned_panel_user_id: Optional[int] = None,
+        detail: Optional[str] = None,
+    ) -> None:
+        """Actualiza prioridad siempre y, opcionalmente, profesional asignado o detalle."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            clauses: list[str] = ["is_priority = %s"]
+            params: list[object] = [1 if is_priority else 0]
+            if assigned_panel_user_id is not None:
+                clauses.append("assigned_panel_user_id = %s")
+                params.append(assigned_panel_user_id)
+            if detail is not None:
+                clauses.append("detail = %s")
+                params.append(detail)
+            params.append(appointment_id)
+            cursor.execute(
+                f"UPDATE appointments SET {', '.join(clauses)} WHERE id = %s",
+                tuple(params),
+            )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
     def update_financials(self, appointment_id: int, total_amount: float, deposit: float, pending_balance: float) -> None:
         conn = self.db.get_connection()
         try:
@@ -428,10 +823,10 @@ class AppointmentRepository:
             cursor = self._get_cursor(conn, dictionary=True)
             cursor.execute(
                 """
-                SELECT id, appointment_id, amount, note, created_at
+                SELECT id, appointment_id, amount, note, paid_on, created_at
                 FROM appointment_payments
                 WHERE appointment_id = %s
-                ORDER BY created_at ASC, id ASC
+                ORDER BY COALESCE(paid_on, DATE(created_at)) ASC, created_at ASC, id ASC
                 """,
                 (appointment_id,),
             )
@@ -440,16 +835,22 @@ class AppointmentRepository:
             if conn:
                 conn.close()
 
-    def create_payment(self, appointment_id: int, amount: float, note: Optional[str] = None) -> int:
+    def create_payment(
+        self,
+        appointment_id: int,
+        amount: float,
+        note: Optional[str] = None,
+        paid_on: Optional[date] = None,
+    ) -> int:
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn)
             cursor.execute(
                 """
-                INSERT INTO appointment_payments (appointment_id, amount, note)
-                VALUES (%s, %s, %s)
+                INSERT INTO appointment_payments (appointment_id, amount, note, paid_on)
+                VALUES (%s, %s, %s, %s)
                 """,
-                (appointment_id, amount, note),
+                (appointment_id, amount, note, paid_on),
             )
             new_pid = int(cursor.lastrowid or 0)
             cursor.execute(
@@ -466,6 +867,97 @@ class AppointmentRepository:
         finally:
             if conn:
                 conn.close()
+
+    def sync_appointment_deposit_totals_from_payments(self, appointment_id: int) -> None:
+        """Recalcula deposit/pending desde la suma real de appointment_payments."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=False)
+            cursor.execute(
+                """
+                SELECT COALESCE(SUM(amount), 0)
+                FROM appointment_payments
+                WHERE appointment_id = %s
+                """,
+                (appointment_id,),
+            )
+            r1 = cursor.fetchone()
+            paid_sum = float(r1[0] or 0) if r1 else 0.0
+            cursor.execute(
+                "SELECT COALESCE(total_amount, 0) FROM appointments WHERE id = %s",
+                (appointment_id,),
+            )
+            r2 = cursor.fetchone()
+            total_amount = float(r2[0] or 0) if r2 else 0.0
+            dep = round(paid_sum, 2)
+            pending = round(max(total_amount - dep, 0.0), 2)
+            cursor.execute(
+                """
+                UPDATE appointments
+                SET deposit = %s,
+                    pending_balance = %s
+                WHERE id = %s
+                """,
+                (dep, pending, appointment_id),
+            )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
+    def get_payment_by_id(self, payment_id: int) -> Optional[dict[str, object]]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                "SELECT id, appointment_id, amount, note, paid_on, created_at FROM appointment_payments WHERE id = %s",
+                (int(payment_id),),
+            )
+            row = cursor.fetchone()
+            return row if isinstance(row, dict) else None
+        finally:
+            if conn:
+                conn.close()
+
+    def patch_payment_row(
+        self,
+        payment_id: int,
+        *,
+        amount: Optional[float] = None,
+        note: Any = "__NO_NOTE_CHANGE__",
+        paid_on: Any = "__NO_PAID_CHANGE__",
+    ) -> int:
+        """Devuelve appointment_id tras actualizar montos/metadata del abono y sincronizar totales."""
+        row = self.get_payment_by_id(payment_id)
+        if not row:
+            raise ValueError("Abono no encontrado")
+        appt_id = int(row["appointment_id"])
+        parts: list[str] = []
+        vals: list[object] = []
+        if amount is not None:
+            parts.append("amount = %s")
+            vals.append(float(amount))
+        if note != "__NO_NOTE_CHANGE__":
+            parts.append("note = %s")
+            vals.append(note)
+        if paid_on != "__NO_PAID_CHANGE__":
+            parts.append("paid_on = %s")
+            vals.append(paid_on)
+        if not parts:
+            self.sync_appointment_deposit_totals_from_payments(appt_id)
+            return appt_id
+        vals.append(int(payment_id))
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            sql_set = ", ".join(parts)
+            cursor.execute(f"UPDATE appointment_payments SET {sql_set} WHERE id = %s", tuple(vals))
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+        self.sync_appointment_deposit_totals_from_payments(appt_id)
+        return appt_id
 
     def insert_payment_ledger_row_only(
         self, appointment_id: int, amount: float, note: Optional[str] = None
@@ -603,6 +1095,51 @@ class AppointmentRepository:
             return cursor.fetchall()
         finally:
             if conn: conn.close()
+
+    def get_piercing_type_labels_by_appointment_ids(
+        self,
+        appointment_ids: list[int],
+        *,
+        question_id: int = 3,
+    ) -> dict[int, str]:
+        """Respuesta de encuesta «tipo de perforación» por cita (pregunta id 3 por defecto)."""
+        ids = sorted({int(x) for x in appointment_ids if int(x) > 0})
+        if not ids:
+            return {}
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            placeholders = ",".join(["%s"] * len(ids))
+            cursor.execute(
+                f"""
+                SELECT s.appointment_id, sa.answer_text
+                FROM surveys s
+                INNER JOIN survey_answers sa ON sa.survey_id = s.id
+                WHERE s.appointment_id IN ({placeholders})
+                  AND sa.question_id = %s
+                  AND sa.answer_text IS NOT NULL
+                  AND TRIM(sa.answer_text) <> ''
+                """,
+                (*ids, int(question_id)),
+            )
+            out: dict[int, str] = {}
+            for row in cursor.fetchall() or []:
+                try:
+                    appt_id = int(row.get("appointment_id") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if appt_id <= 0 or appt_id in out:
+                    continue
+                raw = row.get("answer_text")
+                if raw is None:
+                    continue
+                t = str(raw).strip()
+                if t:
+                    out[appt_id] = t
+            return out
+        finally:
+            if conn:
+                conn.close()
 
     def get_survey_answer_text(self, appointment_id: int, question_id: int) -> Optional[str]:
         """Texto en `survey_answers` (p. ej. opción elegida en radio/select)."""
@@ -1084,6 +1621,34 @@ class AppointmentRepository:
             if conn:
                 conn.close()
 
+    def link_payment_receipt_to_payment(
+        self,
+        receipt_id: int,
+        appointment_id: int,
+        appointment_payment_id: int,
+    ) -> bool:
+        """Vincula un recibo existente a una fila de appointment_payments (p. ej. abono inicial)."""
+        if receipt_id <= 0 or appointment_id <= 0 or appointment_payment_id <= 0:
+            return False
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                """
+                UPDATE appointment_payment_receipts
+                SET appointment_payment_id = %s
+                WHERE id = %s
+                  AND appointment_id = %s
+                  AND (appointment_payment_id IS NULL OR appointment_payment_id = 0)
+                """,
+                (int(appointment_payment_id), int(receipt_id), int(appointment_id)),
+            )
+            conn.commit()
+            return bool(cursor.rowcount)
+        finally:
+            if conn:
+                conn.close()
+
     def list_payment_receipts_by_appointment(self, appointment_id: int) -> list[dict[str, object]]:
         conn = self.db.get_connection()
         try:
@@ -1100,6 +1665,29 @@ class AppointmentRepository:
                 (appointment_id,),
             )
             return cursor.fetchall()
+        finally:
+            if conn:
+                conn.close()
+
+    def get_payment_receipt_for_resend(
+        self, appointment_id: int, receipt_id: int
+    ) -> Optional[dict[str, object]]:
+        """Metadatos + PDF para reenviar el recibo por n8n."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT id, appointment_id, customer_id, appointment_payment_id, kind,
+                       amount, note, file_name, pdf
+                FROM appointment_payment_receipts
+                WHERE id = %s AND appointment_id = %s
+                LIMIT 1
+                """,
+                (receipt_id, appointment_id),
+            )
+            row = cursor.fetchone()
+            return row if isinstance(row, dict) else None
         finally:
             if conn:
                 conn.close()

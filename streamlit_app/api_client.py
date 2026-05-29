@@ -8,6 +8,9 @@ import requests
 
 DEFAULT_BASE = "http://127.0.0.1:5000"
 
+# Sentinel para PATCH de abono: campo omitido (no se sobrescribe en API).
+_PAY_PATCH_OMIT = object()
+
 
 def base_url() -> str:
     return os.getenv("API_BASE_URL", DEFAULT_BASE).rstrip("/")
@@ -35,6 +38,25 @@ def _request(
     return ok, r.status_code, data
 
 
+def search_appointments(
+    *,
+    field: str,
+    q: str,
+    limit: int = 10,
+    offset: int = 0,
+    assigned_panel_user_id: Optional[int] = None,
+) -> Tuple[bool, int, Any]:
+    params: Dict[str, Any] = {
+        "field": field,
+        "q": q,
+        "limit": int(limit),
+        "offset": int(offset),
+    }
+    if assigned_panel_user_id is not None:
+        params["assigned_panel_user_id"] = int(assigned_panel_user_id)
+    return _request("GET", "/api/appointments/search", params=params)
+
+
 def get_appointments(assigned_panel_user_id: Optional[int] = None) -> Tuple[bool, int, Any]:
     params: Optional[Dict[str, Any]] = None
     if assigned_panel_user_id is not None:
@@ -45,6 +67,20 @@ def get_appointments(assigned_panel_user_id: Optional[int] = None) -> Tuple[bool
 def get_appointment(appointment_id: int) -> Tuple[bool, int, Any]:
     """Detalle de una cita (mismo formato que cada elemento del listado)."""
     return _request("GET", f"/api/appointments/{int(appointment_id)}")
+
+
+def get_appointments_work_performed_labels(
+    appointment_ids: list[int],
+) -> Tuple[bool, int, Any]:
+    """Mapa id cita → tipo de perforación (encuesta), para reporte financiero."""
+    ids = sorted({int(x) for x in appointment_ids if int(x) > 0})
+    if not ids:
+        return True, 200, {}
+    return _request(
+        "GET",
+        "/api/appointments/work-performed-labels",
+        params={"ids": ",".join(str(i) for i in ids)},
+    )
 
 
 def post_appointment(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
@@ -74,6 +110,25 @@ def patch_appointment_reschedule(
     )
 
 
+def patch_appointment_meta(
+    appointment_id: int,
+    *,
+    assigned_panel_user_id: Optional[int],
+    is_priority: bool,
+    detail: Optional[str],
+) -> Tuple[bool, int, Any]:
+    body: Dict[str, Any] = {"is_priority": bool(is_priority)}
+    if assigned_panel_user_id is not None:
+        body["assigned_panel_user_id"] = int(assigned_panel_user_id)
+    if detail is not None:
+        body["detail"] = detail
+    return _request(
+        "PATCH",
+        f"/api/appointments/{int(appointment_id)}/meta",
+        json_body=body,
+    )
+
+
 def patch_appointment_financials(
     appointment_id: int,
     total_amount: float,
@@ -96,12 +151,42 @@ def get_appointment_payments(appointment_id: int) -> Tuple[bool, int, Any]:
 
 
 def post_appointment_payment(
-    appointment_id: int, amount: float, note: Optional[str] = None
+    appointment_id: int,
+    amount: float,
+    note: Optional[str] = None,
+    paid_on: Optional[str] = None,
 ) -> Tuple[bool, int, Any]:
+    body: Dict[str, Any] = {"amount": float(amount)}
+    if note is not None:
+        body["note"] = note
+    if paid_on is not None:
+        body["paid_on"] = paid_on
     return _request(
         "POST",
         f"/api/appointments/{appointment_id}/payments",
-        json_body={"amount": float(amount), "note": note},
+        json_body=body,
+    )
+
+
+def patch_appointment_payment(
+    appointment_id: int,
+    payment_id: int,
+    *,
+    amount: Optional[float] = None,
+    note: Any = _PAY_PATCH_OMIT,
+    paid_on: Any = _PAY_PATCH_OMIT,
+) -> Tuple[bool, int, Any]:
+    payload: Dict[str, Any] = {}
+    if amount is not None:
+        payload["amount"] = float(amount)
+    if note is not _PAY_PATCH_OMIT:
+        payload["note"] = note
+    if paid_on is not _PAY_PATCH_OMIT:
+        payload["paid_on"] = paid_on
+    return _request(
+        "PATCH",
+        f"/api/appointments/{int(appointment_id)}/payments/{int(payment_id)}",
+        json_body=payload,
     )
 
 
@@ -127,8 +212,23 @@ def fetch_appointment_receipt_pdf(appointment_id: int, receipt_id: int) -> Tuple
     return True, r.status_code, r.content, fname
 
 
+def post_resend_appointment_receipt(appointment_id: int, receipt_id: int) -> Tuple[bool, int, Any]:
+    return _request(
+        "POST",
+        f"/api/appointments/{int(appointment_id)}/receipts/{int(receipt_id)}/resend",
+    )
+
+
 def post_contract(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
     return _request("POST", "/api/contracts", json_body=payload)
+
+
+def get_contract_latest_summary_for_appointment(appointment_id: int) -> Tuple[bool, int, Any]:
+    return _request("GET", f"/api/contracts/appointment/{int(appointment_id)}/latest-summary")
+
+
+def post_contract_complete_artist_signature(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
+    return _request("POST", "/api/contracts/complete-artist-signature", json_body=payload)
 
 
 def get_customer_contracts(customer_id: int) -> Tuple[bool, int, Any]:
@@ -170,7 +270,7 @@ def post_panel_user_register(
     last_name: str = "",
     address: Optional[str] = None,
     phone: Optional[str] = None,
-    store: str = "cherry_tattoo",
+    store_id: int = 1,
     role: str = "vendedor",
 ) -> Tuple[bool, int, Any]:
     body: Dict[str, Any] = {
@@ -178,7 +278,7 @@ def post_panel_user_register(
         "password": password,
         "first_name": first_name,
         "last_name": last_name,
-        "store": store,
+        "store_id": int(store_id),
         "role": role,
     }
     if address is not None:
@@ -308,6 +408,32 @@ def put_customer(customer_id: int, payload: Dict[str, Any]) -> Tuple[bool, int, 
 
 def delete_customer(customer_id: int) -> Tuple[bool, int, Any]:
     return _request("DELETE", f"/api/customers/{customer_id}")
+
+
+# --- Tiendas ---
+
+
+def get_stores(*, include_inactive: bool = False) -> Tuple[bool, int, Any]:
+    params: Dict[str, Any] = {}
+    if include_inactive:
+        params["include_inactive"] = True
+    return _request("GET", "/api/stores", params=params or None)
+
+
+def get_store(store_id: int) -> Tuple[bool, int, Any]:
+    return _request("GET", f"/api/stores/{int(store_id)}")
+
+
+def post_store(payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
+    return _request("POST", "/api/stores", json_body=payload)
+
+
+def put_store(store_id: int, payload: Dict[str, Any]) -> Tuple[bool, int, Any]:
+    return _request("PUT", f"/api/stores/{int(store_id)}", json_body=payload)
+
+
+def delete_store(store_id: int) -> Tuple[bool, int, Any]:
+    return _request("DELETE", f"/api/stores/{int(store_id)}")
 
 
 def get_health_n8n() -> Tuple[bool, int, Any]:

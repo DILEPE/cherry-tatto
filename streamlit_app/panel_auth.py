@@ -21,13 +21,9 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from app.domain.panel_modules import ASSIGNABLE_PANEL_MODULE_KEYS
-from app.domain.panel_user_profile import (
-    PANEL_ROLE_CHOICES,
-    PANEL_ROLE_LABEL_ES,
-    PANEL_STORE_CHOICES,
-    PANEL_STORE_LABEL_ES,
-)
+from app.domain.panel_user_profile import PANEL_ROLE_CHOICES, PANEL_ROLE_LABEL_ES
 from streamlit_app import api_client
+from streamlit_app.store_choices import load_store_choices, store_display_label
 
 _ENV_ON: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
 """Segundos: debe ser ≥ duración CSS de la cortina (0.52s) para no crear widgets antes."""
@@ -415,21 +411,7 @@ def _inject_login_brand_styles() -> None:
     st.markdown(
         """
         <style>
-          /* Recuadro centrado: columna media que contiene el marcador oculto */
-          section.main [data-testid="column"]:has(.panel-login-frame-root) {
-            background: linear-gradient(165deg, rgba(44, 44, 52, 0.96), rgba(28, 28, 34, 0.99));
-            border: 1px solid rgba(255, 255, 255, 0.14);
-            border-radius: 20px;
-            padding: 1.5rem 1.35rem 1.75rem !important;
-            box-shadow:
-              0 0 0 1px rgba(255, 0, 127, 0.14),
-              0 20px 56px rgba(0, 0, 0, 0.55),
-              inset 0 1px 0 rgba(255, 255, 255, 0.08);
-            margin-top: 0.75rem;
-            margin-bottom: 1rem;
-            overflow: hidden;
-            isolation: isolate;
-          }
+          /* Recuadro: fondo/borde en styles/_theme_panel.css (tema claro/oscuro) */
           /* Streamlit pinta los widgets después del markdown en el mismo bloque: sin esto,
              usuario/contraseña quedan por debajo de la cortina en el apilamiento.
              Cuando la cortina está subida (--locked-open), el shell se colapsa para no solapar.
@@ -689,6 +671,7 @@ def render_login_gate() -> bool:
                         st.session_state["_panel_auth_ok"] = True
                         _set_env_operator_session()
                         st.session_state["_panel_warm_after_login"] = True
+                        st.session_state["_panel_reset_to_citas"] = True
                         _pop_login_curtain_ui_state()
                         st.rerun()
                     else:
@@ -754,6 +737,7 @@ def render_login_gate() -> bool:
                                 _clear_db_panel_identity()
                             st.session_state["_panel_auth_ok"] = True
                             st.session_state["_panel_warm_after_login"] = True
+                            st.session_state["_panel_reset_to_citas"] = True
                             _pop_login_curtain_ui_state()
                             st.rerun()
                         else:
@@ -797,10 +781,11 @@ def render_login_gate() -> bool:
                     reg_ln = st.text_input("Apellido", key="_panel_reg_ln")
                     reg_addr = st.text_input("Dirección", key="_panel_reg_addr")
                     reg_phone = st.text_input("Celular", key="_panel_reg_phone")
-                    reg_store = st.selectbox(
+                    _reg_store_ids, _reg_store_labels = load_store_choices()
+                    reg_store_id = st.selectbox(
                         "Tienda",
-                        options=list(PANEL_STORE_CHOICES),
-                        format_func=lambda x: PANEL_STORE_LABEL_ES[str(x)],
+                        options=_reg_store_ids,
+                        format_func=lambda x: store_display_label(int(x), _reg_store_labels),
                         key="_panel_reg_store",
                     )
                     reg_role = st.selectbox(
@@ -822,7 +807,7 @@ def render_login_gate() -> bool:
                             last_name=(reg_ln or "").strip(),
                             address=(reg_addr or "").strip() or None,
                             phone=(reg_phone or "").strip() or None,
-                            store=reg_store,
+                            store_id=int(reg_store_id),
                             role=reg_role,
                         )
                         if ok:
@@ -843,10 +828,17 @@ def render_login_gate() -> bool:
     st.stop()
 
 
-def panel_logout_button() -> None:
+def panel_logout_button(*, compact: bool = False) -> None:
     """Botón en la barra lateral: solo tiene efecto si el login del panel está activo."""
     if not panel_auth_enabled() or not st.session_state.get("_panel_auth_ok"):
         return
-    if st.button("Cerrar sesión", use_container_width=True, key="_panel_logout_btn"):
+    label = "" if compact else "Cerrar sesión"
+    if st.button(
+        label,
+        icon=":material/logout:",
+        use_container_width=True,
+        key="_panel_logout_btn",
+        help="Cerrar sesión",
+    ):
         _logout_clear_all()
         st.rerun()

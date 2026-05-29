@@ -1,0 +1,607 @@
+---
+description: Aplica esta arquitectura en todo cambio dentro de Streamlit (`streamlit_app/`). CSS externo en `styles/`, componentes HTML como funciones `_html`, estado documentado en `state/`, renders delgados y sin `_CAL_PILL_THEME`/inline salvo geometría dinámica.
+globs:
+  - "streamlit_app/**/*.py"
+alwaysApply: true
+---
+
+# Streamlit Tab Architecture — Reglas del proyecto
+
+## Jerarquía de archivos obligatoria
+
+Antes de editar cualquier tab, verifica que esta estructura exista. Si no, créala:
+
+```
+streamlit_app/
+├── styles/
+│   ├── inject.py            # Concatena `_*.css` → un solo <style> en runtime
+│   ├── __init__.py
+│   ├── _tokens.css          # Marca / botón primary
+│   ├── _pills.css           # .ap-pill, .cli-pill-* (+ --report-inline, --cal-cell)
+│   ├── _calendar.css        # Mes (.cal-*), semana (.twg-*), filas overflow del diálogo
+│   ├── _flags.css           # .svc-flag-*
+│   └── _legend.css          # Leyenda chips colores citas
+├── components/
+│   ├── pills.py             # pills de estado/cliente (`status_pill_html`, `client_pill_class`, …)
+│   ├── citas_legend.py      # render_citas_color_legend()
+│   ├── service_flags.py     # service_type_flag_html()
+│   ├── calendar_cells.py     # HTML de líneas/agrupación día e inner body calendario (overflow)
+│   ├── calendar_focus_dialogs.py # @st.dialog ficha/edición desde calendario (+ overflow día); deps vía sesión
+│   ├── calendar_week_schedule.py # Rejilla semanal (Outlook/Teams), bridge JS `twg_*`
+│   ├── calendar_month_footer.py  # Pie mes + botones ocultos agendar + bridge `.cal-footer-book`
+│   └── calendar_main_month.py # `@st.fragment` calendario mensual (rejilla + `MONTHS_ES`)
+├── state/
+│   ├── appointment_keys.py  # Contrato `_ap_*` (documentación hasta mover sync/form)
+│   ├── appointment_cache.py # purge cachés abonos/recibos + get_appointment_payments_cached por cita
+│   ├── appointments.py      # Pendiente: fetch / sync
+│   └── form_state.py        # Pendiente: formulario nueva cita
+├── appointment_dates.py       # fecha/hora normalizada desde filas API (`appointment_row_date`, …)
+├── appointment_agenda_slots.py  # marcador `[agenda_slots:N]`, duración en franjas 30 min
+├── appointment_slots.py       # opciones HH:MM, ocupación/agenda disponible (`time_slot_options`, …)
+├── appointment_filters.py     # `filter_appointment_rows` (sin `session_state`; orquestador aplica filtros)
+├── appointment_staff_labels.py  # etiquetas artista/asignado
+├── citas_financial_export.py  # XLSX financiero del panel Citas (`citas_filtered_to_excel_bytes`)
+├── citas_booking_meta.py      # work kinds al agendar (servicio API + etiqueta detalle)
+├── citas_panel_staff.py       # `ensure_assignable_staff`
+├── citas_schedule_queries.py # ocupación por día/profesional para huecos en agenda
+├── citas_row_policy.py       # políticas UI por fila (p. ej. reprogramación)
+├── citas_agendar_dialog.py    # Orquestador @st.dialog; reexporta API agendar estable
+├── citas_agendar_state.py     # `ap_*`: init/pop/reset, cola mensaje tras crear cita
+├── citas_agendar_pure.py       # texto detalle desde diseño+notas; clamp franjas 30 min
+├── citas_agendar_helpers.py   # `show_validation_errors`, helpers que leen `session_state`
+├── citas_agendar_customer.py # `booking_customer_create_for_existing_client`
+├── citas_agendar_sections.py  # Piezas Streamlit recomponibles (`render_agendar_booking_form_body`, …)
+├── citas_agendar_submit.py    # `handle_agendar_booking_submit`, pie Crear/Cancelar
+├── citas_detail_dialogs.py   # reprogramar, montos, anular, recibos
+├── http_error_detail.py      # texto corto errores HTTP (JSON API)
+├── reporte_finanzas_citas.py # bloque Finanzas en pestaña Reporte
+├── survey_question_stats_report.py  # subsección Encuestas del Reporte
+├── citas_tab.py             # orquestador: calendario, invocación de diálogos, warm session
+└── reporte_tab.py           # Reexport hasta separar vistas de informe financiero
+```
+
+Scripts puntuales de extracción/podado desde `citas_tab.py`: ver `scripts/README-citas-tab-refactor.md` (no usar en el flujo diario de la app).
+
+---
+
+## Regla 1 — NUNCA uses estilos inline en HTML generado
+
+### ❌ PROHIBIDO
+
+```python
+# Inline styles dispersos en funciones de render
+return (
+    f"<div style='font-size:0.86rem;line-height:1.5;margin:0.4rem 0;"
+    f"border-bottom:1px solid rgba(148,163,184,0.35);display:flex'>"
+    f"<span style='font-weight:600'>{hm}</span></div>"
+)
+
+# Dict de temas inline
+_CAL_PILL_THEME: dict[str, str] = {
+    "cli-pill-cancelada": "background:#ef4444;color:#fff;border:1px solid #dc2626;",
+}
+```
+
+### ✅ CORRECTO
+
+```python
+# Solo clases CSS definidas en styles/_pills.css
+return (
+    f'<div class="overflow-row">'
+    f'<span class="overflow-row__time">{hm}</span>'
+    f'<span class="cli-pill {cls}">{name}</span>'
+    f'</div>'
+)
+```
+
+**Excepción controlada:** en layout **absoluto** (p. ej. bloques `.twg-appt` en la vista semanal), permite `style=` **solo** con coordenadas calculadas (`top`, `height`, `left`, `width`, `margin`). Color, borde y tipografía deben estar en `_*.css`, no en ese `style`.
+
+**Regla de oro:** Si un elemento HTML necesita más de un atributo de estilo cosmético, debe tener clase CSS — no repetir `_CAL_PILL_THEME` ni colores inline.
+
+---
+
+## Regla 2 — CSS centralizado (inyección única)
+
+Toda la hoja del tab Citas sale de **`streamlit_app/styles/inject.py`**, que concatena `_tokens.css` → `_pills.css` → `_calendar.css` → `_flags.css` → `_legend.css`. En `citas_tab` se usa `inject_via_streamlit_lazy()` al inicio de cada render público (`_inject_citas_shared_styles`).
+
+### Patrón correcto
+
+```python
+# Al inicio del módulo — fuente de verdad única
+_STYLES = """
+<style>
+/* ── Tokens de marca ─────────────── */
+:root {
+  --brand:        #d90064;
+  --brand-light:  rgba(217,0,100,0.08);
+  --brand-border: rgba(217,0,100,0.3);
+  --radius-sm:    4px;
+  --radius-md:    7px;
+  --c-border:     rgba(148,163,184,0.22);
+  --c-muted:      rgba(148,163,184,0.6);
+}
+
+/* ── Pills de estado (tabla) ─────── */
+.ap-pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.18rem 0.62rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+.pill-agendada    { background:#e8f1ff; color:#16406f; border-color:#bdd2f4; }
+.pill-reprogramada{ background:#fff2df; color:#7a4a03; border-color:#f5d3a0; }
+.pill-cancelada   { background:#fdeaea; color:#7f1f1f; border-color:#efbcbc; }
+.pill-finalizada  { background:#e8f8ec; color:#1f6b31; border-color:#b8e2c2; }
+.pill-default     { background:#f2f3f5; color:#374151; border-color:#d1d5db; }
+
+/* ── Pills de cliente (calendario) ─ */
+.cli-pill { display:inline-flex; align-items:center; gap:4px;
+            border-radius:var(--radius-sm); padding:2px 5px;
+            font-size:10px; font-weight:500; line-height:1.3; }
+.cli-pill::before { content:''; width:5px; height:5px;
+                    border-radius:50%; flex-shrink:0; }
+.cli-pill-new           { background:#EDE9FE; color:#4c1d95; }
+.cli-pill-new::before   { background:#7c3aed; }
+.cli-pill-returning     { background:#EBF0FF; color:#1e3a8a; }
+.cli-pill-returning::before { background:#3b82f6; }
+.cli-pill-priority      { background:#FDF2F8; color:#831843; }
+.cli-pill-priority::before  { background:#db2777; }
+.cli-pill-reprogramada  { background:#FFFBEB; color:#78350f; }
+.cli-pill-reprogramada::before { background:#f59e0b; }
+.cli-pill-cancelada     { background:#FEF2F2; color:#7f1d1d; opacity:.65; }
+.cli-pill-cancelada::before { background:#ef4444; }
+
+/* ── Calendario: celda ───────────── */
+.cal-cell {
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  padding: 6px;
+  min-height: 6.5rem;
+  background: var(--color-surface, #fff);
+  display: flex; flex-direction: column; gap: 3px;
+}
+.cal-cell:hover { border-color: rgba(148,163,184,0.45); }
+.cal-cell-today { border-color: var(--brand-border);
+                  background: var(--brand-light); }
+.cal-day-num    { font-size:11px; font-weight:600;
+                  color:var(--c-muted); margin-bottom:2px; }
+.cal-cell-today .cal-day-num { color: var(--brand); }
+.cal-day-inner  { display:flex; flex-direction:column; gap:3px;
+                  flex:1; min-width:0; }
+.cal-day-empty  { flex:1; display:flex; align-items:center;
+                  justify-content:center; font-size:10px; opacity:.35; }
+.cal-cell-spacer { min-height:.5rem; }
+
+/* ── Badges de servicio ──────────── */
+.svc-flag { display:inline-block; font-size:10px; font-weight:600;
+            padding:1px 6px; border-radius:3px; white-space:nowrap; }
+.svc-flag-tattoo   { background:#1e293b; color:#f1f5f9; }
+.svc-flag-piercing { background:#EDE9FE; color:#5b21b6; }
+.svc-flag-limpieza { background:#ECFEFF; color:#0e7490; }
+.svc-flag-cambio   { background:#FFFBEB; color:#78350f; }
+.svc-flag-other, .svc-flag-unknown { background:#F3F4F6; color:#6b7280; }
+
+/* ── Leyenda ─────────────────────── */
+.cita-legend-strip {
+  display:flex; flex-wrap:wrap; gap:6px 16px;
+  padding:8px 12px;
+  border:1px solid var(--c-border);
+  border-radius:var(--radius-md); margin-bottom:8px;
+}
+.cita-legend-item  { display:inline-flex; align-items:center; gap:6px; }
+.cita-legend-swatch { width:9px; height:9px; border-radius:3px; }
+.cita-legend-label  { font-size:11px; color:var(--c-muted); }
+
+/* ── Botón primario (marca) ──────── */
+[data-testid="stMain"] button[data-testid="baseButton-primary"] {
+  background: var(--brand) !important;
+  color: #fff !important;
+  border: none !important;
+}
+</style>
+"""
+
+def _inject_shared_styles() -> None:
+    """Emite el CSS completo del módulo — llamar al inicio de cada render_*_tab()."""
+    st.markdown(_STYLES, unsafe_allow_html=True)
+```
+
+**Nunca duplicar** `_inject_shared_styles()` entre tabs. Si dos tabs usan el mismo CSS, mueve `_STYLES` a `streamlit_app/styles/shared.py`.
+
+---
+
+## Regla 3 — Componentes HTML son funciones puras sin lógica de negocio
+
+Cada función que genera HTML debe:
+- Recibir **solo los datos que necesita** (no `row` completo si solo usa `status`)
+- Retornar `str` (nunca llamar `st.markdown` internamente)
+- Tener nombre con sufijo `_html`
+
+### Plantilla de componente
+
+```python
+# components/pills.py
+
+import html as html_mod
+from typing import Any
+
+def status_pill_html(status: str) -> str:
+    """Pill de estado para la tabla de citas."""
+    cls = {
+        "agendada":    "pill-agendada",
+        "reprogramada":"pill-reprogramada",
+        "cancelada":   "pill-cancelada",
+        "finalizada":  "pill-finalizada",
+    }.get((status or "").strip().lower(), "pill-default")
+    return f'<span class="ap-pill {cls}">{html_mod.escape(status or "Agendada")}</span>'
+
+
+def client_pill_html(
+    name: str,
+    css_class: str,          # calculado por _client_pill_class()
+    *,
+    short_name: bool = False,
+    max_len: int = 18,
+) -> str:
+    """Pill de nombre de cliente para celda del calendario."""
+    display = _shorten(name, max_len) if short_name else name
+    return (
+        f'<span class="cli-pill {html_mod.escape(css_class)}">'
+        f'{html_mod.escape(display)}</span>'
+    )
+
+
+def _shorten(name: str, max_len: int) -> str:
+    nm = (name or "").strip() or "—"
+    if len(nm) <= max_len:
+        return nm
+    parts = nm.split()
+    return parts[0][:max_len] if parts else nm[:max_len - 1] + "…"
+```
+
+---
+
+## Regla 4 — Contrato de caché en session_state
+
+Todas las claves de `st.session_state` siguen el prefijo `_<módulo>_` y se documentan en una constante al inicio del módulo.
+
+```python
+# state/appointments.py
+
+# ── Claves de session_state (fuente de verdad) ─────────────────────────
+_KEY_LIST          = "_ap_list"           # list[dict] — citas cargadas de la API
+_KEY_ERR           = "_ap_err"            # str | None — error del último fetch
+_KEY_RELOAD        = "_ap_reload"         # bool — forzar recarga en próximo rerun
+_KEY_LAST_QID      = "_ap_last_fetch_qid" # int | None — filtro de usuario en último fetch
+_KEY_ACTION_MSG    = "_ap_action_info"    # str | None — mensaje de éxito pendiente
+_KEY_PAYMENTS_PFX  = "_ap_fin_payments_"  # + appt_id → tuple(ok, code, data)
+_KEY_RECEIPTS_PFX  = "_ap_receipts_list_" # + appt_id → tuple(ok, code, data)
+
+# ── Invalidación explícita ─────────────────────────────────────────────
+
+def invalidate_appointment_cache(*, payments: bool = True, receipts: bool = True) -> None:
+    """Llama tras cualquier escritura (POST/PATCH) que afecte citas o abonos."""
+    st.session_state[_KEY_RELOAD] = True
+    if payments:
+        _purge_prefixed(_KEY_PAYMENTS_PFX)
+    if receipts:
+        _purge_prefixed(_KEY_RECEIPTS_PFX)
+
+
+def _purge_prefixed(prefix: str) -> None:
+    for k in [k for k in st.session_state if isinstance(k, str) and k.startswith(prefix)]:
+        st.session_state.pop(k, None)
+
+
+def sync_from_api(*, force: bool = False) -> None:
+    """GET /appointments solo si hay cambio de filtro o flag _KEY_RELOAD activo."""
+    qid = _query_assigned_user_id()
+    prev = st.session_state.get(_KEY_LAST_QID)
+    if not force and not st.session_state.get(_KEY_RELOAD, True) and prev == qid:
+        return
+    with st.spinner("Actualizando citas…"):
+        ok, code, data = api_client.get_appointments(assigned_panel_user_id=qid)
+    if ok and isinstance(data, list):
+        st.session_state[_KEY_LIST] = _filter_for_role(data)
+        st.session_state[_KEY_ERR]  = None
+    else:
+        st.session_state[_KEY_LIST] = []
+        st.session_state[_KEY_ERR]  = f"HTTP {code}: {data}"
+    st.session_state[_KEY_RELOAD]   = False
+    st.session_state[_KEY_LAST_QID] = qid
+    _purge_prefixed(_KEY_PAYMENTS_PFX)
+    _purge_prefixed(_KEY_RECEIPTS_PFX)
+
+
+def get_payments_cached(appt_id: int) -> tuple[bool, int, Any]:
+    """Caché por cita y sesión; se invalida con invalidate_appointment_cache(payments=True)."""
+    key = f"{_KEY_PAYMENTS_PFX}{int(appt_id)}"
+    hit = st.session_state.get(key)
+    if isinstance(hit, tuple) and len(hit) == 3:
+        return hit[0], hit[1], hit[2]
+    result = api_client.get_appointment_payments(appt_id)
+    st.session_state[key] = result
+    return result
+```
+
+### Reglas de caché
+
+| Situación | Acción |
+|---|---|
+| GET exitoso de lista | `_KEY_RELOAD = False`, guardar en `_KEY_LIST` |
+| POST/PATCH exitoso | `_KEY_RELOAD = True` + `invalidate_appointment_cache()` |
+| Cambio de filtro de profesional | `_KEY_RELOAD = True` (lo detecta `sync_from_api`) |
+| Cambio de pestaña (rerun) | `sync_from_api()` evalúa si recargar o no |
+| Error de red | `_KEY_LIST = []`, `_KEY_ERR = mensaje`, NO cambiar `_KEY_RELOAD` |
+
+---
+
+## Regla 5 — Funciones render_*_tab() son solo orquestadoras
+
+Las funciones `render_*_tab()` **no deben** contener lógica de filtrado, cálculos financieros ni generación de HTML. Solo:
+1. Inicializar estado
+2. Inyectar estilos
+3. Sincronizar API
+4. Delegar a sub-renders
+
+```python
+# citas_tab.py
+
+def render_citas_tab() -> None:
+    """Punto de entrada del tab — solo orquestación."""
+    _init_tab_state()          # session_state keys con defaults
+    _inject_shared_styles()    # CSS completo del módulo
+    sync_from_api()            # state/appointments.py
+
+    _render_feedback_toasts()  # errores y confirmaciones pendientes
+
+    items = list(st.session_state.get(_KEY_LIST) or [])
+    hist_counts = _appointment_counts_by_client(items)
+    by_day = _appointments_by_day_sorted(
+        _apply_calendar_filters(items)
+    )
+
+    _invoke_dialogs(by_day, hist_counts)  # diálogos primero (overlay DOM)
+    _render_calendar_header()             # título + botón Cita express
+    _render_calendar_filters(items)       # filtros nombre/servicio/estado
+    _render_main_calendar(by_day, hist_counts)
+```
+
+**Máximo 15 líneas** en una función `render_*_tab()`. Si crece más, extraer una función `_render_<sección>()`.
+
+---
+
+## Regla 6 — Diálogos @st.dialog son módulos independientes
+
+Cada `@st.dialog` vive en su propia función con prefijo `_dialog_`. No comparte lógica con el render principal salvo a través de `session_state`.
+
+```python
+# Patrón de apertura — siempre desde session_state, nunca parámetros directos
+def _open_dialog_reprogramar(row: dict[str, Any]) -> None:
+    st.session_state["_ap_reprogram_item"] = row
+    st.rerun()
+
+# Patrón de cierre — limpiar TODAS las claves del diálogo
+def _close_dialog_reprogramar() -> None:
+    for k in ("_ap_reprogram_item", "_ap_reprogram_seed_appt_id",
+              "ap_reprogram_date", "ap_reprogram_slot", "ap_reprogram_detail"):
+        st.session_state.pop(k, None)
+
+@st.dialog("Reprogramar cita", width="medium", dismissible=False)
+def _dialog_reprogramar_cita() -> None:
+    appt = st.session_state.get("_ap_reprogram_item") or {}
+    appt_id = int(appt.get("id", 0) or 0)
+    if appt_id <= 0:
+        st.error("No se encontró la cita.")
+        if st.button("Cerrar", use_container_width=True):
+            _close_dialog_reprogramar()
+            st.rerun()
+        return
+    # ... lógica del diálogo ...
+```
+
+---
+
+## Regla 7 — Separación de cálculos financieros
+
+Los cálculos de montos **nunca** ocurren en funciones de render ni en generadores de HTML. Se centralizan en un módulo de dominio:
+
+```python
+# app/domain/financials.py
+
+from dataclasses import dataclass
+from typing import Any
+
+@dataclass(frozen=True, slots=True)
+class AppointmentFinancials:
+    total:    float
+    deposit:  float
+    pending:  float
+    credit:   float
+
+    def format_cop(self, v: float) -> str:
+        return f"COP ${int(round(v)):,.0f}".replace(",", ".")
+
+    @property
+    def total_fmt(self)   -> str: return self.format_cop(self.total)
+    @property
+    def deposit_fmt(self) -> str: return self.format_cop(self.deposit)
+    @property
+    def pending_fmt(self) -> str: return self.format_cop(self.pending)
+    @property
+    def credit_fmt(self)  -> str: return self.format_cop(self.credit)
+
+
+def from_row(row: dict[str, Any]) -> AppointmentFinancials:
+    """Fuente de verdad única para calcular montos de una fila de cita."""
+    deposit = max(_to_float(row.get("deposit")), 0.0)
+    total   = max(_to_float(row.get("total_amount")), deposit)
+    credit  = max(_to_float(row.get("customer_credit")), 0.0)
+    raw_pb  = row.get("pending_balance")
+    pending = (
+        max(round(_to_float(raw_pb), 2), 0.0)
+        if raw_pb is not None and raw_pb != ""
+        else max(round(total - deposit - credit, 2), 0.0)
+    )
+    return AppointmentFinancials(total=total, deposit=deposit,
+                                 pending=pending, credit=credit)
+
+def _to_float(v: Any, default: float = 0.0) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+```
+
+Uso en el render:
+
+```python
+from app.domain.financials import from_row
+
+fin = from_row(r)
+c5.write(fin.total_fmt)
+c6.write(fin.deposit_fmt)
+c7.write(fin.pending_fmt)
+```
+
+---
+
+## Regla 8 — Filtros de vista son funciones puras
+
+La **lógica** de filtrado no debe leer `st.session_state`; recibe valores como parámetros (`filter_appointment_rows` en `appointment_filters.py`). El tab puede exponer `_apply_*` solo como **orquestador** que lee claves de sesión y delega.
+
+```python
+# ❌ Bucle de filtro embebido en el tab — duplicación y sin tests unitarios claros
+def _apply_appointment_filters(items):
+    for row in items:
+        if text and text not in str(row.get("customer_name")).lower():
+            ...
+```
+
+```python
+# ✅ Función pura — testeable sin Streamlit
+def filter_appointment_rows(
+    items: list[dict[str, Any]],
+    *,
+    name_substr: str = "",
+    service: str = "Todos",
+    status: str = "Todos",
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
+) -> list[dict[str, Any]]:
+    ...
+```
+
+```python
+# En el tab — session_state sólo aquí + delegación
+def _apply_appointment_filters(items, *, name_key="_ap_f_name", ...):
+    return filter_appointment_rows(
+        items,
+        name_substr=str(st.session_state.get(name_key) or ""),
+        service=str(st.session_state.get(service_key) or "Todos"),
+        status=str(st.session_state.get(status_key) or "Todos"),
+        from_date=st.session_state.get("_ap_f_from") if use_date_range else None,
+        to_date=st.session_state.get("_ap_f_to") if use_date_range else None,
+    )
+```
+
+```python
+# En el render (calendario) — mismo patrón: leer estado arriba, pasar a la función pura
+cal_filtered = filter_appointment_rows(
+    items,
+    name_substr=st.session_state.get("_ap_cal_f_name", ""),
+    service=st.session_state.get("_ap_cal_f_service", "Todos"),
+    status=st.session_state.get("_ap_cal_f_status", "Todos"),
+)
+```
+
+---
+
+## Regla 9 — Paginación y listas largas
+
+La paginación nunca está dentro de `render_*_tab()`. Siempre en su propia función:
+
+```python
+def _render_paginated_list(
+    rows: list[dict[str, Any]],
+    hist_counts: dict[str, int],
+    *,
+    page_key: str = "_ap_page",
+    limit_key: str = "_ap_limit",
+    rerun_key_prefix: str = "ap_page",
+) -> None:
+    limit = int(st.session_state.get(limit_key, 10))
+    page  = int(st.session_state.get(page_key, 0))
+    total = len(rows)
+    total_pages = max(1, (total + limit - 1) // limit)
+    page = min(page, total_pages - 1)
+    st.session_state[page_key] = page
+
+    page_rows = rows[page * limit : (page + 1) * limit]
+    _render_list_header()
+    for r in page_rows:
+        _render_appointment_row(r, hist_counts)
+
+    col_prev, col_next, col_info = st.columns([1, 1, 3])
+    with col_prev:
+        if st.button("◀", disabled=page <= 0, key=f"{rerun_key_prefix}_prev"):
+            st.session_state[page_key] = page - 1
+            st.rerun()
+    with col_next:
+        if st.button("▶", disabled=(page + 1) >= total_pages, key=f"{rerun_key_prefix}_next"):
+            st.session_state[page_key] = page + 1
+            st.rerun()
+    with col_info:
+        st.caption(f"Página {page + 1}/{total_pages} · {total} resultado(s)")
+```
+
+---
+
+## Regla 10 — Checklist antes de hacer PR
+
+Antes de considerar terminada una refactorización de tab, verifica:
+
+```
+[ ] _inject_shared_styles() emite TODO el CSS — sin style= en el HTML generado
+[ ] Ninguna función genera HTML con más de 1 atributo inline
+[ ] _CAL_PILL_THEME (o equivalente) no existe — reemplazado por clases CSS
+[ ] session_state keys listadas como constantes al inicio del módulo
+[ ] invalidate_appointment_cache() se llama tras cada POST/PATCH exitoso
+[ ] render_*_tab() tiene máximo 15 líneas
+[ ] Cada @st.dialog tiene su función _close_dialog_*() que limpia TODAS sus keys
+[ ] filter_appointments() es función pura (sin acceso directo a session_state)
+[ ] AppointmentFinancials.from_row() se usa para todos los cálculos de montos
+[ ] Ningún cálculo financiero ocurre en funciones de render ni en *_html()
+```
+
+---
+
+## Guía de refactorización incremental
+
+Para migrar `citas_tab.py` sin romper la app, sigue este orden:
+
+**Fase 1 — CSS** (sin cambiar lógica)
+1. Extraer `_STYLES` como constante de módulo
+2. Eliminar `_CAL_PILL_THEME` y mover colores a las clases CSS
+3. Quitar todos los `style=` de `_calendar_appt_line_html` y `_calendar_overflow_row_html`
+
+**Fase 2 — Componentes HTML**
+4. Mover `_status_pill_html`, `_client_pill_class`, `_customer_name_pill_html` → `components/pills.py`
+5. Mover `_service_type_flag_html` → `components/service_flags.py`
+6. Mover `_render_citas_color_legend` → `components/legend.py`
+
+**Fase 3 — Estado y caché**
+7. Mover `_fetch_appointments`, `_sync_appointments_from_api`, caches → `state/appointments.py`
+8. Mover `_init_appt_form_state_once`, `_reset_appointment_form_state` → `state/form_state.py`
+9. Documentar todas las keys con constantes `_KEY_*`
+
+**Fase 4 — Finanzas**
+10. Crear `app/domain/financials.py` con `AppointmentFinancials` y `from_row()`
+11. Reemplazar todas las llamadas a `_financial_row_values()` por `from_row(row)`
+
+**Fase 5 — Render**
+12. Hacer `render_citas_tab()` ≤ 15 líneas
+13. Hacer `render_reporte_citas_tab()` ≤ 15 líneas
+14. Separar `_render_reporte_financiero_citas_body()` en sub-renders

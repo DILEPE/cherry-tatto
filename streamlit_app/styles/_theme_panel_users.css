@@ -1,0 +1,209 @@
+/* Gestión usuarios del panel — requiere .dlg-pu-root en diálogos y .pu-tab-root en la pestaña */
+
+/* ── Diálogos crear / editar (modo claro) ─────────────────────────────── */
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) {
+    color: var(--panel-text, #1e293b);
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [role="dialog"] {
+    background: var(--panel-bg-surface, #ffffff) !important;
+    background-color: #ffffff !important;
+    color: var(--panel-text, #1e293b) !important;
+    border: 1px solid var(--panel-border, rgba(15, 23, 42, 0.12)) !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) h1,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) h2,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) h3,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) h4,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) h5,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stMarkdownContainer"] p,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stMarkdownContainer"] strong,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stMarkdownContainer"] h5,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) label,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stWidgetLabel"] p {
+    color: var(--panel-text, #1e293b) !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stCaptionContainer"] p {
+    color: var(--panel-text-muted, #475569) !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stTextInput"] input,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stTextInput"] [data-baseweb="input"],
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) textarea,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stTextArea"] [data-baseweb="textarea"],
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-baseweb="select"] > div,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stSelectbox"] [data-baseweb="select"] > div,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stMultiSelect"] [data-baseweb="select"] > div {
+    background-color: #ffffff !important;
+    color: #1e293b !important;
+    border-color: var(--panel-border-input, rgba(15, 23, 42, 0.18)) !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stTextInput"] input:disabled,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stTextInput"] [disabled] {
+    background-color: #f1f5f9 !important;
+    color: #64748b !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stMultiSelect"] [data-baseweb="tag"] {
+    background-color: #f1f5f9 !important;
+    color: #1e293b !important;
+    border: 1px solid var(--panel-border, rgba(15, 23, 42, 0.12)) !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stAlert"] [data-baseweb="notification"],
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stAlert"] > div,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stNotificationContentInfo"] {
+    background-color: #eff6ff !important;
+    border: 1px solid #93c5fd !important;
+    color: #1e40af !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stAlert"] p,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stAlert"] strong,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stNotificationContentInfo"] p {
+    color: #1e40af !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stNotificationContentError"] {
+    background-color: #fef2f2 !important;
+    border: 1px solid #fecaca !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stNotificationContentError"] p {
+    color: #991b1b !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stButton"] button:not([data-testid="baseButton-primary"]) {
+    background: var(--panel-btn-bg, #ffffff) !important;
+    color: var(--panel-btn-text, #1e293b) !important;
+    border: 1px solid var(--panel-btn-border, rgba(167, 154, 255, 0.42)) !important;
+    box-shadow: var(--panel-btn-shadow, 0 1px 2px rgba(15, 23, 42, 0.06)) !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stButton"] button[data-testid="baseButton-primary"],
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stButton"] button[kind="primary"],
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) button[data-testid="baseButton-primary"][class*="st-emotion-cache"],
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stButton"] button[class*="st-emotion-cache"][kind="primary"] {
+    background-image: linear-gradient(180deg, #ff5fb8 0%, #ff007f 52%, #d90064 100%) !important;
+    background-color: #ff007f !important;
+    color: #ffffff !important;
+    border: 1px solid rgba(255, 0, 127, 0.35) !important;
+    box-shadow: 0 4px 14px rgba(255, 0, 127, 0.38) !important;
+    min-height: 2.65rem !important;
+    font-weight: 600 !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stButton"] button[data-testid="baseButton-primary"] *,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stButton"] button[kind="primary"] *,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) button[data-testid="baseButton-primary"][class*="st-emotion-cache"] * {
+    color: #ffffff !important;
+    background: transparent !important;
+    background-color: transparent !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stCheckbox"] label p {
+    color: #334155 !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stCheckbox"] [data-baseweb="checkbox"] > span {
+    background-color: #ffffff !important;
+    border: 2px solid #475569 !important;
+    border-radius: 4px !important;
+}
+
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stCheckbox"] [data-baseweb="checkbox"]:has(input:checked) > span,
+:root[data-panel-theme="light"] div[data-testid="stDialog"]:has(.dlg-pu-root) [data-testid="stCheckbox"] [data-baseweb="checkbox"]:has(input[aria-checked="true"]) > span {
+    background-color: #ff007f !important;
+    border-color: transparent !important;
+    box-shadow: 0 0 0 1px rgba(217, 0, 100, 0.35) !important;
+}
+
+/* ── Tabla de usuarios (pestaña principal) ──────────────────────────────── */
+[data-testid="stMain"]:has(.pu-tab-root) .cust-col-title {
+    display: inline-block;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: #111827;
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 0.18rem 0.45rem;
+    white-space: nowrap;
+    line-height: 1.35;
+}
+
+:root[data-panel-theme="light"] [data-testid="stMain"]:has(.pu-tab-root) .cust-col-title,
+html[data-panel-theme="light"] [data-testid="stMain"]:has(.pu-tab-root) .cust-col-title {
+    color: var(--panel-text, #1e293b);
+    background: #f1f5f9;
+    border-color: var(--panel-border, rgba(15, 23, 42, 0.12));
+}
+
+/* Acciones con iconos (columna 7) */
+[data-testid="stMain"]:has(.pu-tab-root) div[data-testid="stHorizontalBlock"]:has(
+    > div[data-testid="column"]:nth-child(7) [data-testid="stButton"]
+  )
+  > div[data-testid="column"]:nth-child(7)
+  [data-testid="stHorizontalBlock"] {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 2px 4px;
+    background: #fafafa;
+    gap: 4px !important;
+    align-items: center;
+    margin: 0 !important;
+}
+
+[data-testid="stMain"]:has(.pu-tab-root) div[data-testid="stHorizontalBlock"]:has(
+    > div[data-testid="column"]:nth-child(7) [data-testid="stButton"]
+  )
+  > div[data-testid="column"]:nth-child(7)
+  [data-testid="stHorizontalBlock"]
+  > div[data-testid="column"] {
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    background: #fff;
+    min-width: 2.35rem;
+}
+
+[data-testid="stMain"]:has(.pu-tab-root) div[data-testid="stHorizontalBlock"]:has(
+    > div[data-testid="column"]:nth-child(7) [data-testid="stButton"]
+  )
+  > div[data-testid="column"]:nth-child(7)
+  [data-testid="stButton"] button {
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    font-size: 1.05rem;
+    line-height: 1;
+    padding: 0.15rem 0.35rem !important;
+    min-height: 1.75rem;
+}
+
+[data-testid="stMain"]:has(.pu-tab-root) div[data-testid="stHorizontalBlock"]:has(
+    > div[data-testid="column"]:nth-child(7) [data-testid="stButton"]
+  )
+  > div[data-testid="column"]:nth-child(7)
+  [data-testid="stButton"] button:hover {
+    background: #f3f4f6 !important;
+}
+
+[data-testid="stMain"]:has(.pu-tab-root) div[data-testid="stHorizontalBlock"]:has(
+    > div[data-testid="column"]:nth-child(7) [data-testid="stButton"]
+  )
+  > div[data-testid="column"]:nth-child(7)
+  [data-testid="stElementContainer"] {
+    margin: 0 !important;
+}
+
+[data-testid="stMain"]:has(.pu-tab-root) div[data-testid="stHorizontalBlock"]:has(
+    > div[data-testid="column"]:nth-child(7) [data-testid="stButton"]
+  )
+  > div[data-testid="column"]:nth-child(7)
+  > div[data-testid="stVerticalBlock"] {
+    gap: 0 !important;
+    justify-content: center !important;
+}

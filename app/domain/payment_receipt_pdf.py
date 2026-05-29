@@ -425,10 +425,11 @@ def _emit_terms_paragraph(
     fontsize: float = 8.15,
     gap_after: float = 10.0,
 ) -> tuple[fitz.Page, float]:
-    """Pinta un párrafo (opcional •) justificado y devuelve la página activa y la Y siguiente."""
+    """Pinta un párrafo (opcional guión «- ») justificado y devuelve la página activa y la Y siguiente."""
     x0 = mx + 2
     x1 = PAGE_W - mx - 2
-    full = f"• {body}" if bullet else body
+    # Helvetica integrada no incluye «•» (U+2022); en PDF aparece como «?». Usar ASCII.
+    full = f"- {body}" if bullet else body
     limit_y = _terms_page_bottom()
 
     def _new_sheet() -> tuple[fitz.Page, float]:

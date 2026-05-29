@@ -144,6 +144,8 @@ En la **raíz del repositorio** puedes levantar la API, el panel y (opcionalment
 | [`Install-Cherry-Desktop-Shortcut.bat`](Install-Cherry-Desktop-Shortcut.bat) | Windows | Ejecutar **una vez** desde el repo: crea en el escritorio el acceso directo **Cherry Tattoo Dev** y `Cherry-Tattoo-Iniciar.bat`, que invocan el lanzador por ruta absoluta. |
 | [`scripts/install-desktop-shortcut.ps1`](scripts/install-desktop-shortcut.ps1) | Windows | Lo usa el instalador anterior; también puedes llamarlo con `-RepoRoot "ruta\al\repo"`. |
 
+**Refactor del tab Citas (mantenimiento):** si necesitas regenerar o podar bloques desde `citas_tab.py`, consulta [`scripts/README-citas-tab-refactor.md`](scripts/README-citas-tab-refactor.md) (`_extract_modules.py`, `prune_citas_tab_ranges.py`, etc.). No son necesarios para desarrollo habitual.
+
 **Entorno virtual:** los scripts buscan Python en `.venv\Scripts\python.exe` o `venv\Scripts\python.exe` (en ese orden). Opcional: variable `CHERRY_PYTHON` con la ruta absoluta a `python.exe`.
 
 **n8n:** por defecto el modo es **`auto`**: intenta **Node.js (`npx n8n`)** primero (sin Docker); si no hay `npx`, intenta **Docker**. Variables útiles:
@@ -183,11 +185,13 @@ Por defecto la API y Streamlit escuchan solo en **`127.0.0.1`**. Para que otros 
 
    O en cmd antes del `.bat`: `set DEV_BIND_HOST=0.0.0.0`.
 
-2. Desde otro dispositivo usa `http://<IPv4-de-este-PC>:8501` (panel) y `:5000` para la API si la necesitas directamente. En **Windows**, obtén la IPv4 con `ipconfig`.
+2. Desde otro dispositivo usa `http://<IPv4-de-este-PC>:8501` (panel). **No** abras `http://0.0.0.0:8501` (en Windows no carga). Obtén la IPv4 con `ipconfig` o mira la línea `[info] LAN panel →` del script `dev-stack`.
 
-3. **`API_BASE_URL` en `.env`**: en un uso normal el proceso Streamlit sigue en el mismo PC que la API; puedes dejar `http://127.0.0.1:5000` para las llamadas del servidor.
+3. Si la pantalla queda **en blanco** sin error, suele ser CORS/XSRF de Streamlit al entrar por IP. El repo ya desactiva eso en `.streamlit/config.toml` (`enableCORS` y `enableXsrfProtection` en `false` para desarrollo en LAN). Reinicia Streamlit tras actualizar.
 
-4. **Firewall de Windows — permitir entrada TCP** en los puertos que uses (típicamente **5000**, **8501** y **5678** si expones n8n):
+4. **`API_BASE_URL` en `.env`**: en un uso normal el proceso Streamlit sigue en el mismo PC que la API; puedes dejar `http://127.0.0.1:5000` para las llamadas del servidor.
+
+5. **Firewall de Windows — permitir entrada TCP** en los puertos que uses (típicamente **5000**, **8501** y **5678** si expones n8n):
 
    - **Interfaz gráfica:** `wf.msc` → Reglas de entrada → Nueva regla → Puerto → TCP → puertos específicos `5000,8501,5678` → Permitir → elige perfiles (en casa suele bastar **Privado**).
    - **PowerShell como administrador:**

@@ -1,0 +1,864 @@
+/* Calendario mes: sin huecos laterales (columnas Streamlit pegadas tipo rejilla) */
+section.main div[data-testid="stHorizontalBlock"]:has(.cal-m-whcell),
+section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell--month),
+section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell-spacer--month) {
+    gap: 0 !important;
+}
+section.main div[data-testid="stHorizontalBlock"]:has(.cal-m-whcell) > div[data-testid="column"],
+section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell--month) > div[data-testid="column"],
+section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell-spacer--month) > div[data-testid="column"] {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    flex: 1 1 0 !important;
+    min-width: 0 !important;
+}
+section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell--month),
+section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell-spacer--month) {
+    margin-top: -0.42rem !important;
+    margin-bottom: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+section.main div[data-testid="stHorizontalBlock"]:has(.cal-m-whcell) {
+    margin-bottom: -0.32rem !important;
+}
+section.main div[data-testid="stMarkdownContainer"]:has(.cal-cell--month),
+section.main div[data-testid="stMarkdownContainer"]:has(.cal-cell-spacer--month),
+section.main div[data-testid="stMarkdownContainer"]:has(.cal-m-whcell) {
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+}
+/* Componente bidireccional cal_nav_bridge (mes y semana): sin hueco visual */
+[data-testid="stMain"]:has(.cal-cell--month) iframe,
+[data-testid="stMain"]:has(.twg-shell) iframe,
+section.main:has(.cal-cell--month) iframe,
+section.main:has(.twg-shell) iframe,
+section.main:has(.cal-cell--month) [data-testid="stCustomComponentV1"] iframe,
+section.main:has(.twg-shell) [data-testid="stCustomComponentV1"] iframe {
+    height: 0 !important;
+    max-height: 0 !important;
+    min-height: 0 !important;
+    opacity: 0 !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+    border: none !important;
+}
+[data-testid="stMain"]:has(.cal-cell--month) [data-testid="stElementContainer"]:has(iframe),
+[data-testid="stMain"]:has(.cal-cell--month) div[data-testid="element-container"]:has(iframe),
+[data-testid="stMain"]:has(.twg-shell) [data-testid="stElementContainer"]:has(iframe),
+[data-testid="stMain"]:has(.twg-shell) div[data-testid="element-container"]:has(iframe),
+section.main:has(.cal-cell--month) [data-testid="stElementContainer"]:has(iframe),
+section.main:has(.cal-cell--month) div[data-testid="element-container"]:has(iframe),
+section.main:has(.cal-cell--month) [data-testid="stCustomComponentV1"],
+section.main:has(.twg-shell) [data-testid="stElementContainer"]:has(iframe),
+section.main:has(.twg-shell) div[data-testid="element-container"]:has(iframe),
+section.main:has(.twg-shell) [data-testid="stCustomComponentV1"] {
+    min-height: 0 !important;
+    height: auto !important;
+    max-height: 0 !important;
+    margin-block: 0 !important;
+    padding-block: 0 !important;
+    overflow: hidden !important;
+}
+
+/* Mes: el fragment termina en la rejilla */
+section.main [data-testid="stFragment"]:has(.cal-cell--month) {
+    margin-bottom: 0 !important;
+    padding-bottom: 0 !important;
+}
+section.main:has(.cal-cell--month) [data-testid="block-container"] {
+    padding-bottom: 0.5rem !important;
+    flex-grow: 0 !important;
+    min-height: 0 !important;
+    height: auto !important;
+    align-self: flex-start !important;
+}
+[data-testid="stAppViewContainer"]:has(.cal-cell--month) [data-testid="stMain"] {
+    justify-content: flex-start !important;
+    align-items: stretch !important;
+}
+
+/* Scroll de página y de celdas del mes */
+[data-testid="stAppViewContainer"]:has(.cal-cell--month) {
+    overflow: auto !important;
+    overflow-y: auto !important;
+}
+[data-testid="stMain"]:has(.cal-cell--month),
+section.main:has(.cal-cell--month) {
+    overflow: visible !important;
+}
+
+.cal-m-whcell {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 2rem;
+    margin-bottom: 0;
+    padding: 0.42rem 0.06rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ct-text-day, #f8fafc);
+    background: var(--ct-surface-strong, rgba(15, 23, 42, 0.96));
+    border: 1px solid var(--ct-border, rgba(148, 163, 184, 0.32));
+    border-radius: 0;
+}
+.cal-cell.cal-cell--month {
+    border: 1px solid var(--ct-border, rgba(148, 163, 184, 0.36));
+    border-radius: 0;
+    padding: 0;
+    height: 20rem;
+    max-height: 20rem;
+    margin-bottom: 0;
+    margin-right: -1px;
+    margin-top: -1px;
+    background: var(--ct-surface, rgba(15, 23, 42, 0.5));
+    box-shadow: none;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.cal-cell-today.cal-cell--month {
+    border-color: rgba(255, 0, 127, 0.58);
+    box-shadow: inset 0 0 0 1px rgba(255, 0, 127, 0.24);
+    background: var(--ct-surface-today, rgba(15, 23, 42, 0.58));
+}
+.cal-cell--month .cal-cell-head {
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: flex-end;
+    align-items: flex-start;
+    padding: 0.14rem 0.28rem 0.04rem 0.28rem;
+    min-height: 0.9rem;
+    line-height: 1;
+}
+.cal-cell--month .cal-cell-daynum {
+    font-size: 0.74rem;
+    font-weight: 700;
+    color: var(--ct-text-day, rgba(248, 250, 252, 0.94));
+    font-variant-numeric: tabular-nums;
+    opacity: 0.92;
+}
+.cal-cell-today.cal-cell--month .cal-cell-daynum {
+    color: var(--ct-text-today, rgba(251, 168, 210, 0.98));
+    opacity: 1;
+}
+/* Última columna: no arrastrar solapamiento -1px hacia fuera del bloque */
+section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell--month) > div[data-testid="column"]:last-child .cal-cell--month,
+section.main div[data-testid="stHorizontalBlock"]:has(.cal-cell-spacer--month) > div[data-testid="column"]:last-child .cal-cell-spacer--month {
+    margin-right: 0;
+}
+.cal-day-inner {
+    border: 1px solid var(--ct-border-inner, rgba(226, 232, 240, 0.22));
+    border-radius: 6px;
+    background: var(--ct-surface-inner, rgba(0, 0, 0, 0.32));
+    padding: 0.18rem 0.22rem 0.14rem 0.22rem;
+    margin-bottom: 0.22rem;
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.12rem;
+    box-sizing: border-box;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+.cal-cell--month .cal-day-inner {
+    border-radius: 0;
+    margin: 0;
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 0.2rem 0.22rem;
+    border: none;
+    border-bottom: 1px solid var(--ct-border-slot, rgba(148, 163, 184, 0.18));
+    margin-bottom: 0;
+    gap: 0.28rem;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+}
+.cal-cell-footer-strip {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    justify-content: space-between;
+    gap: 0.35rem;
+    min-height: 2.05rem;
+    padding: 0.28rem 0.35rem;
+    box-sizing: border-box;
+    background: var(--ct-footer-bg, rgba(15, 23, 42, 0.96));
+    border-top: 1px solid var(--ct-border, rgba(148, 163, 184, 0.32));
+}
+.cal-footer-daynum {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    min-width: 1.55rem;
+    font-size: 0.74rem;
+    font-weight: 800;
+    line-height: 1;
+    color: var(--ct-text-day, rgba(248, 250, 252, 0.94));
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.03em;
+}
+button.cal-footer-book,
+a.cal-footer-book,
+span.cal-footer-book--disabled,
+button.cal-query-nav.cal-footer-book {
+    flex: 1 1 auto;
+    min-width: 0;
+    appearance: none;
+    -webkit-appearance: none;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.16rem 0.28rem;
+    border-radius: 0;
+    border: 1px solid rgba(255, 0, 127, 0.55);
+    color: #fff7fb;
+    background: linear-gradient(
+        180deg,
+        rgba(255, 100, 180, 0.35) 0%,
+        rgba(255, 0, 127, 0.55) 50%,
+        rgba(217, 0, 100, 0.6) 100%
+    );
+    line-height: 1.05;
+    text-align: center;
+    box-sizing: border-box;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+button.cal-footer-book:hover,
+a.cal-footer-book:hover {
+    filter: brightness(1.08);
+}
+a.cal-footer-book,
+button.cal-query-nav.cal-footer-book {
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: inherit;
+    cursor: pointer;
+}
+button.cal-query-nav.cal-footer-book {
+    appearance: none;
+    -webkit-appearance: none;
+}
+span.cal-footer-book--disabled {
+    cursor: not-allowed;
+    pointer-events: none;
+    opacity: 0.55;
+}
+.cal-footer-strip-disabled {
+    opacity: 0.45;
+    filter: saturate(0.75);
+    pointer-events: none;
+}
+.cal-cell-today.cal-cell--month .cal-footer-daynum {
+    color: var(--ct-text-today, rgba(251, 168, 210, 1));
+}
+.cal-team-block {
+    min-width: 0;
+}
+.cal-team-block + .cal-team-block {
+    margin-top: 0.22rem;
+    padding-top: 0.12rem;
+    border-top: 1px dashed rgba(148, 163, 184, 0.28);
+}
+.cal-team-label {
+    font-size: 0.58rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: rgba(244, 114, 182, 0.95);
+    margin-bottom: 0.12rem;
+    line-height: 1.15;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.cal-team-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 0.12rem;
+    min-width: 0;
+}
+.cal-team-lines--slots {
+    gap: 0.28rem;
+}
+.cal-appt-line {
+    display: grid;
+    grid-template-columns: 2rem minmax(0, 1fr) minmax(0, auto);
+    align-items: center;
+    column-gap: 0.18rem;
+    min-width: 0;
+    font-size: 0.65rem;
+    line-height: 1.2;
+}
+.cal-cell--month .cal-appt-line {
+    font-size: 0.68rem;
+    line-height: 1.22;
+}
+.cal-appt-time {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+    opacity: 0.95;
+}
+.cal-appt-pill-wrap {
+    min-width: 0;
+    overflow: hidden;
+}
+.cal-appt-total {
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.58rem;
+    letter-spacing: -0.03em;
+    opacity: 0.88;
+    white-space: nowrap;
+    justify-self: end;
+    padding: 0.04rem 0.14rem;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+}
+.cal-cell--month .cal-appt-total,
+.cal-appt-slot .cal-appt-total,
+.twg-appt .cal-appt-total {
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    opacity: 1;
+    padding: 0.08rem 0.2rem;
+    color: rgba(254, 249, 195, 0.98);
+    background: rgba(255, 0, 127, 0.16);
+    border-color: rgba(251, 113, 182, 0.45);
+    box-shadow: 0 0 0 1px rgba(236, 72, 153, 0.12);
+    flex-shrink: 0;
+    align-self: flex-start;
+}
+.cal-appt-slot .cal-appt-total,
+.twg-appt .cal-appt-total {
+    margin-top: 0.06rem;
+}
+.cal-day-empty {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.68rem;
+    opacity: 0.5;
+    letter-spacing: 0.06em;
+}
+.cal-cell-today.cal-cell--month .cal-day-inner {
+    border-top-color: rgba(255, 0, 127, 0.38);
+    background: rgba(255, 0, 127, 0.05);
+}
+/* Casilla vacía: alto alineado a la celda con pie (solo espaciador superior, sin footer) */
+.cal-cell-spacer.cal-cell-spacer--month {
+    height: 20rem;
+    max-height: 20rem;
+    margin-bottom: 0;
+    margin-right: -1px;
+    margin-top: -1px;
+    box-sizing: border-box;
+    border: 1px solid var(--ct-border-slot, rgba(148, 163, 184, 0.22));
+    border-radius: 0;
+    background: var(--ct-surface-spacer, rgba(15, 23, 42, 0.22));
+    opacity: 1;
+}
+
+/* Vista semanal tipo Teams/Outlook */
+.twg-shell {
+    width: 100%;
+    margin: 0.35rem 0 0.5rem;
+}
+.twg-scroll-x {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+.twg-grid-wrap {
+    min-width: 680px;
+    background: var(--ct-week-wrap-bg, rgba(15, 23, 42, 0.45));
+    border: 1px solid rgba(255, 0, 127, 0.32);
+    border-radius: 10px;
+    padding: 0.45rem 0.42rem 0.55rem;
+    box-sizing: border-box;
+}
+.twg-head {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    margin-bottom: 0.28rem;
+    min-width: 0;
+}
+.twg-h-spacer {
+    flex: 0 0 46px;
+    min-width: 46px;
+}
+.twg-h-days {
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 3px;
+    min-width: 0;
+}
+.twg-h-day {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    text-align: center;
+    padding: 0.28rem 0.15rem 0.22rem;
+    border-radius: 8px;
+    background: var(--ct-week-h-day-bg, rgba(0, 0, 0, 0.28));
+    border: 1px solid var(--ct-border-slot, rgba(148, 163, 184, 0.28));
+    box-sizing: border-box;
+    min-width: 0;
+}
+.twg-h-today {
+    border-color: rgba(255, 0, 127, 0.55);
+    box-shadow: inset 0 0 0 1px rgba(244, 114, 182, 0.22);
+}
+.twg-h-wd {
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ct-text-week-wd, #cbd5e1);
+    opacity: 0.92;
+}
+.twg-h-num {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--ct-text-week-num, #f1f5f9);
+    line-height: 1.15;
+    margin-bottom: 0.12rem;
+}
+/* Mismo pie que mes: cal-cell-footer-strip + cal-footer-book */
+.twg-h-day .twg-h-footer-strip {
+    margin-top: 0.1rem;
+    width: 100%;
+    min-height: 2.05rem;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+}
+.twg-h-day .twg-h-footer-strip .cal-footer-book {
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+}
+.twg-h-today .twg-h-footer-strip:not(.cal-footer-strip-disabled) {
+    border-top-color: rgba(255, 0, 127, 0.38);
+}
+.twg-body {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    min-width: 0;
+}
+.twg-times {
+    flex: 0 0 46px;
+    min-width: 46px;
+    box-sizing: border-box;
+}
+.twg-tick {
+    box-sizing: border-box;
+    border-top: 1px solid rgba(148, 163, 184, 0.22);
+    font-size: 0.58rem;
+    color: var(--ct-text-week-tick, #94a3b8);
+    padding-right: 3px;
+    text-align: right;
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-end;
+}
+.twg-tick-minor span {
+    opacity: 0;
+}
+.twg-tick-major span {
+    margin-top: -0.35rem;
+    font-weight: 600;
+    color: var(--ct-text-week-tick-major, #cbd5e1);
+}
+.twg-day-columns {
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 3px;
+    min-width: 0;
+}
+.twg-col {
+    position: relative;
+    background: var(--ct-week-col-bg, rgba(0, 0, 0, 0.26));
+    border-radius: 8px;
+    border: 1px solid var(--ct-border-slot, rgba(148, 163, 184, 0.22));
+    box-sizing: border-box;
+}
+.twg-col-today {
+    border-color: rgba(255, 0, 127, 0.42);
+    background: var(--ct-week-col-today-bg, rgba(255, 0, 127, 0.05));
+}
+.twg-slot-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    border-top: 1px solid rgba(148, 163, 184, 0.14);
+    pointer-events: none;
+    box-sizing: border-box;
+}
+.twg-appt-client {
+    font-weight: 600;
+    font-size: 0.72rem;
+    line-height: 1.18;
+    color: rgba(248, 250, 252, 0.96);
+    white-space: normal;
+    word-break: break-word;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 8;
+    min-height: 0;
+    flex: 1 1 auto;
+}
+.twg-appt--single-slot {
+    padding: 3px 5px 2px;
+    gap: 2px;
+    justify-content: flex-start;
+}
+.twg-appt--single-slot .twg-appt-body-stack {
+    flex: 0 1 auto;
+    gap: 2px;
+}
+.twg-appt--single-slot .twg-appt-head-time {
+    font-size: 0.78rem;
+    line-height: 1.12;
+}
+.twg-appt--single-slot .twg-appt-client {
+    font-size: 0.72rem;
+    line-height: 1.16;
+    -webkit-line-clamp: 2;
+}
+.twg-appt--single-slot .twg-appt-link {
+    margin-top: auto;
+    min-height: 1.35rem;
+    font-size: 0.6rem;
+    padding: 3px 4px;
+}
+.twg-appt-link {
+    flex-shrink: 0;
+    align-self: stretch;
+    text-align: center;
+    font-size: 0.58rem;
+    font-weight: 700;
+    padding: 2px 4px 1px;
+    margin-top: 2px;
+    border-radius: 4px;
+    background: var(--ct-appt-link-bg, rgba(0, 0, 0, 0.38));
+    color: var(--ct-appt-link-text, #f8fafc) !important;
+    text-decoration: none !important;
+    border: 1px solid var(--ct-appt-link-border, rgba(255, 255, 255, 0.28));
+    line-height: 1.1;
+    font-family: inherit;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    box-sizing: border-box;
+}
+a.twg-appt-link,
+button.twg-appt-link.cal-appt-slot-link {
+    width: 100%;
+}
+button.twg-appt-link.cal-appt-slot-link {
+    appearance: none;
+    -webkit-appearance: none;
+    font-family: inherit;
+}
+.twg-appt-link-play {
+    font-size: 0.55rem;
+    line-height: 1;
+    opacity: 0.95;
+    flex-shrink: 0;
+}
+.twg-appt-link:hover {
+    background: var(--ct-appt-link-hover-bg, rgba(255, 255, 255, 0.18));
+    color: var(--ct-appt-link-text, #ffffff) !important;
+}
+.twg-appt {
+    border-radius: 5px;
+    box-sizing: border-box;
+    padding: 2px 4px;
+    overflow: hidden;
+    position: absolute;
+    border-width: 1px;
+    border-style: solid;
+    font-size: 11px;
+    line-height: 1.22;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 1px;
+    min-height: 0;
+    z-index: 2;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+/* Bloques mes (.cal-appt-slot) y semana (.twg-appt): tema por clase cli-pill */
+.cal-appt-slot {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 2px;
+    min-height: 4.5rem;
+    padding: 4px 5px 3px;
+    border-radius: 5px;
+    border-width: 1px;
+    border-style: solid;
+    box-sizing: border-box;
+    min-width: 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+}
+.cal-appt-slot-time {
+    font-weight: 700;
+    font-size: 0.78rem;
+    line-height: 1.12;
+    color: rgba(248, 250, 252, 0.98);
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+}
+.cal-appt-slot-client {
+    font-weight: 600;
+    font-size: 0.72rem;
+    line-height: 1.16;
+    color: rgba(248, 250, 252, 0.96);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    min-height: 0;
+    flex: 1 1 auto;
+}
+button.cal-appt-slot-link,
+a.cal-appt-slot-link,
+button.twg-appt-link.cal-appt-slot-link {
+    flex-shrink: 0;
+    width: 100%;
+    appearance: none;
+    -webkit-appearance: none;
+    margin-top: auto;
+    min-height: 1.35rem;
+    text-align: center;
+    font-size: 0.6rem;
+    font-weight: 700;
+    padding: 3px 4px;
+    border-radius: 4px;
+    background: var(--ct-appt-link-bg, rgba(0, 0, 0, 0.38));
+    color: var(--ct-appt-link-text, #f8fafc) !important;
+    border: 1px solid var(--ct-appt-link-border, rgba(255, 255, 255, 0.28));
+    line-height: 1.1;
+    font-family: inherit;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    box-sizing: border-box;
+}
+.cal-appt-slot-link:hover,
+a.cal-appt-slot-link:hover {
+    background: var(--ct-appt-link-hover-bg, rgba(255, 255, 255, 0.18));
+    color: var(--ct-appt-link-text, #ffffff) !important;
+    text-decoration: none;
+}
+a.cal-appt-slot-link {
+    text-decoration: none;
+}
+.cal-appt-slot-link-play {
+    font-size: 0.55rem;
+    line-height: 1;
+    opacity: 0.95;
+    flex-shrink: 0;
+}
+.cal-appt-slot.cal-appt-line--muted,
+.cal-appt-slot.twg-cancelada-soft {
+    opacity: 0.48;
+}
+.twg-appt.twg-cli-pill-cancelada,
+.cal-appt-slot.twg-cli-pill-cancelada {
+    border-color: #dc2626 !important;
+    background: #ef4444 !important;
+    color: #ffffff !important;
+}
+.twg-appt.twg-cli-pill-reprogramada,
+.cal-appt-slot.twg-cli-pill-reprogramada {
+    border-color: #d97706 !important;
+    background: #f59e0b !important;
+    color: #ffffff !important;
+}
+.twg-appt.twg-cli-pill-priority,
+.cal-appt-slot.twg-cli-pill-priority {
+    border-color: #be185d !important;
+    background: #db2777 !important;
+    color: #ffffff !important;
+}
+.twg-appt.twg-cli-pill-returning,
+.cal-appt-slot.twg-cli-pill-returning {
+    border-color: #1d4ed8 !important;
+    background: #2563eb !important;
+    color: #ffffff !important;
+}
+.twg-appt.twg-cli-pill-new,
+.cal-appt-slot.twg-cli-pill-new {
+    border-color: #6d28d9 !important;
+    background: #7c3aed !important;
+    color: #ffffff !important;
+}
+.twg-appt.twg-cancelada-soft {
+    opacity: 0.48;
+}
+.twg-appt-body-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-height: 0;
+    overflow: hidden;
+    flex: 1 1 auto;
+    width: 100%;
+}
+.twg-appt-head-time {
+    font-weight: 700;
+    flex-shrink: 0;
+    font-size: 0.75rem;
+    line-height: 1.12;
+    color: rgba(248, 250, 252, 0.98);
+}
+.twg-appt-body-stack > .twg-appt-head-time {
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+/* Líneas calendario compacto mensual — sin opacity inline */
+.cal-appt-line.cal-appt-line--muted {
+    opacity: 0.5;
+}
+
+/* Diálogo «+N citas» — filas de resumen sin style= dispersos */
+.cal-overflow-row {
+    font-size: 0.86rem;
+    line-height: 1.5;
+    margin: 0.4rem 0;
+    padding-bottom: 0.35rem;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0.65rem;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.cal-overflow-row--muted {
+    opacity: 0.55;
+}
+
+.cal-overflow-left {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.cal-overflow-hm {
+    font-weight: 600;
+}
+
+.cal-overflow-artist-dash {
+    opacity: 0.95;
+    font-weight: 600;
+}
+
+.cal-overflow-total-wrap {
+    flex-shrink: 0;
+    display: inline-block;
+    text-align: right;
+}
+
+.cal-overflow-total-chip {
+    display: inline-block;
+    background: #ffffff;
+    color: #111827;
+    padding: 0.32rem 0.75rem;
+    border-radius: 8px;
+    font-weight: 700;
+    font-size: 0.8rem;
+    line-height: 1.3;
+    white-space: nowrap;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+    border: 1px solid #e8e8ea;
+}
+
+.cal-overflow-total-label {
+    opacity: 0.72;
+    font-weight: 600;
+    font-size: 0.72rem;
+}
+
+.cal-overflow-fire-pending {
+    flex-shrink: 0;
+    background: #f59e0b;
+    color: #111827;
+    padding: 0.1rem 0.42rem;
+    border-radius: 6px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    margin-left: 0.15rem;
+}
+
+/* Diálogo «Citas del día» — tarjetas en un solo nodo DOM (menos flash al rerender) */
+.appt-cards-block {
+    min-height: 3.5rem;
+    contain: layout style;
+}
+
+.appt-card-wrap {
+    contain: layout style;
+    padding: 0.55rem 0;
+    margin: 0;
+}
+
+.appt-card-wrap:not(:last-child) {
+    border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.appt-card-wrap .cal-overflow-row {
+    margin: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.cal-day-action-sep {
+    height: 1px;
+    background: rgba(148, 163, 184, 0.15);
+    margin: 0.3rem 0;
+}

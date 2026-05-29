@@ -5,13 +5,12 @@ import re
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
-from app.domain.panel_user_profile import PANEL_ROLE_CHOICES, PANEL_STORE_CHOICES
+from app.domain.panel_user_profile import PANEL_ROLE_CHOICES
 
 _USERNAME_RE = re.compile(r"^[a-z0-9._-]{3,80}$")
 
-PanelStorePayload = Literal["cherry_tattoo", "rock_city"]
 PanelRolePayload = Literal["administrador", "vendedor", "perforador", "tatuador"]
 
 
@@ -24,7 +23,8 @@ class PanelUserPublic(BaseModel):
     last_name: str
     address: Optional[str] = None
     phone: Optional[str] = None
-    store: str
+    store_id: int
+    store_name: Optional[str] = None
     role: str
     is_active: bool
     created_at: datetime
@@ -61,7 +61,7 @@ class PanelUserRegister(BaseModel):
     last_name: str = Field(default="", max_length=100)
     address: Optional[str] = Field(default=None, max_length=500)
     phone: Optional[str] = Field(default=None, max_length=32)
-    store: PanelStorePayload = "cherry_tattoo"
+    store_id: int = Field(..., ge=1)
     role: PanelRolePayload = "vendedor"
 
     @field_validator("username")
@@ -90,13 +90,6 @@ class PanelUserRegister(BaseModel):
     def phone_norm(cls, v):
         return _norm_optional_str(v if isinstance(v, str) else None, max_len=32)
 
-    @field_validator("store")
-    @classmethod
-    def store_ok(cls, v: str) -> str:
-        if v not in PANEL_STORE_CHOICES:
-            raise ValueError("Tienda no válida.")
-        return v
-
     @field_validator("role")
     @classmethod
     def role_ok(cls, v: str) -> str:
@@ -117,70 +110,60 @@ class PanelUserLogin(BaseModel):
     username: str = Field(..., min_length=1, max_length=80)
     password: str = Field(..., min_length=1, max_length=72)
 
-    @field_validator("username")
-    @classmethod
-    def username_norm(cls, v: str) -> str:
-        return v.strip().lower()
-
-
-class PanelUserRegisteredResponse(BaseModel):
-    status: str = "success"
-    message: str
-    id: int
-
-
-class PanelUserSessionPublic(BaseModel):
-    """Devuelto en login para que Streamlit guarde sesión (sin secretos)."""
-
-    id: int
-    username: str
-    role: str
-
 
 class PanelUserLoginResponse(BaseModel):
+    """Respuesta de POST /panel-users/login (Streamlit lee `user`)."""
+
     status: str = "success"
     message: str
     user: PanelUserSessionPublic
 
 
+class PanelUserSessionPublic(BaseModel):
+    id: int
+    username: str
+    role: str
+
+
+class PanelUserRegisteredResponse(BaseModel):
+    message: str
+    id: int
+
+
 class PanelUserModulesBody(BaseModel):
-    """Lista de módulos asignables para un usuario no administrador."""
+    """PUT /panel-users/{id}/modules — JSON con ``modules`` o ``module_keys``."""
 
-    modules: list[str] = Field(default_factory=list)
+    model_config = ConfigDict(populate_by_name=True)
 
-    @field_validator("modules")
-    @classmethod
-    def normalize_modules(cls, v: list[str]) -> list[str]:
-        from app.domain.panel_modules import ASSIGNABLE_PANEL_MODULE_KEYS_SET
+    modules: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("modules", "module_keys"),
+    )
 
-        seen: set[str] = set()
-        out: list[str] = []
-        for x in v:
-            s = str(x).strip()
-            if s in ASSIGNABLE_PANEL_MODULE_KEYS_SET and s not in seen:
-                seen.add(s)
-                out.append(s)
-        return sorted(out)
+    @property
+    def module_keys(self) -> list[str]:
+        """Alias de lectura (servicio y clientes que usan ``module_keys``)."""
+        return self.modules
 
 
 class PanelUserUpdate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    first_name: Optional[str] = Field(default=None, max_length=100)
-    last_name: Optional[str] = Field(default=None, max_length=100)
-    address: Optional[str] = Field(default=None, max_length=500)
-    phone: Optional[str] = Field(default=None, max_length=32)
-    store: Optional[PanelStorePayload] = None
+    first_name: Optional[str] = Field(None, max_length=100)
+    last_name: Optional[str] = Field(None, max_length=100)
+    address: Optional[str] = Field(None, max_length=500)
+    phone: Optional[str] = Field(None, max_length=32)
+    store_id: Optional[int] = Field(None, ge=1)
     role: Optional[PanelRolePayload] = None
     is_active: Optional[bool] = None
-    password: Optional[str] = Field(default=None, min_length=8, max_length=72)
+    password: Optional[str] = Field(None, min_length=8, max_length=72)
 
-    @field_validator("first_name", "last_name")
+    @field_validator("first_name", "last_name", mode="before")
     @classmethod
-    def strip_names_opt(cls, v: Optional[str]) -> Optional[str]:
+    def strip_names_opt(cls, v):
         if v is None:
             return None
-        return v.strip()[:100]
+        return str(v).strip()[:100]
 
     @field_validator("address", mode="before")
     @classmethod
@@ -199,15 +182,6 @@ class PanelUserUpdate(BaseModel):
         if not isinstance(v, str):
             return None
         return _norm_optional_str(v, max_len=32)
-
-    @field_validator("store")
-    @classmethod
-    def store_ok(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return None
-        if v not in PANEL_STORE_CHOICES:
-            raise ValueError("Tienda no válida.")
-        return v
 
     @field_validator("role")
     @classmethod

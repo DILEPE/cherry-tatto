@@ -102,11 +102,16 @@ class AppointmentListItem(BaseModel):
     customer_id: Optional[int] = None
     created_at: Optional[datetime | str] = None
     has_signed_contract: bool = Field(default=False, description="True si existe fila en contracts para esta cita.")
+    contract_pending_artist_signature: bool = Field(
+        default=False,
+        description="True si hay contrato pero falta una firma válida del profesional (tatuador/perforador).",
+    )
     assigned_panel_user_id: Optional[int] = None
     assigned_username: Optional[str] = None
     assigned_first_name: Optional[str] = None
     assigned_last_name: Optional[str] = None
     assigned_role: Optional[str] = None
+    assigned_store_id: Optional[int] = None
 
 
 class AppointmentStatusUpdateRequest(BaseModel):
@@ -148,6 +153,16 @@ class AppointmentRescheduleRequest(BaseModel):
         return normalize_appointment_datetime_string(v)
 
 
+class AppointmentMetaPatchRequest(BaseModel):
+    """Actualiza profesional asignado, prioridad y/o texto de detalle (sin fecha/hora)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    assigned_panel_user_id: Optional[int] = Field(default=None, ge=1)
+    is_priority: bool = False
+    detail: Optional[str] = Field(default=None, max_length=5000)
+
+
 class AppointmentFinancialUpdateRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -173,6 +188,44 @@ class AppointmentPaymentCreateRequest(BaseModel):
 
     amount: float = Field(gt=0)
     note: Optional[str] = Field(default=None, max_length=300)
+    paid_on: Optional[date] = Field(
+        default=None,
+        description="Día efectivo del abono (no antes de la fecha actual, según reglas del panel).",
+    )
+
+    @field_validator("paid_on")
+    @classmethod
+    def paid_on_allowed(cls, v: Optional[date]) -> Optional[date]:
+        if v is None:
+            return None
+        if v < date.today():
+            raise ValueError("La fecha del abono no puede ser anterior a la fecha actual.")
+        return v
+
+
+class AppointmentPaymentPatchRequest(BaseModel):
+    """Actualización parcial de un abono registrado."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    amount: Optional[float] = Field(default=None, gt=0)
+    note: Optional[str] = Field(default=None, max_length=300)
+    paid_on: Optional[date] = None
+
+    @field_validator("paid_on")
+    @classmethod
+    def paid_on_allowed(cls, v: Optional[date]) -> Optional[date]:
+        if v is None:
+            return None
+        if v < date.today():
+            raise ValueError("La fecha del abono no puede ser anterior a la fecha actual.")
+        return v
+
+    @model_validator(mode="after")
+    def at_least_one(self):
+        if self.amount is None and self.note is None and self.paid_on is None:
+            raise ValueError("Debes enviar al menos un campo a modificar.")
+        return self
 
 
 class AppointmentPaymentItem(BaseModel):
@@ -182,7 +235,36 @@ class AppointmentPaymentItem(BaseModel):
     appointment_id: int
     amount: float
     note: Optional[str] = None
+    paid_on: Optional[date] = None
     created_at: Optional[datetime | str] = None
+
+
+class AppointmentSearchHit(BaseModel):
+    """Resultado de búsqueda global de citas (fila lista + etiqueta de recibo)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    customer_name: Optional[str] = None
+    appointment_date: Optional[date | datetime | str] = None
+    receipt_label: Optional[str] = None
+    assigned_username: Optional[str] = None
+    assigned_first_name: Optional[str] = None
+    assigned_last_name: Optional[str] = None
+    assigned_role: Optional[str] = None
+    assigned_panel_user_id: Optional[int] = None
+    assigned_store_id: Optional[int] = None
+    service_type: Optional[str] = None
+    status: Optional[str] = None
+    has_signed_contract: bool = False
+    contract_pending_artist_signature: bool = False
+
+
+class AppointmentSearchResponse(BaseModel):
+    items: list[AppointmentSearchHit]
+    total: int
+    limit: int
+    offset: int
 
 
 class AppointmentPaymentReceiptListItem(BaseModel):

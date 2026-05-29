@@ -11,6 +11,10 @@ from app.schemas.customer import CUSTOMER_BIRTH_PENDING, SOCIAL_MEDIA_MAX_LEN
 from streamlit_app import api_client
 from streamlit_app.panel_navigation import open_contract_read
 from streamlit_app.customer_sync import social_media_api_to_form_text, social_media_form_text_to_api
+from streamlit_app.customers_export import (
+    build_customers_excel_for_export,
+    customers_excel_cache_fingerprint,
+)
 from streamlit_app.validation import (
     mobile_phone_co_10_error,
     optional_mobile_phone_co_10_error,
@@ -32,7 +36,12 @@ def _doc_type_index(val: Any) -> int:
     return opts.index(v)
 
 
-def _is_minor_by_birth_date(birth_date: date) -> bool:
+def _is_minor_by_birth_date(birth_date: date | None) -> bool:
+    """False si no hay fecha válida o es el sentinela de nacimiento pendiente."""
+    if not isinstance(birth_date, date):
+        return False
+    if birth_date == CUSTOMER_BIRTH_PENDING:
+        return False
     today = date.today()
     years = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
     return years < 18
@@ -101,6 +110,11 @@ def _render_cust_action_feedback() -> None:
         st.toast(msg, icon="✅", duration="long")
 
 
+def _purge_customers_excel_cache() -> None:
+    for k in [x for x in st.session_state if isinstance(x, str) and x.startswith("_cust_xlsx_")]:
+        st.session_state.pop(k, None)
+
+
 def _fetch_list(search: str, limit: int, page: int) -> None:
     offset = page * limit
     params: Dict[str, Any] = {"limit": limit, "offset": offset}
@@ -115,50 +129,144 @@ def _fetch_list(search: str, limit: int, page: int) -> None:
         st.session_state["_cust_last_error"] = (code, _detail(data))
 
 
+_DLG_CUST_ROOT_HTML = '<div class="dlg-cust-root" aria-hidden="true"></div>'
+
+
+def _mark_customer_dialog_scope() -> None:
+    """Marcador para CSS de diálogo en modo claro (ver styles/_theme_customers.css)."""
+    st.markdown(_DLG_CUST_ROOT_HTML, unsafe_allow_html=True)
+
+
+def _inject_customer_table_styles() -> None:
+    st.markdown(
+        """
+        <style>
+          .cust-col-title {
+            display: inline-block;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            color: #111827;
+            background: #f3f4f6;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 0.18rem 0.45rem;
+            white-space: nowrap;
+            line-height: 1.35;
+          }
+          div[data-testid="stHorizontalBlock"]:has(
+              > div[data-testid="column"]:nth-child(5) [data-testid="stButton"]
+            )
+            > div[data-testid="column"]:nth-child(5)
+            [data-testid="stHorizontalBlock"] {
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 2px 4px;
+            background: #fafafa;
+            gap: 4px !important;
+            align-items: center;
+            margin: 0 !important;
+          }
+          div[data-testid="stHorizontalBlock"]:has(
+              > div[data-testid="column"]:nth-child(5) [data-testid="stButton"]
+            )
+            > div[data-testid="column"]:nth-child(5)
+            [data-testid="stHorizontalBlock"]
+            > div[data-testid="column"] {
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            background: #fff;
+            min-width: 2.1rem;
+          }
+          div[data-testid="stHorizontalBlock"]:has(
+              > div[data-testid="column"]:nth-child(5) [data-testid="stButton"]
+            )
+            > div[data-testid="column"]:nth-child(5)
+            [data-testid="stButton"] button {
+            border: none !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            font-size: 1.05rem;
+            line-height: 1;
+            padding: 0.15rem 0.35rem !important;
+            min-height: 1.75rem;
+          }
+          div[data-testid="stHorizontalBlock"]:has(
+              > div[data-testid="column"]:nth-child(5) [data-testid="stButton"]
+            )
+            > div[data-testid="column"]:nth-child(5)
+            [data-testid="stButton"] button:hover {
+            background: #f3f4f6 !important;
+          }
+          div[data-testid="stHorizontalBlock"]:has(
+              > div[data-testid="column"]:nth-child(5) [data-testid="stButton"]
+            )
+            > div[data-testid="column"]:nth-child(5)
+            [data-testid="stElementContainer"] {
+            margin: 0 !important;
+          }
+          div[data-testid="stHorizontalBlock"]:has(
+              > div[data-testid="column"]:nth-child(5) [data-testid="stButton"]
+            )
+            > div[data-testid="column"]:nth-child(5)
+            > div[data-testid="stVerticalBlock"] {
+            gap: 0 !important;
+            justify-content: center !important;
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _render_customer_row_actions(cid: int, nombre: str) -> None:
-    """Menú único por fila (mismo patrón que Gestión citas): popover o botones compactos."""
+    """Casilla en línea con celdas internas e iconos Material (sin menú desplegable)."""
 
     def _dispatch_edit() -> None:
         st.session_state["_cust_dlg"] = "edit"
         st.session_state["_cust_dlg_id"] = cid
         st.session_state.pop("_dlg_edit_payload", None)
         st.session_state.pop("_dlg_edit_id", None)
+        st.rerun()
 
     def _dispatch_delete() -> None:
         st.session_state["_cust_dlg"] = "delete"
         st.session_state["_cust_dlg_id"] = cid
         st.session_state["_cust_dlg_del_name"] = nombre
+        st.rerun()
 
     def _dispatch_contracts() -> None:
         st.session_state["_cust_dlg"] = "contracts"
         st.session_state["_cust_dlg_id"] = cid
         st.session_state["_cust_dlg_contract_name"] = nombre
+        st.rerun()
 
-    pop = getattr(st, "popover", None)
-    if pop:
-        with pop("Acciones", use_container_width=True):
-            if cid > 0:
-                st.caption(f"Cliente #{cid}")
-            if nombre:
-                st.caption(nombre[:80] + ("…" if len(nombre) > 80 else ""))
-            if st.button("Editar", key=f"cust_e_{cid}", use_container_width=True):
-                _dispatch_edit()
-            if st.button("Eliminar", key=f"cust_d_{cid}", use_container_width=True):
-                _dispatch_delete()
-            if st.button("Contratos", key=f"cust_ct_{cid}", use_container_width=True):
-                _dispatch_contracts()
-        return
-
-    ln1, ln2 = st.columns(2)
-    with ln1:
-        if st.button("Editar", key=f"cust_fb_e_{cid}", use_container_width=True):
+    c_edit, c_del, c_ct = st.columns(3, gap="small", vertical_alignment="center")
+    with c_edit:
+        if st.button(
+            "",
+            key=f"cust_edit_{cid}",
+            help="Editar cliente",
+            icon=":material/edit:",
+            use_container_width=True,
+        ):
             _dispatch_edit()
-    with ln2:
-        if st.button("Eliminar", key=f"cust_fb_d_{cid}", use_container_width=True):
+    with c_del:
+        if st.button(
+            "",
+            key=f"cust_del_{cid}",
+            help="Eliminar cliente",
+            icon=":material/delete:",
+            use_container_width=True,
+        ):
             _dispatch_delete()
-    bn1, bn2 = st.columns(2)
-    with bn1:
-        if st.button("Contratos", key=f"cust_fb_ct_{cid}", use_container_width=True):
+    with c_ct:
+        if st.button(
+            "",
+            key=f"cust_ct_{cid}",
+            help="Contratos del cliente",
+            icon=":material/description:",
+            use_container_width=True,
+        ):
             _dispatch_contracts()
 
 
@@ -203,6 +311,7 @@ def _reset_create_customer_form_state() -> None:
 
 @st.dialog("Registrar cliente", width="large", dismissible=False)
 def _dialog_crear_cliente() -> None:
+    _mark_customer_dialog_scope()
     min_date_100, max_date_today = _date_range_100y()
     st.markdown("##### Datos personales")
     a, b = st.columns(2)
@@ -380,7 +489,7 @@ def _dialog_crear_cliente() -> None:
             st.rerun()
 
 
-@st.dialog("Editar cliente", width="large")
+@st.dialog("Editar cliente", width="large", dismissible=False)
 def _dialog_editar_cliente(cliente_id: int) -> None:
     if "_dlg_edit_payload" not in st.session_state or st.session_state.get("_dlg_edit_id") != cliente_id:
         ok, code, data = api_client.get_customer(cliente_id)
@@ -395,6 +504,7 @@ def _dialog_editar_cliente(cliente_id: int) -> None:
         st.session_state["_dlg_edit_payload"] = data
         st.session_state["_dlg_edit_id"] = cliente_id
 
+    _mark_customer_dialog_scope()
     ed = st.session_state["_dlg_edit_payload"]
 
     if _parse_date(ed.get("birth_date")) == CUSTOMER_BIRTH_PENDING:
@@ -598,7 +708,6 @@ def _dialog_editar_cliente(cliente_id: int) -> None:
 @st.dialog("Eliminar cliente", width="medium")
 def _dialog_eliminar_cliente(cliente_id: int, nombre: str) -> None:
     st.warning(f"¿Eliminar de forma lógica al cliente **{nombre}** (ID {cliente_id})?")
-    st.caption("El registro quedará marcado como eliminado (soft delete).")
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Sí, eliminar", type="primary", use_container_width=True, key="dlg_del_yes"):
@@ -656,6 +765,7 @@ def _dialog_contracts_cliente(cliente_id: int, nombre: str) -> None:
 
 
 def render_customers_management_tab() -> None:
+    st.markdown('<div class="cust-tab-root" aria-hidden="true"></div>', unsafe_allow_html=True)
     st.subheader("Gestión de clientes")
 
     if "_cust_page" not in st.session_state:
@@ -699,6 +809,7 @@ def render_customers_management_tab() -> None:
     page = int(st.session_state["_cust_page"])
 
     if st.session_state.get("_cust_reload"):
+        _purge_customers_excel_cache()
         with st.spinner("Cargando clientes…"):
             _fetch_list(search, limit, page)
         st.session_state["_cust_reload"] = False
@@ -718,28 +829,46 @@ def render_customers_management_tab() -> None:
 
     st.markdown(f"**{total}** cliente(s) en total · mostrando página **{page + 1}** de **{max(1, (total + limit - 1) // limit)}**")
 
-    st.markdown(
-            """
-            <style>
-              .cust-col-title {
-                display: inline-block;
-                font-weight: 700;
-                letter-spacing: 0.02em;
-                color: #111827;
-                background: #f3f4f6;
-                border: 1px solid #e5e7eb;
-                border-radius: 8px;
-                padding: 0.18rem 0.45rem;
-                white-space: nowrap;
-                line-height: 1.35;
-              }
-            </style>
-            """,
-            unsafe_allow_html=True,
+    _dl_left, _dl_right = st.columns([4, 1])
+    with _dl_right:
+        _xlsx_ready = b""
+        _xlsx_err: Optional[str] = None
+        if total > 0:
+            fp = customers_excel_cache_fingerprint(search, total)
+            cache_key = f"_cust_xlsx_{fp}"
+            hit = st.session_state.get(cache_key)
+            if isinstance(hit, bytes) and len(hit) > 0:
+                _xlsx_ready = hit
+            else:
+                for k in [
+                    x
+                    for x in st.session_state
+                    if isinstance(x, str) and x.startswith("_cust_xlsx_") and x != cache_key
+                ]:
+                    st.session_state.pop(k, None)
+                data, err = build_customers_excel_for_export(search)
+                if err:
+                    _xlsx_err = err
+                elif data:
+                    st.session_state[cache_key] = data
+                    _xlsx_ready = data
+        if _xlsx_err:
+            st.caption(f"Excel: {_xlsx_err}")
+        st.download_button(
+            label="Descargar Excel",
+            help="Exporta todos los clientes del filtro actual (búsqueda aplicada), con datos completos de ficha.",
+            data=_xlsx_ready,
+            file_name=f"Informe-clientes-{datetime.now().strftime('%Y-%m-%d-%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            disabled=total <= 0 or len(_xlsx_ready) == 0,
+            key="btn_cust_export_xlsx",
         )
 
-    cust_colw = [1.62, 1.22, 1.52, 1.12, 1.52]
-    h1, h2, h3, h4, h5 = st.columns(cust_colw)
+    _inject_customer_table_styles()
+
+    cust_colw = [1.55, 1.18, 1.45, 1.08, 1.95]
+    h1, h2, h3, h4, h5 = st.columns(cust_colw, vertical_alignment="center")
     h1.markdown('<span class="cust-col-title">Nombre</span>', unsafe_allow_html=True)
     h2.markdown('<span class="cust-col-title">Documento</span>', unsafe_allow_html=True)
     h3.markdown('<span class="cust-col-title">Correo</span>', unsafe_allow_html=True)
@@ -750,7 +879,7 @@ def render_customers_management_tab() -> None:
         cid = int(it["id"])
         nombre = f"{it.get('first_name', '')} {it.get('last_name', '')}".strip()
         doc = f"{it.get('document_type', '')} {it.get('document_number', '')}".strip()
-        c1, c2, c3, c4, c5 = st.columns(cust_colw)
+        c1, c2, c3, c4, c5 = st.columns(cust_colw, vertical_alignment="center")
         with c1:
             st.write(nombre)
         with c2:
