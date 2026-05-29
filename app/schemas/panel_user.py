@@ -123,6 +123,7 @@ class PanelUserSessionPublic(BaseModel):
     id: int
     username: str
     role: str
+    session_expires_at: float
 
 
 class PanelUserRegisteredResponse(BaseModel):

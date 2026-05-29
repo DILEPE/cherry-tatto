@@ -21,6 +21,11 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from app.domain.panel_modules import ASSIGNABLE_PANEL_MODULE_KEYS
+from app.domain.panel_session import (
+    PANEL_SESSION_LIFETIME_MINUTES,
+    panel_session_expires_at_epoch,
+    panel_session_is_expired,
+)
 from app.domain.panel_user_profile import PANEL_ROLE_CHOICES, PANEL_ROLE_LABEL_ES
 from streamlit_app import api_client
 from streamlit_app.store_choices import load_store_choices, store_display_label
@@ -243,13 +248,30 @@ def _clear_db_panel_identity() -> None:
         "_panel_username",
         "_panel_user_role",
         "_panel_module_keys_cache",
+        "_panel_session_expires_at",
     ):
         st.session_state.pop(k, None)
+
+
+def _stamp_panel_session_expiry() -> None:
+    st.session_state["_panel_session_expires_at"] = panel_session_expires_at_epoch()
+
+
+def _panel_session_is_active() -> bool:
+    if not st.session_state.get("_panel_auth_ok"):
+        return False
+    exp = st.session_state.get("_panel_session_expires_at")
+    if panel_session_is_expired(exp):
+        st.session_state["_panel_session_expired_notice"] = True
+        _logout_clear_all()
+        return False
+    return True
 
 
 def _set_env_operator_session() -> None:
     st.session_state["_panel_session_full_access"] = True
     _clear_db_panel_identity()
+    _stamp_panel_session_expiry()
 
 
 def _set_db_operator_session(user: dict[str, Any]) -> None:
@@ -258,6 +280,13 @@ def _set_db_operator_session(user: dict[str, Any]) -> None:
     st.session_state["_panel_username"] = str(user.get("username", ""))
     st.session_state["_panel_user_role"] = str(user.get("role", ""))
     st.session_state.pop("_panel_module_keys_cache", None)
+    raw_exp = user.get("session_expires_at")
+    try:
+        st.session_state["_panel_session_expires_at"] = (
+            float(raw_exp) if raw_exp is not None else panel_session_expires_at_epoch()
+        )
+    except (TypeError, ValueError):
+        _stamp_panel_session_expiry()
 
 
 def panel_is_operator_admin() -> bool:
@@ -305,6 +334,7 @@ def _pop_login_curtain_ui_state() -> None:
 def _logout_clear_all() -> None:
     st.session_state["_panel_auth_ok"] = False
     st.session_state.pop("_panel_session_full_access", None)
+    st.session_state.pop("_panel_session_expires_at", None)
     st.session_state.pop("panel_mod_radio", None)
     st.session_state.pop("_panel_module_transition", None)
     st.session_state.pop("_panel_just_switched_module", None)
@@ -606,8 +636,14 @@ def render_login_gate() -> bool:
     if not panel_auth_enabled():
         return True
 
-    if st.session_state.get("_panel_auth_ok"):
+    if _panel_session_is_active():
         return True
+
+    if st.session_state.pop("_panel_session_expired_notice", None):
+        st.info(
+            f"Tu sesión expiró tras **{PANEL_SESSION_LIFETIME_MINUTES} minutos**. "
+            "Vuelve a iniciar sesión."
+        )
 
     use_db = panel_auth_users_from_database()
 
