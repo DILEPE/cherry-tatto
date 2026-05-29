@@ -3,6 +3,7 @@ from __future__ import annotations
 from litestar import Controller, delete, get, post, put, status_codes
 from litestar.datastructures import State
 from litestar.exceptions import HTTPException
+from litestar.params import Parameter
 
 from app.schemas.common import ApiSuccessResponse
 from app.schemas.survey_questions import (
@@ -10,6 +11,7 @@ from app.schemas.survey_questions import (
     SurveyQuestionDeletionImpact,
     SurveyQuestionRead,
     SurveyQuestionStatRow,
+    SurveyQuestionTextResponseRow,
     SurveyQuestionUpdate,
 )
 
@@ -19,11 +21,43 @@ class SurveyQuestionController(Controller):
     path = "/api/survey-questions"
 
     @get("/stats/summary")
-    async def stats_summary(self, state: State) -> list[SurveyQuestionStatRow]:
+    async def stats_summary(
+        self,
+        state: State,
+        from_date: str | None = Parameter(query="from_date", default=None),
+        to_date: str | None = Parameter(query="to_date", default=None),
+    ) -> list[SurveyQuestionStatRow]:
         try:
-            return await state.service.survey_question_stats_summary()
+            return await state.service.survey_question_stats_summary(
+                from_date=from_date,
+                to_date=to_date,
+            )
+        except ValueError as e:
+            raise HTTPException(detail=str(e), status_code=400) from e
         except Exception as e:
             raise HTTPException(detail=f"Error al calcular estadísticas: {e}", status_code=500) from e
+
+    @get("/{question_id:int}/stats/text-responses")
+    async def text_responses(
+        self,
+        question_id: int,
+        state: State,
+        from_date: str | None = Parameter(query="from_date", default=None),
+        to_date: str | None = Parameter(query="to_date", default=None),
+    ) -> list[SurveyQuestionTextResponseRow]:
+        try:
+            return await state.service.survey_question_text_responses(
+                question_id,
+                from_date=from_date,
+                to_date=to_date,
+            )
+        except ValueError as e:
+            raise HTTPException(detail=str(e), status_code=400) from e
+        except Exception as e:
+            raise HTTPException(
+                detail=f"Error al listar respuestas de texto: {e}",
+                status_code=500,
+            ) from e
 
     @get("/")
     async def list_questions(

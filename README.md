@@ -7,7 +7,8 @@ Aplicación para administrar citas, clientes, contratos digitales y encuestas, i
 ```
 cherry_tattoo/
 ├── app/                 # API Litestar (backend)
-├── streamlit_app/       # Interfaz Streamlit (frontend operativo)
+├── streamlit_app/       # Interfaz Streamlit (frontend operativo, en migración)
+├── panel-frontend/      # Panel Angular (Signals, lazy routes) — ver panel-frontend/README.md
 ├── scripts/             # Utilidades: arranque conjunto (PowerShell, Bash), semillas, acceso directo escritorio
 ├── sql/                 # Esquema inicial y migraciones incrementales
 ├── docs/                # Documentación adicional del repositorio
@@ -22,7 +23,8 @@ cherry_tattoo/
 | Componente | Rol |
 |------------|-----|
 | **API (`app/`)** | Expone recursos HTTP: citas, clientes, contratos, plantillas, salud, encuestas. Persistencia en MySQL. |
-| **Streamlit (`streamlit_app/`)** | Panel para agenda, clientes, firma de contratos, administración de plantillas y reportes. Habla con la API vía HTTP. |
+| **Streamlit (`streamlit_app/`)** | Panel actual para agenda, clientes, firma de contratos, plantillas y reportes. Habla con la API vía HTTP. |
+| **Angular (`panel-frontend/`)** | Nueva UI del panel (migración incremental); misma API. Arranque: `cd panel-frontend && npm start`. |
 | **MySQL** | Base de datos relacional: clientes, citas, contratos, plantillas, pagos, etc. |
 | **n8n (opcional)** | Webhooks para notificaciones tras eventos (p. ej. contrato firmado); la URL se configura en `.env`. |
 

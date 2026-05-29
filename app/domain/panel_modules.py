@@ -10,6 +10,7 @@ ASSIGNABLE_PANEL_MODULE_KEYS: Final[tuple[str, ...]] = (
     "contratos",
     "encuestas",
     "reporte",
+    "tiendas",
 )
 
 ASSIGNABLE_PANEL_MODULE_KEYS_SET: Final[frozenset[str]] = frozenset(ASSIGNABLE_PANEL_MODULE_KEYS)
@@ -19,5 +20,6 @@ PANEL_MODULE_LABEL_ES: Final[dict[str, str]] = {
     "clientes": "Gestión de clientes",
     "contratos": "Gestión contratos",
     "encuestas": "Gestión encuesta",
-    "reporte": "Reporte",
+    "reporte": "Gestión de reportes",
+    "tiendas": "Gestión de tiendas",
 }

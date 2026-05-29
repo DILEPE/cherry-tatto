@@ -137,6 +137,13 @@ class SurveyQuestionStatRow(BaseModel):
     choice_breakdown: Optional[dict[str, int]] = None
 
 
+class SurveyQuestionTextResponseRow(BaseModel):
+    """Respuesta de texto libre vinculada al cliente de la cita."""
+
+    customer_id: Optional[int] = None
+    response_text: str
+
+
 def question_create_to_domain(data: SurveyQuestionCreate) -> SurveyQuestion:
     return SurveyQuestion(
         id=None,
