@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Genera `app/assets/receipt_rock_city_logo.png` desde el watermark Rock City.
 
-Lee `streamlit_app/assets/rock_city_watermark.png`, compone sobre fondo negro y
+Lee `app/assets/rock_city_watermark.png`, compone sobre fondo negro y
 remapa píxeles visibles: trazo alto/blanco en inglés, zona inferior (~纹身) en #E53E3E.
 
-Tras escribir el logo, actualiza los cuadrados ``receipt_rock_city_icon*.png`` y ``.ico``
-usados por Streamlit (favicon / sidebar si no hay ``branding.png``).
+Tras escribir el logo, actualiza los cuadrados ``receipt_rock_city_icon*.png`` y ``.ico``.
 
 Requisito: `pip install pillow` (está en requirements.txt).
 """
@@ -21,7 +20,7 @@ except ImportError:
     sys.exit(1)
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "streamlit_app" / "assets" / "rock_city_watermark.png"
+SRC = ROOT / "app" / "assets" / "rock_city_watermark.png"
 DST = ROOT / "app" / "assets" / "receipt_rock_city_logo.png"
 
 # Rojo marca alineado con _MARK_RED_UI en payment_receipt_pdf.py (~#E53E3E).

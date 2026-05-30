@@ -3,13 +3,8 @@ python-dotenv
 mysql-connector-python
 requests
 uvicorn
-streamlit
-streamlit-quill
-streamlit-drawable-canvas
 pydantic>=2
 email-validator
-openpyxl
-plotly>=5.18
 bcrypt>=4.1
 pymupdf>=1.24
 pillow>=10

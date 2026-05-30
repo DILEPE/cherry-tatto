@@ -183,7 +183,7 @@ Visible solo para **administrador** (y sesiones con acceso total si la configura
 
 ---
 
-*Documento generado a partir del comportamiento del código del panel (`streamlit_app/`) y dominio asociado. Ajustar capturas y procedimientos internos de tu tienda si el despliegue difiere.*
+*Documento de referencia del panel operativo (UI Angular + API). Ajustar capturas y procedimientos internos de tu tienda si el despliegue difiere.*
 
 ---
 

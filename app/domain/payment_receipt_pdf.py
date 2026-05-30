@@ -161,7 +161,7 @@ def _repo_root() -> Path:
 
 
 def resolve_payment_receipt_logo_png() -> Optional[str]:
-    """Primera ruta existente: env → app/assets → streamlit_app/assets."""
+    """Primera ruta existente: env → app/assets."""
     raw = (os.getenv("PAYMENT_RECEIPT_LOGO_IMAGE") or "").strip()
     candidates: list[Path] = []
     if raw:
@@ -171,8 +171,7 @@ def resolve_payment_receipt_logo_png() -> Optional[str]:
         [
             ad / "receipt_rock_city_logo.png",
             ad / "receipt_logo.png",
-            _repo_root() / "streamlit_app" / "assets" / "receipt_rock_city_logo.png",
-            _repo_root() / "streamlit_app" / "assets" / "rock_city_watermark.png",
+            ad / "rock_city_watermark.png",
         ]
     )
     for p in candidates:
