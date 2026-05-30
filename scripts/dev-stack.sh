@@ -86,10 +86,6 @@ _resolve_panel_root() {
     echo "$sibling"
     return
   fi
-  if [[ -f "${ROOT}/panel-frontend/package.json" ]]; then
-    echo "${ROOT}/panel-frontend"
-    return
-  fi
 }
 
 if [[ "${START_PANEL:-}" =~ ^(1|true|yes|on)$ ]]; then

@@ -3,7 +3,7 @@
 #   .\scripts\dev-stack.ps1
 # Opcional:
 #   $env:START_N8N = "0"; .\scripts\dev-stack.ps1
-#   $env:START_PANEL = "1"; .\scripts\dev-stack.ps1   # npm start en panel-frontend o cherry_tattoo_angular
+#   $env:START_PANEL = "1"; .\scripts\dev-stack.ps1   # npm start en cherry_tattoo_angular
 #   .\scripts\dev-stack.ps1 -N8nMode none
 # Red local API: $env:DEV_BIND_HOST='0.0.0.0'
 
@@ -134,8 +134,6 @@ function Resolve-PanelRoot {
     }
     $sibling = Join-Path (Split-Path $Root -Parent) "cherry_tattoo_angular"
     if (Test-Path (Join-Path $sibling "package.json")) { return $sibling }
-    $embedded = Join-Path $Root "panel-frontend"
-    if (Test-Path (Join-Path $embedded "package.json")) { return $embedded }
     return $null
 }
 
@@ -155,7 +153,7 @@ if (Should-StartPanel) {
         }
     }
     else {
-        Write-Host "[aviso] START_PANEL=1 pero no hay package.json en cherry_tattoo_angular ni panel-frontend." -ForegroundColor Yellow
+        Write-Host "[aviso] START_PANEL=1 pero no hay package.json en ../cherry_tattoo_angular." -ForegroundColor Yellow
     }
 }
 

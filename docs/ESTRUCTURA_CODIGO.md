@@ -72,8 +72,7 @@ Modelos Pydantic v2 por contexto: `appointment`, `customer`, `contract`, `templa
 
 ## Panel Angular (repositorio aparte)
 
-- Repositorio: **`cherry_tattoo_angular`** (desarrollo principal).
-- Copia opcional en este repo: `panel-frontend/`.
+- Repositorio: **`cherry_tattoo_angular`** (mismo nivel que este repo en disco).
 - Consume la misma API REST; autenticación vía `POST /api/panel-users/login`.
 
 ---

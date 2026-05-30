@@ -7,7 +7,6 @@ Aplicación para administrar citas, clientes, contratos digitales y encuestas, i
 ```
 cherry_tattoo/
 ├── app/                 # API Litestar (backend) + assets (logos Rock City, plantillas HTML, n8n)
-├── panel-frontend/      # Copia/esqueleto Angular en repo (desarrollo principal: repo cherry_tattoo_angular)
 ├── scripts/             # Arranque API, semillas, utilidades
 ├── sql/                 # Esquema inicial y migraciones incrementales
 ├── docs/                # Documentación adicional del repositorio
@@ -22,7 +21,7 @@ cherry_tattoo/
 | Componente | Rol |
 |------------|-----|
 | **API (`app/`)** | Expone recursos HTTP: citas, clientes, contratos, plantillas, salud, encuestas. Persistencia en MySQL. |
-| **Panel Angular** | UI operativa del negocio. Repositorio habitual: **`cherry_tattoo_angular`** (hermano de este repo). Copia local opcional: `panel-frontend/`. |
+| **Panel Angular** | UI operativa en el repositorio **`cherry_tattoo_angular`** (hermano de este repo). |
 | **MySQL** | Base de datos relacional: clientes, citas, contratos, plantillas, pagos, etc. |
 | **n8n (opcional)** | Webhooks para notificaciones tras eventos (p. ej. contrato firmado); la URL se configura en `.env`. |
 
@@ -116,10 +115,10 @@ Comprueba salud: `GET http://127.0.0.1:5000/health` (o la ruta que exponga tu `H
 
 ### 5. Arrancar el panel Angular
 
-En **otra terminal** (repositorio `cherry_tattoo_angular` o `panel-frontend/`):
+En **otra terminal**, en el repositorio `cherry_tattoo_angular` (junto a este repo):
 
 ```powershell
-cd ..\cherry_tattoo_angular   # o panel-frontend
+cd ..\cherry_tattoo_angular
 npm install
 npm start
 ```
@@ -138,7 +137,7 @@ En la **raíz del repositorio** puedes levantar la API y (opcionalmente) **n8n**
 | [`Install-Cherry-Desktop-Shortcut.bat`](Install-Cherry-Desktop-Shortcut.bat) | Windows | Ejecutar **una vez** desde el repo: crea en el escritorio el acceso directo **Cherry Tattoo Dev** y `Cherry-Tattoo-Iniciar.bat`, que invocan el lanzador por ruta absoluta. |
 | [`scripts/install-desktop-shortcut.ps1`](scripts/install-desktop-shortcut.ps1) | Windows | Lo usa el instalador anterior; también puedes llamarlo con `-RepoRoot "ruta\al\repo"`. |
 
-**Panel Angular con el script:** `$env:START_PANEL = "1"; .\scripts\dev-stack.ps1` (busca `cherry_tattoo_angular` al lado del repo o `panel-frontend/`). Opcional: `CHERRY_ANGULAR_ROOT` con la ruta absoluta al proyecto Angular.
+**Panel Angular con el script:** `$env:START_PANEL = "1"; .\scripts\dev-stack.ps1` (busca `cherry_tattoo_angular` al lado del repo). Opcional: `CHERRY_ANGULAR_ROOT` con la ruta absoluta al proyecto Angular.
 
 **Entorno virtual:** los scripts buscan Python en `.venv\Scripts\python.exe` o `venv\Scripts\python.exe` (en ese orden). Opcional: variable `CHERRY_PYTHON` con la ruta absoluta a `python.exe`.
 
