@@ -59,6 +59,19 @@ def parse_survey_stats_date_range(
     return fd, td
 
 
+_SERVICE_TYPE_PLACEHOLDER = "{service_type}"
+
+
+def format_survey_question_label(label: str, service_type: str | None = None) -> str:
+    """Sustituye `{service_type}` en etiquetas de encuesta (p. ej. «previas al tatuaje»)."""
+    text = (label or "").strip() or "Pregunta"
+    if _SERVICE_TYPE_PLACEHOLDER not in text:
+        return text
+    svc = (service_type or "").strip()
+    phrase = svc.lower() if svc else "procedimiento"
+    return text.replace(_SERVICE_TYPE_PLACEHOLDER, phrase)
+
+
 def parse_options_json(raw: Any) -> Optional[list[str]]:
     if raw is None:
         return None
