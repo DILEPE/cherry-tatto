@@ -1523,9 +1523,16 @@ class AppointmentRepository:
         """
         with self.db.transaction() as conn:
             cursor = self._get_cursor(conn)
-            query = """INSERT INTO contract_templates (name, contract_kind, version, content, is_active)
-                       VALUES (%s, %s, %s, %s, %s)"""
-            values = (data.name, data.contract_kind, data.version, data.content, data.is_active)
+            query = """INSERT INTO contract_templates (name, contract_kind, version, content, is_active, signing_flow)
+                       VALUES (%s, %s, %s, %s, %s, %s)"""
+            values = (
+                data.name,
+                data.contract_kind,
+                data.version,
+                data.content,
+                data.is_active,
+                getattr(data, "signing_flow", None) or "phased",
+            )
             cursor.execute(query, values)
             new_id = int(cursor.lastrowid or 0)
             if data.is_active and new_id:
@@ -1568,6 +1575,9 @@ class AppointmentRepository:
                 ck = res.get("contract_kind")
                 if ck is None:
                     ck = "tattoo"
+                sf = str(res.get("signing_flow") or "phased").strip().lower()
+                if sf not in ("phased", "single"):
+                    sf = "phased"
                 return ContractTemplate(
                     id=res["id"],
                     name=res["name"],
@@ -1575,6 +1585,7 @@ class AppointmentRepository:
                     content=res["content"],
                     contract_kind=str(ck),
                     is_active=bool(res["is_active"]),
+                    signing_flow=sf,
                 )
             return None
         finally:
@@ -1586,9 +1597,17 @@ class AppointmentRepository:
             cursor = self._get_cursor(conn)
             cursor.execute(
                 """UPDATE contract_templates
-                   SET name = %s, contract_kind = %s, version = %s, content = %s, is_active = %s
+                   SET name = %s, contract_kind = %s, version = %s, content = %s, is_active = %s, signing_flow = %s
                    WHERE id = %s""",
-                (data.name, data.contract_kind, data.version, data.content, data.is_active, template_id),
+                (
+                    data.name,
+                    data.contract_kind,
+                    data.version,
+                    data.content,
+                    data.is_active,
+                    getattr(data, "signing_flow", None) or "phased",
+                    template_id,
+                ),
             )
             if data.is_active:
                 cursor.execute(

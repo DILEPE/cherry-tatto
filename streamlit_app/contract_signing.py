@@ -22,7 +22,10 @@ from pydantic import ValidationError
 from app.schemas.customer import CUSTOMER_BIRTH_PENDING, CustomerCreate, SOCIAL_MEDIA_MAX_LEN
 from app.domain.contract_kinds import KIND_LABEL_ES, appointment_to_contract_kind, service_type_requires_contract
 from app.domain.contract_signing_guard import appointment_must_be_fully_paid_for_contract
-from app.domain.survey_question_helpers import QUESTION_TYPES_NEEDING_OPTIONS
+from app.domain.survey_question_helpers import (
+    QUESTION_TYPES_NEEDING_OPTIONS,
+    format_survey_question_label,
+)
 from streamlit_app import api_client
 from streamlit_app.panel_navigation import leave_contract_view_to_panel
 from streamlit_app.customer_sync import social_media_api_to_form_text, social_media_form_text_to_api
@@ -1072,9 +1075,9 @@ def _submit_ctsig_survey(appointment_id: int, qs: list[dict[str, Any]]) -> None:
         st.error(f"No se pudo guardar el cuestionario (HTTP {code_p}): {_detail(data_p)}")
 
 
-def _render_contract_survey_question(q: dict[str, Any]) -> None:
+def _render_contract_survey_question(q: dict[str, Any], *, service_type: str | None = None) -> None:
     """Etiqueta (altura mínima para alinear columnas) + widget; sin divisor."""
-    lbl = str(q.get("label") or "Pregunta")
+    lbl = format_survey_question_label(str(q.get("label") or "Pregunta"), service_type)
     st.markdown(
         f'<div class="ctsig-survey-q-label">{html_mod.escape(lbl)}</div>',
         unsafe_allow_html=True,
@@ -1215,13 +1218,14 @@ def _render_step2_questionnaire(appointment_id: int, appt: dict[str, Any]) -> No
     @st.fragment
     def _fragment_ctsig_survey_form() -> None:
         st.markdown('<div class="ctsig-survey-root" aria-hidden="true"></div>', unsafe_allow_html=True)
+        svc_type = str(appt.get("service_type") or "")
         for row_start in range(0, len(qs), 2):
             col_left, col_right = st.columns(2, gap="large")
             with col_left:
-                _render_contract_survey_question(qs[row_start])
+                _render_contract_survey_question(qs[row_start], service_type=svc_type)
             with col_right:
                 if row_start + 1 < len(qs):
-                    _render_contract_survey_question(qs[row_start + 1])
+                    _render_contract_survey_question(qs[row_start + 1], service_type=svc_type)
             st.divider()
 
         st.selectbox(

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.domain.models import ContractTemplate
 
 ContractKindLiteral = Literal["tattoo", "piercing"]
+SigningFlowLiteral = Literal["phased", "single"]
 
 
 class ContractTemplateRead(BaseModel):
@@ -19,6 +20,7 @@ class ContractTemplateRead(BaseModel):
     version: str
     content: str
     is_active: bool = True
+    signing_flow: SigningFlowLiteral = "phased"
 
 
 class ContractTemplateCreate(BaseModel):
@@ -29,6 +31,7 @@ class ContractTemplateCreate(BaseModel):
     version: str = Field(..., min_length=1, max_length=32)
     content: str = Field(..., min_length=1)
     is_active: bool = True
+    signing_flow: SigningFlowLiteral = "phased"
 
     def to_domain(self) -> ContractTemplate:
         return ContractTemplate(
@@ -38,6 +41,7 @@ class ContractTemplateCreate(BaseModel):
             content=self.content,
             contract_kind=self.contract_kind,
             is_active=self.is_active,
+            signing_flow=self.signing_flow,
         )
 
 
@@ -49,6 +53,7 @@ class ContractTemplateUpdate(BaseModel):
     version: str = Field(..., min_length=1, max_length=32)
     content: str = Field(..., min_length=1)
     is_active: bool = True
+    signing_flow: SigningFlowLiteral = "phased"
 
     def to_domain(self) -> ContractTemplate:
         return ContractTemplate(
@@ -58,4 +63,5 @@ class ContractTemplateUpdate(BaseModel):
             content=self.content,
             contract_kind=self.contract_kind,
             is_active=self.is_active,
+            signing_flow=self.signing_flow,
         )

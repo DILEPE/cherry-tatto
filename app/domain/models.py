@@ -47,6 +47,7 @@ class ContractTemplate:
     content: str       # Texto o HTML del contrato (placeholders {{nombres}}, etc.)
     contract_kind: str = "tattoo"  # tattoo | piercing
     is_active: bool = True
+    signing_flow: str = "phased"  # phased | single
 
 @dataclass
 class SurveyAnswerWrite:
