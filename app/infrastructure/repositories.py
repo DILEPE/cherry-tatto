@@ -1355,12 +1355,37 @@ class AppointmentRepository:
             if conn:
                 conn.close()
 
-    def get_survey_question_stats_summary(self) -> list[dict[str, object]]:
+    @staticmethod
+    def _survey_appt_date_on_clause(
+        from_date: Optional[date] = None,
+        to_date: Optional[date] = None,
+    ) -> tuple[str, list[date]]:
+        parts: list[str] = []
+        params: list[date] = []
+        if from_date is not None:
+            parts.append(" AND DATE(ap.appointment_date) >= %s")
+            params.append(from_date)
+        if to_date is not None:
+            parts.append(" AND DATE(ap.appointment_date) <= %s")
+            params.append(to_date)
+        return "".join(parts), params
+
+    def get_survey_question_stats_summary(
+        self,
+        from_date: Optional[date] = None,
+        to_date: Optional[date] = None,
+    ) -> list[dict[str, object]]:
+        date_on, date_params = self._survey_appt_date_on_clause(from_date, to_date)
+        answer_join = f"""
+                LEFT JOIN survey_answers a ON a.question_id = q.id
+                LEFT JOIN surveys s ON s.id = a.survey_id
+                LEFT JOIN appointments ap ON ap.id = s.appointment_id{date_on}
+        """
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn, dictionary=True)
             cursor.execute(
-                """
+                f"""
                 SELECT
                     q.id AS question_id,
                     q.label,
@@ -1380,21 +1405,25 @@ class AppointmentRepository:
                     ) AS text_response_count,
                     AVG(a.answer_number) AS avg_number
                 FROM survey_questions q
-                LEFT JOIN survey_answers a ON a.question_id = q.id
+                {answer_join}
                 GROUP BY q.id, q.label, q.question_type, q.sort_order, q.contract_kind, q.is_active
                 ORDER BY q.sort_order ASC, q.id ASC
-                """
+                """,
+                tuple(date_params),
             )
             rows = cursor.fetchall()
 
             rating_breakdown: dict[int, dict[str, int]] = {}
             cursor.execute(
-                """
-                SELECT question_id, answer_rating AS rv, COUNT(*) AS cnt
-                FROM survey_answers
-                WHERE answer_rating IS NOT NULL
-                GROUP BY question_id, answer_rating
-                """
+                f"""
+                SELECT a.question_id, a.answer_rating AS rv, COUNT(*) AS cnt
+                FROM survey_answers a
+                INNER JOIN surveys s ON s.id = a.survey_id
+                INNER JOIN appointments ap ON ap.id = s.appointment_id
+                WHERE a.answer_rating IS NOT NULL{date_on}
+                GROUP BY a.question_id, a.answer_rating
+                """,
+                tuple(date_params),
             )
             for r in cursor.fetchall():
                 qid = int(r["question_id"])
@@ -1403,12 +1432,15 @@ class AppointmentRepository:
 
             number_breakdown: dict[int, dict[str, int]] = {}
             cursor.execute(
-                """
-                SELECT question_id, answer_number AS nv, COUNT(*) AS cnt
-                FROM survey_answers
-                WHERE answer_number IS NOT NULL
-                GROUP BY question_id, answer_number
-                """
+                f"""
+                SELECT a.question_id, a.answer_number AS nv, COUNT(*) AS cnt
+                FROM survey_answers a
+                INNER JOIN surveys s ON s.id = a.survey_id
+                INNER JOIN appointments ap ON ap.id = s.appointment_id
+                WHERE a.answer_number IS NOT NULL{date_on}
+                GROUP BY a.question_id, a.answer_number
+                """,
+                tuple(date_params),
             )
             for r in cursor.fetchall():
                 qid = int(r["question_id"])
@@ -1418,15 +1450,18 @@ class AppointmentRepository:
 
             choice_breakdown: dict[int, dict[str, int]] = {}
             cursor.execute(
-                """
+                f"""
                 SELECT a.question_id, a.answer_text AS txt, COUNT(*) AS cnt
                 FROM survey_answers a
                 INNER JOIN survey_questions q ON q.id = a.question_id
+                INNER JOIN surveys s ON s.id = a.survey_id
+                INNER JOIN appointments ap ON ap.id = s.appointment_id
                 WHERE q.question_type IN ('radio', 'select', 'checkbox')
                   AND a.answer_text IS NOT NULL
-                  AND CHAR_LENGTH(TRIM(a.answer_text)) > 0
+                  AND CHAR_LENGTH(TRIM(a.answer_text)) > 0{date_on}
                 GROUP BY a.question_id, a.answer_text
-                """
+                """,
+                tuple(date_params),
             )
             for r in cursor.fetchall():
                 qid = int(r["question_id"])
@@ -1448,6 +1483,38 @@ class AppointmentRepository:
             if conn:
                 conn.close()
 
+    def list_survey_text_responses_for_question(
+        self,
+        question_id: int,
+        from_date: Optional[date] = None,
+        to_date: Optional[date] = None,
+    ) -> list[dict[str, object]]:
+        date_on, date_params = self._survey_appt_date_on_clause(from_date, to_date)
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                f"""
+                SELECT
+                    ap.customer_id AS customer_id,
+                    TRIM(a.answer_text) AS response_text
+                FROM survey_answers a
+                INNER JOIN surveys s ON s.id = a.survey_id
+                INNER JOIN appointments ap ON ap.id = s.appointment_id
+                INNER JOIN survey_questions q ON q.id = a.question_id
+                WHERE a.question_id = %s
+                  AND q.question_type IN ('text', 'textarea', 'text_short')
+                  AND a.answer_text IS NOT NULL
+                  AND CHAR_LENGTH(TRIM(a.answer_text)) > 0{date_on}
+                ORDER BY s.id DESC, a.id DESC
+                """,
+                (int(question_id), *date_params),
+            )
+            return list(cursor.fetchall() or [])
+        finally:
+            if conn:
+                conn.close()
+
     # --- Plantillas ---
 
     def create_template(self, data: ContractTemplate) -> int:
@@ -1456,9 +1523,16 @@ class AppointmentRepository:
         """
         with self.db.transaction() as conn:
             cursor = self._get_cursor(conn)
-            query = """INSERT INTO contract_templates (name, contract_kind, version, content, is_active)
-                       VALUES (%s, %s, %s, %s, %s)"""
-            values = (data.name, data.contract_kind, data.version, data.content, data.is_active)
+            query = """INSERT INTO contract_templates (name, contract_kind, version, content, is_active, signing_flow)
+                       VALUES (%s, %s, %s, %s, %s, %s)"""
+            values = (
+                data.name,
+                data.contract_kind,
+                data.version,
+                data.content,
+                data.is_active,
+                getattr(data, "signing_flow", None) or "phased",
+            )
             cursor.execute(query, values)
             new_id = int(cursor.lastrowid or 0)
             if data.is_active and new_id:
@@ -1501,6 +1575,9 @@ class AppointmentRepository:
                 ck = res.get("contract_kind")
                 if ck is None:
                     ck = "tattoo"
+                sf = str(res.get("signing_flow") or "phased").strip().lower()
+                if sf not in ("phased", "single"):
+                    sf = "phased"
                 return ContractTemplate(
                     id=res["id"],
                     name=res["name"],
@@ -1508,6 +1585,7 @@ class AppointmentRepository:
                     content=res["content"],
                     contract_kind=str(ck),
                     is_active=bool(res["is_active"]),
+                    signing_flow=sf,
                 )
             return None
         finally:
@@ -1519,9 +1597,17 @@ class AppointmentRepository:
             cursor = self._get_cursor(conn)
             cursor.execute(
                 """UPDATE contract_templates
-                   SET name = %s, contract_kind = %s, version = %s, content = %s, is_active = %s
+                   SET name = %s, contract_kind = %s, version = %s, content = %s, is_active = %s, signing_flow = %s
                    WHERE id = %s""",
-                (data.name, data.contract_kind, data.version, data.content, data.is_active, template_id),
+                (
+                    data.name,
+                    data.contract_kind,
+                    data.version,
+                    data.content,
+                    data.is_active,
+                    getattr(data, "signing_flow", None) or "phased",
+                    template_id,
+                ),
             )
             if data.is_active:
                 cursor.execute(

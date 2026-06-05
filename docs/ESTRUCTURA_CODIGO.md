@@ -11,7 +11,7 @@ El backend sigue una separación en capas inspirada en **hexagonal / limpia**:
 3. **Infraestructura** — MySQL, repositorios, integraciones externas (p. ej. n8n).
 4. **Esquemas (Pydantic)** — contratos de API: request/response compartidos con validación.
 
-El **Streamlit** es un cliente más: no contiene reglas de persistencia directa; usa `streamlit_app/api_client.py` para hablar con la API.
+El **panel Angular** (`cherry_tattoo_angular`) es el cliente HTTP; no persiste datos fuera de la API.
 
 ```
 app/
@@ -19,21 +19,9 @@ app/
 ├── application/            # Controllers (rutas HTTP)
 ├── domain/                 # Servicios de negocio, modelos dataclass, utilidades de dominio
 ├── infrastructure/         # DB, repositorios SQL, notificaciones
-├── schemas/              # Pydantic: DTOs de API
-└── types/                # Tipos auxiliares (p. ej. JSON)
-
-streamlit_app/
-├── main.py                 # App Streamlit multipágina / query params
-├── api_client.py           # Cliente HTTP centralizado (requests)
-├── citas_tab.py            # Calendario, citas, reportes
-├── customers_management.py # CRUD clientes en UI
-├── contract_signing.py     # Flujo firma por cita (URL dedicada)
-├── contract_read_view.py   # Lectura contrato firmado
-├── contracts_admin.py      # Gestión plantillas de contrato
-├── survey_questions_admin.py # CRUD preguntas de encuesta (vincula con reporte)
-├── validation.py           # Validaciones compartidas en formularios
-├── customer_sync.py        # Helpers cliente ↔ API
-└── rich_text.py            # Editor enriquecido opcional (Quill) para plantillas
+├── schemas/                # Pydantic: DTOs de API
+├── assets/                 # Logos Rock City, plantillas HTML, PDFs, flujos n8n
+└── types/                  # Tipos auxiliares (p. ej. JSON)
 ```
 
 ---
@@ -43,7 +31,7 @@ streamlit_app/
 ### `app/main.py`
 
 - Carga `.env` con `python-dotenv`.
-- Instancia `DatabaseManager`, repositorios (`AppointmentRepository`, `CustomerRepository`), `NotificationService` y `BusinessLogicService`.
+- Instancia `DatabaseManager`, repositorios, `NotificationService` y `BusinessLogicService`.
 - Registra controladores en `Litestar` y expone `app` para Uvicorn.
 
 ### `app/application/*_controller.py`
@@ -54,72 +42,68 @@ Cada controlador agrupa rutas bajo un prefijo (p. ej. `/api/appointments`). Resp
 - Invocar métodos asíncronos de `BusinessLogicService` vía `state.service`.
 - Traducir excepciones a `HTTPException`.
 
-Archivos habituales: `appointment_controller`, `customer_controller`, `contract_controller`, `template_controller`, `survey_controller`, `survey_questions_controller`, `health_controller`.
+Archivos habituales: `appointment_controller`, `customer_controller`, `contract_controller`, `template_controller`, `survey_controller`, `survey_questions_controller`, `panel_user_controller`, `health_controller`.
 
 ### `app/domain/`
 
 | Módulo | Contenido |
 |--------|-----------|
-| `services.py` | `BusinessLogicService`: orquestación de casos de uso (citas, contratos, plantillas, clientes, reportes). Ejecuta trabajo bloqueante en `asyncio.to_thread` cuando llama al repositorio. |
-| `models.py` | Dataclasses de entrada/salida del dominio (`AppointmentCreate`, `ContractSign`, `ContractTemplate`, etc.). |
-| `service_types.py` | Resolución de texto de servicio → valor almacenado en cita (`SERVICE_TYPE_ENUM_VALUES`). |
-| `contract_kinds.py` | Mapeo cita → tipo de plantilla (`tattoo` / `piercing`) y si la cita **requiere** contrato (p. ej. Cambio/Limpieza no). |
+| `services.py` | `BusinessLogicService`: orquestación de casos de uso. |
+| `models.py` | Dataclasses de entrada/salida del dominio. |
+| `service_types.py` | Resolución de texto de servicio → valor almacenado en cita. |
+| `contract_kinds.py` | Mapeo cita → tipo de plantilla (`tattoo` / `piercing`). |
+| `survey_question_helpers.py` | Etiquetas de preguntas de encuesta (p. ej. `{service_type}`). |
+| `payment_receipt_pdf.py` | Generación de PDF de recibos (assets en `app/assets/`). |
 
 ### `app/infrastructure/`
 
 | Módulo | Contenido |
 |--------|-----------|
-| `database.py` | `DatabaseManager`: conexión MySQL, utilidades de migración ligera en arranque (`ensure_*`). |
-| `repositories.py` | `AppointmentRepository`: citas, contratos, plantillas de contrato, reportes relacionados. |
-| `customer_repository.py` | Persistencia específica de clientes (puede evolucionar aparte del repo de citas). |
-| `external_api.py` | Envío de notificaciones (webhook). |
-| Otros | Health n8n, etc., según evolución del repo. |
+| `database.py` | `DatabaseManager`: conexión MySQL. |
+| `repositories.py` | Citas, contratos, plantillas, reportes. |
+| `customer_repository.py` | Persistencia de clientes. |
+| `external_api.py` | Webhooks n8n. |
 
 ### `app/schemas/`
 
-Modelos Pydantic v2 por contexto: `appointment`, `customer`, `contract`, `template`, `survey`, `survey_questions`, `report`, `health`, `common`. Sirven de frontera estable entre JSON y el dominio (`to_domain`, `Read` models).
+Modelos Pydantic v2 por contexto: `appointment`, `customer`, `contract`, `template`, `survey`, `panel_user`, `report`, `health`, `common`.
 
 ---
 
-## Frontend Streamlit (`streamlit_app/`)
+## Panel Angular (repositorio aparte)
 
-- **`main.py`**: configuración de página, CSS, pestañas (citas, clientes, contratos, etc.) y enrutado por `st.query_params` (p. ej. `view=contract_sign`).
-- **`api_client.py`**: funciones `get_*` / `post_*` / `put_*` / `patch_*` que encapsulan URLs y parsing de respuestas.
-- **Módulos grandes de UI**: `citas_tab`, `customers_management` — lógica de formularios, sesión y llamadas API.
-- **Contratos**: `contract_signing` (firma), `contract_read_view` (solo lectura), `contracts_admin` (plantillas Quill + tipos tattoo/piercing).
-
-Las validaciones repetidas en formularios suelen estar en `validation.py` para no duplicar reglas entre pestañas.
+- Repositorio: **`cherry_tattoo_angular`** (mismo nivel que este repo en disco).
+- Consume la misma API REST; autenticación vía `POST /api/panel-users/login`.
 
 ---
 
 ## SQL (`sql/`)
 
-Scripts numerados: esquema inicial `000_*`, cambios incrementales `00N_*`. El orden y notas operativas están en [sql/README.md](../sql/README.md).
+Scripts numerados: esquema inicial `000_*`, cambios incrementales `00N_*`. Orden en [sql/README.md](../sql/README.md).
 
 ---
 
 ## Flujo de datos típico
 
-1. Usuario interactúa en Streamlit.
-2. `api_client` envía HTTP a Litestar.
+1. Usuario interactúa en el panel Angular.
+2. El frontend envía HTTP a Litestar.
 3. Controller valida y llama a `BusinessLogicService`.
 4. Servicio usa repositorios y opcionalmente notificaciones.
-5. Respuesta JSON vuelve a Streamlit y actualiza la UI.
+5. Respuesta JSON actualiza la UI.
 
 ---
 
-## Dependencias principiales
+## Dependencias principales (Python)
 
-- **Litestar**, **Uvicorn** — API asíncrona.
+- **Litestar**, **Uvicorn** — API.
 - **Pydantic** — esquemas y validación.
-- **mysql-connector-python** — acceso a MySQL.
-- **Streamlit**, **streamlit-drawable-canvas**, **streamlit-quill** — panel y componentes.
-- **requests** — cliente HTTP en Streamlit.
+- **mysql-connector-python** — MySQL.
 - **python-dotenv** — variables de entorno.
+- **pymupdf**, **pillow** — PDF de recibos e iconos.
 
 ---
 
 ## Ampliación recomendada
 
-- Nuevos endpoints: esquema Pydantic → método en `BusinessLogicService` → SQL en repositorio → ruta en un controller (o uno nuevo).
-- Nuevas pantallas: módulo en `streamlit_app/` + métodos en `api_client.py` si hacen falta rutas nuevas.
+- Nuevos endpoints: esquema Pydantic → `BusinessLogicService` → repositorio → controller.
+- Nuevas pantallas: módulo en `cherry_tattoo_angular` + servicios HTTP del feature.

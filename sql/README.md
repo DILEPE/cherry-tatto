@@ -25,6 +25,7 @@ Esta carpeta contiene scripts SQL para crear la estructura base y aplicar cambio
 19. … migraciones `019`–`023` según tu despliegue (recibos, consentimientos, encuesta, abonos, etc.)
 20. `024_stores.sql` (tabla `stores`; `panel_users.store_id` FK; sin slug `code`)
 21. `025_stores_drop_code_panel_store_id.sql` (solo si aplicaste un `024` antiguo que aún tenía `stores.code`)
+22. `026_contract_templates_signing_flow.sql` (flujo de firma por plantilla: `phased` | `single`; incluye `USE cherry_tatto`)
 
 > Nota: `001_customers_and_appointments_fk.sql` queda como referencia histórica porque la estructura base ya está consolidada en `000_initial_schema_cherry_tatto.sql`.
 
@@ -51,6 +52,7 @@ Si tu base ya existe y solo quieres actualizar:
 17. `018_appointments_assigned_panel_user.sql` (profesional asignado por cita; ejecutar después de `015`)
 18. `024_stores.sql` (catálogo de tiendas; ejecutar cuando uses **Gestión de tiendas** en el panel)
 19. `025_stores_drop_code_panel_store_id.sql` (si tu `024` anterior aún tenía columna `code`)
+20. `026_contract_templates_signing_flow.sql` (flujo al firmar definido en cada plantilla de contrato; incluye `USE cherry_tatto`)
 
 ## Recuperación rápida
 

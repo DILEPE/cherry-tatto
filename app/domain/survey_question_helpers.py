@@ -34,6 +34,44 @@ def question_type_supports_distribution_chart(question_type: str) -> bool:
     return str(question_type or "").strip() in QUESTION_TYPES_CHARTABLE
 
 
+def parse_survey_stats_filter_date(raw: str | None, label: str) -> Optional["date"]:
+    from datetime import date
+
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    try:
+        return date.fromisoformat(s[:10])
+    except ValueError as e:
+        raise ValueError(f"{label} inválida (use AAAA-MM-DD)") from e
+
+
+def parse_survey_stats_date_range(
+    from_date: str | None,
+    to_date: str | None,
+) -> tuple[Optional["date"], Optional["date"]]:
+    fd = parse_survey_stats_filter_date(from_date, "Fecha desde")
+    td = parse_survey_stats_filter_date(to_date, "Fecha hasta")
+    if fd is not None and td is not None and fd > td:
+        raise ValueError("La fecha «desde» no puede ser posterior a «hasta».")
+    return fd, td
+
+
+_SERVICE_TYPE_PLACEHOLDER = "{service_type}"
+
+
+def format_survey_question_label(label: str, service_type: str | None = None) -> str:
+    """Sustituye `{service_type}` en etiquetas de encuesta (p. ej. «previas al tatuaje»)."""
+    text = (label or "").strip() or "Pregunta"
+    if _SERVICE_TYPE_PLACEHOLDER not in text:
+        return text
+    svc = (service_type or "").strip()
+    phrase = svc.lower() if svc else "procedimiento"
+    return text.replace(_SERVICE_TYPE_PLACEHOLDER, phrase)
+
+
 def parse_options_json(raw: Any) -> Optional[list[str]]:
     if raw is None:
         return None

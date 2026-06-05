@@ -32,6 +32,7 @@ from app.schemas.contract import _is_non_empty_signature_blob
 from app.domain.panel_user_profile import PANEL_ROLE_LABEL_ES
 from app.domain.panel_modules import ASSIGNABLE_PANEL_MODULE_KEYS
 from app.domain.panel_passwords import hash_password, verify_password
+from app.domain.panel_session import panel_session_expires_at_epoch
 from app.domain.payment_receipt_pdf import (
     PAYMENT_RECEIPT_N8N_TEMPLATE_KEY,
     PaymentReceiptPdfContext,
@@ -69,6 +70,7 @@ from app.schemas.survey_questions import (
     SurveyQuestionDeletionImpact,
     SurveyQuestionRead,
     SurveyQuestionStatRow,
+    SurveyQuestionTextResponseRow,
     SurveyQuestionUpdate,
     question_create_to_domain,
 )
@@ -1282,10 +1284,60 @@ class BusinessLogicService:
 
         return await asyncio.to_thread(_run)
 
-    async def survey_question_stats_summary(self) -> list[SurveyQuestionStatRow]:
+    async def survey_question_text_responses(
+        self,
+        question_id: int,
+        *,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> list[SurveyQuestionTextResponseRow]:
+
+        def _run() -> list[SurveyQuestionTextResponseRow]:
+            from app.domain.survey_question_helpers import parse_survey_stats_date_range
+
+            fd, td = parse_survey_stats_date_range(from_date, to_date)
+            row = self.repository.get_survey_question(question_id)
+            if not row:
+                raise ValueError("Pregunta no encontrada")
+            qt = str(row.get("question_type") or "").strip()
+            if qt not in ("text", "textarea", "text_short"):
+                raise ValueError("La pregunta no es de texto libre")
+            raw = self.repository.list_survey_text_responses_for_question(
+                question_id,
+                from_date=fd,
+                to_date=td,
+            )
+            out: list[SurveyQuestionTextResponseRow] = []
+            for r in raw:
+                cid = r.get("customer_id")
+                txt = str(r.get("response_text") or "").strip()
+                if not txt:
+                    continue
+                out.append(
+                    SurveyQuestionTextResponseRow(
+                        customer_id=int(cid) if cid is not None else None,
+                        response_text=txt,
+                    )
+                )
+            return out
+
+        return await asyncio.to_thread(_run)
+
+    async def survey_question_stats_summary(
+        self,
+        *,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> list[SurveyQuestionStatRow]:
 
         def _run() -> list[SurveyQuestionStatRow]:
-            rows = self.repository.get_survey_question_stats_summary()
+            from app.domain.survey_question_helpers import parse_survey_stats_date_range
+
+            fd, td = parse_survey_stats_date_range(from_date, to_date)
+            rows = self.repository.get_survey_question_stats_summary(
+                from_date=fd,
+                to_date=td,
+            )
             out: list[SurveyQuestionStatRow] = []
             for r in rows:
                 ar = r.get("avg_rating")
@@ -1594,6 +1646,7 @@ class BusinessLogicService:
                 id=int(row["id"]),
                 username=str(row["username"]),
                 role=str(row["role"]),
+                session_expires_at=panel_session_expires_at_epoch(),
             )
 
         return await asyncio.to_thread(_run)
