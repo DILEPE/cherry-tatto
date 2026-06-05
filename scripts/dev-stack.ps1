@@ -138,8 +138,10 @@ function Resolve-PanelRoot {
 }
 
 function Should-StartPanel {
+    if ($env:START_PANEL -match '^(0|false|no|off)$') { return $false }
     if ($env:START_PANEL -match '^(1|true|yes|on)$') { return $true }
-    return $false
+    # Sin variable: arrancar panel si existe cherry_tattoo_angular (p. ej. Launch-Cherry-Dev-Stack.bat).
+    return $null -ne (Resolve-PanelRoot)
 }
 
 $panelProc = $null
@@ -163,7 +165,7 @@ if (-not $panelProc) {
     Write-Host "[info] Panel Angular: en otra terminal, cd cherry_tattoo_angular && npm start" -ForegroundColor DarkGray
     Write-Host "[info] O: `$env:START_PANEL='1'; .\scripts\dev-stack.ps1" -ForegroundColor DarkGray
 }
-Write-Host "[info] Ctrl+C detiene la API (y n8n Docker si aplica)." -ForegroundColor DarkGray
+Write-Host "[info] Ctrl+C detiene la API. Si se abrió el panel en otra ventana, ciérrala aparte si sigue en :$PanelPort." -ForegroundColor DarkGray
 
 try {
     & $venvPy $apiArgs
