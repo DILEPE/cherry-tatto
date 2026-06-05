@@ -88,7 +88,17 @@ _resolve_panel_root() {
   fi
 }
 
-if [[ "${START_PANEL:-}" =~ ^(1|true|yes|on)$ ]]; then
+_should_start_panel() {
+  if [[ "${START_PANEL:-}" =~ ^(0|false|no|off)$ ]]; then
+    return 1
+  fi
+  if [[ "${START_PANEL:-}" =~ ^(1|true|yes|on)$ ]]; then
+    return 0
+  fi
+  [[ -n "$(_resolve_panel_root || true)" ]]
+}
+
+if _should_start_panel; then
   PANEL_ROOT="$(_resolve_panel_root || true)"
   if [[ -n "$PANEL_ROOT" ]] && command -v npm >/dev/null 2>&1; then
     (cd "$PANEL_ROOT" && npm start) &

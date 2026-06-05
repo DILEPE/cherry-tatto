@@ -23,7 +23,7 @@ $lnkPath = Join-Path $desk "Cherry Tattoo Dev.lnk"
 $s = $w.CreateShortcut($lnkPath)
 $s.TargetPath = $launchBat
 $s.WorkingDirectory = $RepoRoot
-$s.Description = "Cherry Tattoo: API, Streamlit y n8n"
+$s.Description = "Cherry Tattoo: API, panel Angular y n8n"
 $s.Save()
 Write-Host "Acceso directo: $lnkPath"
 

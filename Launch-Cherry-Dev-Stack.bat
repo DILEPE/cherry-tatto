@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-title Cherry Tattoo — desarrollo
+title Cherry Tattoo — API + panel Angular
 
 REM Raíz del proyecto: carpeta donde está este BAT (si está en el repo).
 set "ROOT=%~dp0"
@@ -35,6 +35,10 @@ exit /b 1
 
 :found
 cd /d "%ROOT%"
+REM Panel Angular: repo hermano cherry_tattoo_angular (npm start, puerto 4200).
+REM Solo API sin panel: set START_PANEL=0 antes de ejecutar este BAT.
+REM Ruta distinta al panel: set CHERRY_ANGULAR_ROOT=C:\ruta\cherry_tattoo_angular
+if not defined START_PANEL set "START_PANEL=1"
 REM Al abrir desde el escritorio, Docker y Node suelen faltar en PATH aunque estén instalados.
 set "PATH=%ProgramFiles%\Docker\Docker\resources\bin;%PATH%"
 set "PATH=%ProgramFiles%\nodejs;%PATH%"

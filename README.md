@@ -10,7 +10,7 @@ cherry_tattoo/
 ├── scripts/             # Arranque API, semillas, utilidades
 ├── sql/                 # Esquema inicial y migraciones incrementales
 ├── docs/                # Documentación adicional del repositorio
-├── Launch-Cherry-Dev-Stack.bat          # Windows: API (+ panel opcional) + n8n
+├── Launch-Cherry-Dev-Stack.bat          # Windows: API + panel Angular (+ n8n); doble clic
 ├── Install-Cherry-Desktop-Shortcut.bat  # Acceso directo escritorio
 ├── requirements.txt     # Dependencias Python (solo backend)
 └── .env                 # Variables de entorno (no versionar)
@@ -137,7 +137,7 @@ En la **raíz del repositorio** puedes levantar la API y (opcionalmente) **n8n**
 | [`Install-Cherry-Desktop-Shortcut.bat`](Install-Cherry-Desktop-Shortcut.bat) | Windows | Ejecutar **una vez** desde el repo: crea en el escritorio el acceso directo **Cherry Tattoo Dev** y `Cherry-Tattoo-Iniciar.bat`, que invocan el lanzador por ruta absoluta. |
 | [`scripts/install-desktop-shortcut.ps1`](scripts/install-desktop-shortcut.ps1) | Windows | Lo usa el instalador anterior; también puedes llamarlo con `-RepoRoot "ruta\al\repo"`. |
 
-**Panel Angular con el script:** `$env:START_PANEL = "1"; .\scripts\dev-stack.ps1` (busca `cherry_tattoo_angular` al lado del repo). Opcional: `CHERRY_ANGULAR_ROOT` con la ruta absoluta al proyecto Angular.
+**Doble clic en Windows:** `Launch-Cherry-Dev-Stack.bat` arranca API y, si existe `../cherry_tattoo_angular`, el panel (`npm start` en ventana aparte). Solo API: `set START_PANEL=0` antes del BAT o del script. Ruta custom del panel: `CHERRY_ANGULAR_ROOT`.
 
 **Entorno virtual:** los scripts buscan Python en `.venv\Scripts\python.exe` o `venv\Scripts\python.exe` (en ese orden). Opcional: variable `CHERRY_PYTHON` con la ruta absoluta a `python.exe`.
 
