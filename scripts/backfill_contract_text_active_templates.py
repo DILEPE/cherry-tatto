@@ -4,7 +4,7 @@ Regenera `contracts.contract_text` a partir del HTML de la plantilla **activa** 
 (`contract_templates.is_active = 1` y mismo `template_id`).
 
 Replica la sustitución de placeholders y el bloque de tutor para menores, alineado con
-`streamlit_app/contract_signing.py` (firma guardada).
+la lógica de firma de contrato del dominio/API.
 
 Requisitos: `.env` con DB_* como la API; ejecutar desde la raíz del repo:
 
