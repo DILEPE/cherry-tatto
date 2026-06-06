@@ -56,6 +56,11 @@ SET @has_stores_code := (
     WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'stores' AND COLUMN_NAME = 'code'
 );
 
+-- Workbench con safe updates puede bloquear UPDATE ... JOIN aunque se filtre por PK.
+-- Se desactiva solo para el backfill de datos y se restaura el valor previo.
+SET @prev_safe_updates := @@SESSION.sql_safe_updates;
+SET SESSION sql_safe_updates = 0;
+
 SET @sql_mig_code := IF(
     @has_store_col > 0 AND @has_stores_code > 0,
     'UPDATE panel_users pu INNER JOIN stores s ON pu.store = s.code SET pu.store_id = s.id WHERE pu.store_id IS NULL AND pu.id > 0',
@@ -65,19 +70,29 @@ PREPARE _s2 FROM @sql_mig_code;
 EXECUTE _s2;
 DEALLOCATE PREPARE _s2;
 
-UPDATE panel_users pu
-INNER JOIN stores s ON s.name = 'Cherry Tattoo' AND s.deleted_at IS NULL
-SET pu.store_id = s.id
-WHERE pu.id > 0 AND pu.store_id IS NULL AND pu.store IN ('cherry_tattoo', 'Cherry Tattoo');
+SET @sql_mig_cherry := IF(
+    @has_store_col > 0,
+    'UPDATE panel_users pu INNER JOIN stores s ON s.name = ''Cherry Tattoo'' AND s.deleted_at IS NULL SET pu.store_id = s.id WHERE pu.id > 0 AND pu.store_id IS NULL AND pu.store IN (''cherry_tattoo'', ''Cherry Tattoo'')',
+    'SELECT 1 AS skip_mig_cherry_024'
+);
+PREPARE _s2 FROM @sql_mig_cherry;
+EXECUTE _s2;
+DEALLOCATE PREPARE _s2;
 
-UPDATE panel_users pu
-INNER JOIN stores s ON s.name = 'Rock City' AND s.deleted_at IS NULL
-SET pu.store_id = s.id
-WHERE pu.id > 0 AND pu.store_id IS NULL AND pu.store IN ('rock_city', 'Rock City');
+SET @sql_mig_rock := IF(
+    @has_store_col > 0,
+    'UPDATE panel_users pu INNER JOIN stores s ON s.name = ''Rock City'' AND s.deleted_at IS NULL SET pu.store_id = s.id WHERE pu.id > 0 AND pu.store_id IS NULL AND pu.store IN (''rock_city'', ''Rock City'')',
+    'SELECT 1 AS skip_mig_rock_024'
+);
+PREPARE _s2 FROM @sql_mig_rock;
+EXECUTE _s2;
+DEALLOCATE PREPARE _s2;
 
 UPDATE panel_users
 SET store_id = (SELECT MIN(id) FROM stores WHERE deleted_at IS NULL LIMIT 1)
 WHERE id > 0 AND store_id IS NULL;
+
+SET SESSION sql_safe_updates = @prev_safe_updates;
 
 SET @sql_enum_varchar := IF(
     @has_store_col > 0,
