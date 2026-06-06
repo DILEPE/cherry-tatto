@@ -32,6 +32,10 @@ SET @has_stores_code := (
 
 -- Migrar slug/código → id (cuando existen stores.code y panel_users.store)
 -- WHERE pu.id > 0: compatible con MySQL Workbench «safe updates» (usa la PK).
+-- Workbench puede bloquear UPDATE ... JOIN igualmente; se desactiva solo para el backfill.
+SET @prev_safe_updates := @@SESSION.sql_safe_updates;
+SET SESSION sql_safe_updates = 0;
+
 SET @sql_mig := IF(
     @has_store_col > 0 AND @has_stores_code > 0,
     'UPDATE panel_users pu INNER JOIN stores s ON pu.store = s.code SET pu.store_id = s.id WHERE pu.store_id IS NULL AND pu.id > 0',
@@ -42,19 +46,29 @@ EXECUTE _s2;
 DEALLOCATE PREPARE _s2;
 
 -- Migrar ENUM/VARCHAR legacy (cherry_tattoo, rock_city) por nombre de tienda
-UPDATE panel_users pu
-INNER JOIN stores s ON s.name = 'Cherry Tattoo' AND s.deleted_at IS NULL
-SET pu.store_id = s.id
-WHERE pu.id > 0 AND pu.store_id IS NULL AND pu.store IN ('cherry_tattoo', 'Cherry Tattoo');
+SET @sql_mig_cherry := IF(
+    @has_store_col > 0,
+    'UPDATE panel_users pu INNER JOIN stores s ON s.name = ''Cherry Tattoo'' AND s.deleted_at IS NULL SET pu.store_id = s.id WHERE pu.id > 0 AND pu.store_id IS NULL AND pu.store IN (''cherry_tattoo'', ''Cherry Tattoo'')',
+    'SELECT 1 AS skip_mig_cherry'
+);
+PREPARE _s2 FROM @sql_mig_cherry;
+EXECUTE _s2;
+DEALLOCATE PREPARE _s2;
 
-UPDATE panel_users pu
-INNER JOIN stores s ON s.name = 'Rock City' AND s.deleted_at IS NULL
-SET pu.store_id = s.id
-WHERE pu.id > 0 AND pu.store_id IS NULL AND pu.store IN ('rock_city', 'Rock City');
+SET @sql_mig_rock := IF(
+    @has_store_col > 0,
+    'UPDATE panel_users pu INNER JOIN stores s ON s.name = ''Rock City'' AND s.deleted_at IS NULL SET pu.store_id = s.id WHERE pu.id > 0 AND pu.store_id IS NULL AND pu.store IN (''rock_city'', ''Rock City'')',
+    'SELECT 1 AS skip_mig_rock'
+);
+PREPARE _s2 FROM @sql_mig_rock;
+EXECUTE _s2;
+DEALLOCATE PREPARE _s2;
 
 UPDATE panel_users
 SET store_id = (SELECT MIN(id) FROM stores WHERE deleted_at IS NULL LIMIT 1)
 WHERE id > 0 AND store_id IS NULL;
+
+SET SESSION sql_safe_updates = @prev_safe_updates;
 
 SET @sql_sid_notnull := IF(
     @has_store_id = 0 OR (SELECT COUNT(*) FROM panel_users WHERE store_id IS NULL) = 0,
