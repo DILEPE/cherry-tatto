@@ -45,7 +45,7 @@
       "parameters": {
         "phoneNumberId": "1107930225741590",
         "recipientPhoneNumber": "={{ $('Webhook').item.json.body.phone }}",
-        "template": "appointment_deposit|es_CO",
+        "template": "comprobacion_abono|es",
         "components": {
           "component": [
             {
@@ -53,13 +53,7 @@
                 "parameter": [
                   {
                     "text": "={{ $('Webhook').item.json.body.customer_name }}"
-                  }
-                ]
-              }
-            },
-            {
-              "bodyParameters": {
-                "parameter": [
+                  },
                   {
                     "text": "={{ new Date($('Webhook').item.json.body.timestamp.replace(\" \", \"T\")).toLocaleString(\"es-CO\", {day: \"2-digit\",month: \"long\",year: \"numeric\"}) }}"
                   }
@@ -93,7 +87,7 @@
         "messageType": "document",
         "mediaPath": "useMediaId",
         "mediaId": "={{ $json.id }}",
-        "mediaFilename": "cherry-tatto-receipt",
+        "mediaFilename": "rock-city-receipt",
         "additionalFields": {}
       },
       "type": "n8n-nodes-base.whatsApp",
@@ -154,13 +148,13 @@
       ]
     }
   },
-  "active": true,
+  "active": false,
   "settings": {
     "executionOrder": "v1",
     "binaryMode": "separate",
     "availableInMCP": false
   },
-  "versionId": "17459879-c209-4c33-b112-2acd9544a982",
+  "versionId": "ffd93472-53c3-4891-8a2c-c7417b8ccf1c",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "b56ae73836276e902eab7260bda1c240d29fb935abb341d8530a9fc2085fe3df"
