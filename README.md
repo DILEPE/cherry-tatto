@@ -106,6 +106,8 @@ Para crear o actualizar un usuario administrador del panel con bcrypt:
 ```bash
 python scripts/create_panel_user.py --username admin --password cherrytattoo2026
 python scripts/create_panel_user.py --username admin --password cherrytattoo2026 --apply
+# Windows, si ejecutas fuera de la raiz del repo o tu .env esta en otra carpeta:
+py scripts/create_panel_user.py --env-file C:\ruta\a\.env --username admin --password cherrytattoo2026 --apply
 ```
 
 El primer comando solo simula la accion; `--apply` escribe en MySQL usando las variables `DB_*` del `.env`.

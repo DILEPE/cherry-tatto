@@ -6,6 +6,7 @@ Uso desde la raiz del proyecto::
 
     python scripts/create_panel_user.py --username admin --password cherrytattoo2026
     python scripts/create_panel_user.py --username admin --password cherrytattoo2026 --apply
+    python scripts/create_panel_user.py --env-file C:\\ruta\\a\\.env --username admin --password cherrytattoo2026 --apply
 
 Sin `--apply`, solo muestra que haria. Con `--apply`, inserta el usuario o
 actualiza su contrasena si el username ya existe.
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+_ENV_EXAMPLE_KEYS = ("DB_HOST", "DB_USER", "DB_PASSWORD", "DB_NAME")
 
 try:
     from dotenv import load_dotenv
@@ -28,6 +30,57 @@ except ImportError:
 
 _USERNAME_RE = re.compile(r"^[a-z0-9._-]{3,80}$")
 _ROLE_CHOICES = ("administrador", "vendedor", "perforador", "tatuador")
+
+
+def _strip_env_quotes(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1]
+    return value
+
+
+def _load_env_file_without_dotenv(path: Path) -> bool:
+    if not path.is_file():
+        return False
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = _strip_env_quotes(value.strip())
+        os.environ.setdefault(key, value)
+    return True
+
+
+def _load_env_files(env_file: str | None) -> list[Path]:
+    candidates: list[Path] = []
+    if env_file:
+        candidates.append(Path(env_file).expanduser())
+    else:
+        candidates.extend([Path.cwd() / ".env", _REPO_ROOT / ".env"])
+
+    loaded: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        path = candidate.resolve()
+        if path in seen:
+            continue
+        seen.add(path)
+        if not path.is_file():
+            continue
+        if load_dotenv:
+            load_dotenv(path, override=False)
+            loaded.append(path)
+        elif _load_env_file_without_dotenv(path):
+            loaded.append(path)
+    return loaded
 
 
 def _load_bcrypt() -> Any:
@@ -229,10 +282,16 @@ def _build_payload(cursor: Any, args: argparse.Namespace, columns: set[str], pas
 
 
 def main() -> int:
-    if load_dotenv:
-        load_dotenv(_REPO_ROOT / ".env")
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--env-file")
+    pre_args, _ = pre_parser.parse_known_args()
+    loaded_env_files = _load_env_files(pre_args.env_file)
 
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--env-file",
+        help="Ruta al archivo .env. Si se omite, busca .env en el directorio actual y en la raiz del repo.",
+    )
     parser.add_argument("--username", default=os.getenv("PANEL_USER_USERNAME", "admin"))
     parser.add_argument("--password", default=os.getenv("PANEL_USER_PASSWORD"))
     parser.add_argument("--first-name", default=os.getenv("PANEL_USER_FIRST_NAME", "Admin"))
@@ -272,9 +331,30 @@ def main() -> int:
         database = os.getenv("DB_NAME", "cherry_tatto")
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
+        if loaded_env_files:
+            loaded = ", ".join(str(path) for path in loaded_env_files)
+            print(f"Archivos .env cargados: {loaded}", file=sys.stderr)
+            print("Verifica que el archivo cargado tenga DB_HOST=... sin espacios antes del '='.", file=sys.stderr)
+        else:
+            print(
+                "No se cargo ningun .env. Ejecuta desde la raiz del repo o usa "
+                "--env-file C:\\ruta\\a\\.env.",
+                file=sys.stderr,
+            )
         return 1
 
     write_db = bool(args.apply) and not bool(args.dry_run)
+    if loaded_env_files:
+        loaded = ", ".join(str(path) for path in loaded_env_files)
+        print(f"Archivo .env cargado: {loaded}")
+    else:
+        found_any_db_env = any(os.getenv(key) is not None for key in _ENV_EXAMPLE_KEYS)
+        if not found_any_db_env:
+            print(
+                "No se encontro un archivo .env ni variables DB_* en el entorno actual. "
+                "Puedes indicar la ruta con --env-file.",
+                file=sys.stderr,
+            )
     print(f"Base de datos: {database} en {host}")
     print(f"Usuario panel: {args.username}")
     print(f"Rol: {args.role} | Estado: {'activo' if args.active else 'inactivo'}")
