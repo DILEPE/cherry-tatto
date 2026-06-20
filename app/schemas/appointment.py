@@ -157,7 +157,12 @@ class AppointmentListItem(BaseModel):
     service_type: Optional[str] = None
     detail: Optional[str] = None
     design_description: Optional[str] = None
+    designDescription: Optional[str] = None
+    descripcion_diseno: Optional[str] = None
+    description: Optional[str] = None
     observations: Optional[str] = None
+    observaciones: Optional[str] = None
+    notes: Optional[str] = None
     appointment_date: Optional[date | datetime | str] = None
     deposit: Optional[float] = None
     total_amount: Optional[float] = None
@@ -184,8 +189,16 @@ class AppointmentListItem(BaseModel):
         design, observations = split_appointment_detail(self.detail)
         if self.design_description is None:
             object.__setattr__(self, "design_description", design)
+        canonical_design = self.design_description
+        for attr in ("designDescription", "descripcion_diseno", "description"):
+            if getattr(self, attr) is None:
+                object.__setattr__(self, attr, canonical_design)
         if self.observations is None:
             object.__setattr__(self, "observations", observations)
+        canonical_observations = self.observations
+        for attr in ("observaciones", "notes"):
+            if getattr(self, attr) is None:
+                object.__setattr__(self, attr, canonical_observations)
         return self
 
 
