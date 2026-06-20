@@ -101,6 +101,15 @@ Ajusta `DB_*` y `SERVICE_TYPE_ENUM_VALUES` según tu despliegue.
 
 Con **`PANEL_AUTH_USERS_SOURCE=database`**, el login del panel Angular usa `POST /api/panel-users/login` contra la tabla `panel_users` (aplica **`015_panel_users.sql`** y migraciones de módulos de usuario).
 
+Para crear o actualizar un usuario administrador del panel con bcrypt:
+
+```bash
+python scripts/create_panel_user.py --username admin --password cherrytattoo2026
+python scripts/create_panel_user.py --username admin --password cherrytattoo2026 --apply
+```
+
+El primer comando solo simula la accion; `--apply` escribe en MySQL usando las variables `DB_*` del `.env`.
+
 ### 4. Arrancar la API (Litestar + Uvicorn)
 
 Desde la **raíz del repositorio**, con el virtualenv activado:
