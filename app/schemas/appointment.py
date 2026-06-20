@@ -5,12 +5,61 @@ import re
 from datetime import date, datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.domain.models import AppointmentCreate
 from app.schemas.customer import CUSTOMER_EMBEDDED_IN_APPOINTMENT_DESCRIPTION, CustomerCreate
 
 _DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DESIGN_LABEL = "Descripción del diseño"
+_OBSERVATIONS_LABEL = "Observaciones"
+_DESIGN_SECTION_RE = re.compile(
+    rf"(?:^|\n){re.escape(_DESIGN_LABEL)}:\s*(.*?)(?=\n{re.escape(_OBSERVATIONS_LABEL)}:|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+_OBSERVATIONS_SECTION_RE = re.compile(
+    rf"(?:^|\n){re.escape(_OBSERVATIONS_LABEL)}:\s*(.*)\Z",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def split_appointment_detail(detail: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Extrae descripción y observaciones desde el campo legacy `detail`."""
+    raw = (detail or "").strip()
+    if not raw:
+        return None, None
+
+    design_match = _DESIGN_SECTION_RE.search(raw)
+    observations_match = _OBSERVATIONS_SECTION_RE.search(raw)
+    if design_match or observations_match:
+        design = design_match.group(1).strip() if design_match else ""
+        observations = observations_match.group(1).strip() if observations_match else ""
+        return design or None, observations or None
+
+    return raw, None
+
+
+def compose_appointment_detail(
+    detail: Optional[str] = None,
+    design_description: Optional[str] = None,
+    observations: Optional[str] = None,
+) -> Optional[str]:
+    """Combina campos nuevos en `detail` sin romper clientes legacy."""
+    design = (design_description or "").strip()
+    obs = (observations or "").strip()
+    legacy = (detail or "").strip()
+
+    if not design and not obs:
+        return legacy or None
+
+    parts: list[str] = []
+    if design:
+        parts.append(f"{_DESIGN_LABEL}: {design}")
+    elif legacy:
+        parts.append(f"{_DESIGN_LABEL}: {legacy}")
+    if obs:
+        parts.append(f"{_OBSERVATIONS_LABEL}: {obs}")
+    return "\n".join(parts) or None
 
 
 def normalize_appointment_datetime_string(v: str) -> str:
@@ -34,7 +83,7 @@ def normalize_appointment_datetime_string(v: str) -> str:
 
 
 class AppointmentCreateRequest(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, populate_by_name=True)
 
     name: str = Field(..., min_length=1, max_length=200)
     phone: str = Field(..., min_length=5, max_length=40)
@@ -44,6 +93,21 @@ class AppointmentCreateRequest(BaseModel):
         description="YYYY-MM-DD o YYYY-MM-DD HH:MM (se guarda como DATETIME).",
     )
     detail: Optional[str] = Field(None, max_length=5000)
+    design_description: Optional[str] = Field(
+        default=None,
+        max_length=5000,
+        validation_alias=AliasChoices(
+            "design_description",
+            "designDescription",
+            "descripcion_diseno",
+            "description",
+        ),
+    )
+    observations: Optional[str] = Field(
+        default=None,
+        max_length=5000,
+        validation_alias=AliasChoices("observations", "observaciones", "notes"),
+    )
     deposit: float = Field(ge=0, default=0)
     total_amount: float = Field(ge=0, default=0)
     pending_balance: float = Field(ge=0, default=0)
@@ -72,7 +136,7 @@ def appointment_request_to_domain(req: AppointmentCreateRequest) -> AppointmentC
         phone=req.phone,
         service=req.service,
         date=req.date,
-        detail=req.detail,
+        detail=compose_appointment_detail(req.detail, req.design_description, req.observations),
         deposit=req.deposit,
         total_amount=req.total_amount,
         pending_balance=req.pending_balance,
@@ -92,6 +156,8 @@ class AppointmentListItem(BaseModel):
     phone: Optional[str] = None
     service_type: Optional[str] = None
     detail: Optional[str] = None
+    design_description: Optional[str] = None
+    observations: Optional[str] = None
     appointment_date: Optional[date | datetime | str] = None
     deposit: Optional[float] = None
     total_amount: Optional[float] = None
@@ -112,6 +178,15 @@ class AppointmentListItem(BaseModel):
     assigned_last_name: Optional[str] = None
     assigned_role: Optional[str] = None
     assigned_store_id: Optional[int] = None
+
+    @model_validator(mode="after")
+    def fill_split_detail_fields(self):
+        design, observations = split_appointment_detail(self.detail)
+        if self.design_description is None:
+            object.__setattr__(self, "design_description", design)
+        if self.observations is None:
+            object.__setattr__(self, "observations", observations)
+        return self
 
 
 class AppointmentStatusUpdateRequest(BaseModel):
@@ -142,10 +217,25 @@ class AppointmentStatusUpdateRequest(BaseModel):
 
 
 class AppointmentRescheduleRequest(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, populate_by_name=True)
 
     date: str = Field(..., description="YYYY-MM-DD o YYYY-MM-DD HH:MM")
     detail: Optional[str] = Field(None, max_length=5000)
+    design_description: Optional[str] = Field(
+        default=None,
+        max_length=5000,
+        validation_alias=AliasChoices(
+            "design_description",
+            "designDescription",
+            "descripcion_diseno",
+            "description",
+        ),
+    )
+    observations: Optional[str] = Field(
+        default=None,
+        max_length=5000,
+        validation_alias=AliasChoices("observations", "observaciones", "notes"),
+    )
 
     @field_validator("date")
     @classmethod
@@ -156,11 +246,26 @@ class AppointmentRescheduleRequest(BaseModel):
 class AppointmentMetaPatchRequest(BaseModel):
     """Actualiza profesional asignado, prioridad y/o texto de detalle (sin fecha/hora)."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, populate_by_name=True)
 
     assigned_panel_user_id: Optional[int] = Field(default=None, ge=1)
     is_priority: bool = False
     detail: Optional[str] = Field(default=None, max_length=5000)
+    design_description: Optional[str] = Field(
+        default=None,
+        max_length=5000,
+        validation_alias=AliasChoices(
+            "design_description",
+            "designDescription",
+            "descripcion_diseno",
+            "description",
+        ),
+    )
+    observations: Optional[str] = Field(
+        default=None,
+        max_length=5000,
+        validation_alias=AliasChoices("observations", "observaciones", "notes"),
+    )
 
 
 class AppointmentFinancialUpdateRequest(BaseModel):
