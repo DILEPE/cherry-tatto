@@ -1026,16 +1026,27 @@ class AppointmentRepository:
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn)
-            cursor.execute(
-                """
-                UPDATE appointments
-                SET appointment_date = %s,
-                    detail = %s,
-                    status = %s
-                WHERE id = %s
-                """,
-                (new_date, detail or "", "Reprogramada", appointment_id),
-            )
+            if detail is None:
+                cursor.execute(
+                    """
+                    UPDATE appointments
+                    SET appointment_date = %s,
+                        status = %s
+                    WHERE id = %s
+                    """,
+                    (new_date, "Reprogramada", appointment_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE appointments
+                    SET appointment_date = %s,
+                        detail = %s,
+                        status = %s
+                    WHERE id = %s
+                    """,
+                    (new_date, detail, "Reprogramada", appointment_id),
+                )
             conn.commit()
         finally:
             if conn:

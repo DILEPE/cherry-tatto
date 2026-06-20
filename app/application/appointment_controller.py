@@ -174,7 +174,13 @@ class AppointmentController(Controller):
         state: State,
     ) -> MessageResponse:
         try:
-            await state.service.reprogram_appointment(appointment_id, data.date, data.detail)
+            await state.service.reprogram_appointment(
+                appointment_id,
+                data.date,
+                data.detail,
+                design_description=data.design_description,
+                observations=data.observations,
+            )
             return MessageResponse(status="success", message="Cita reprogramada correctamente")
         except ValueError as e:
             raise HTTPException(detail=str(e), status_code=404) from e
@@ -194,6 +200,8 @@ class AppointmentController(Controller):
                 assigned_panel_user_id=data.assigned_panel_user_id,
                 is_priority=bool(data.is_priority),
                 detail=data.detail,
+                design_description=data.design_description,
+                observations=data.observations,
             )
             return MessageResponse(status="success", message="Datos de la cita actualizados.")
         except ValueError as e:

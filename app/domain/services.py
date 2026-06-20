@@ -47,6 +47,8 @@ from app.schemas.appointment import (
     AppointmentPaymentPatchRequest,
     AppointmentSearchHit,
     AppointmentSearchResponse,
+    compose_appointment_detail,
+    split_appointment_detail,
 )
 from app.schemas.customer import (
     CustomerCreate,
@@ -921,6 +923,9 @@ class BusinessLogicService:
         appointment_id: int,
         new_date: str,
         detail: Optional[str] = None,
+        *,
+        design_description: Optional[str] = None,
+        observations: Optional[str] = None,
     ) -> None:
         appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
         if appointment is None:
@@ -931,7 +936,13 @@ class BusinessLogicService:
         has_contract = await asyncio.to_thread(self.repository.has_contract_for_appointment, appointment_id)
         if has_contract:
             raise ValueError("No se puede reprogramar: esta cita ya tiene contrato firmado.")
-        await asyncio.to_thread(self.repository.reprogram_appointment, appointment_id, new_date, detail)
+        merged_detail = self._merge_appointment_detail_fields(
+            str(getattr(appointment, "detail", "") or ""),
+            detail=detail,
+            design_description=design_description,
+            observations=observations,
+        )
+        await asyncio.to_thread(self.repository.reprogram_appointment, appointment_id, new_date, merged_detail)
 
     async def update_appointment_financials(
         self,
@@ -968,6 +979,8 @@ class BusinessLogicService:
         assigned_panel_user_id: Optional[int],
         is_priority: bool,
         detail: Optional[str],
+        design_description: Optional[str] = None,
+        observations: Optional[str] = None,
     ) -> None:
         appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
         if appointment is None:
@@ -982,9 +995,12 @@ class BusinessLogicService:
             pu = await asyncio.to_thread(self.panel_user_repo.get_by_id, int(assigned_panel_user_id))
             if pu is None:
                 raise ValueError("Usuario del panel del artista no encontrado")
-        dnorm: Optional[str] = None
-        if detail is not None:
-            dnorm = detail.strip()
+        dnorm = self._merge_appointment_detail_fields(
+            str(getattr(appointment, "detail", "") or ""),
+            detail=detail,
+            design_description=design_description,
+            observations=observations,
+        )
 
         await asyncio.to_thread(
             self.repository.patch_appointment_meta,
@@ -993,6 +1009,32 @@ class BusinessLogicService:
             assigned_panel_user_id=assigned_panel_user_id,
             detail=dnorm,
         )
+
+    @staticmethod
+    def _merge_appointment_detail_fields(
+        current_detail: str,
+        *,
+        detail: Optional[str] = None,
+        design_description: Optional[str] = None,
+        observations: Optional[str] = None,
+    ) -> Optional[str]:
+        """Fusiona campos separados sin borrar texto existente cuando no se envían."""
+        if design_description is None and observations is None:
+            return detail.strip() if detail is not None else None
+
+        current_design, current_observations = split_appointment_detail(current_detail)
+        return compose_appointment_detail(
+            design_description=(
+                design_description.strip()
+                if design_description is not None
+                else current_design
+            ),
+            observations=(
+                observations.strip()
+                if observations is not None
+                else current_observations
+            ),
+        ) or ""
 
     async def list_appointment_payments(self, appointment_id: int) -> list[dict[str, object]]:
         appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
