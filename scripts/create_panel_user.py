@@ -87,7 +87,12 @@ def _load_bcrypt() -> Any:
     try:
         import bcrypt
     except ImportError as exc:
-        raise RuntimeError("Instala dependencias: pip install bcrypt") from exc
+        raise RuntimeError(
+            "Falta bcrypt en este Python. Instala dependencias con:\n"
+            "  py -m pip install -r requirements.txt\n"
+            "o solo lo necesario:\n"
+            "  py -m pip install bcrypt mysql-connector-python python-dotenv"
+        ) from exc
     return bcrypt
 
 
@@ -96,7 +101,12 @@ def _load_mysql_connector() -> tuple[Any, type[Exception]]:
         import mysql.connector
         from mysql.connector import Error as MySQLError
     except ImportError as exc:
-        raise RuntimeError("Instala dependencias: pip install mysql-connector-python python-dotenv") from exc
+        raise RuntimeError(
+            "Falta mysql-connector-python en este Python. Instala dependencias con:\n"
+            "  py -m pip install -r requirements.txt\n"
+            "o solo lo necesario:\n"
+            "  py -m pip install bcrypt mysql-connector-python python-dotenv"
+        ) from exc
     return mysql.connector, MySQLError
 
 
