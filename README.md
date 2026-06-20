@@ -104,13 +104,14 @@ Con **`PANEL_AUTH_USERS_SOURCE=database`**, el login del panel Angular usa `POST
 Para crear o actualizar un usuario administrador del panel con bcrypt:
 
 ```bash
+py -m pip install -r requirements.txt
 python scripts/create_panel_user.py --username admin --password cherrytattoo2026
 python scripts/create_panel_user.py --username admin --password cherrytattoo2026 --apply
 # Windows, si ejecutas fuera de la raiz del repo o tu .env esta en otra carpeta:
 py scripts/create_panel_user.py --env-file C:\ruta\a\.env --username admin --password cherrytattoo2026 --apply
 ```
 
-El primer comando solo simula la accion; `--apply` escribe en MySQL usando las variables `DB_*` del `.env`.
+El comando sin `--apply` solo simula la accion; `--apply` escribe en MySQL usando las variables `DB_*` del `.env`.
 
 ### 4. Arrancar la API (Litestar + Uvicorn)
 
