@@ -642,9 +642,11 @@ class AppointmentRepository:
                     artist_signature,
                     tutor_document_front,
                     tutor_document_back,
+                    minor_document_front,
+                    minor_document_back,
                     contract_text
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             values = (
                 data.appointment_id,
@@ -656,6 +658,8 @@ class AppointmentRepository:
                 data.artist_signature,
                 data.tutor_document_front,
                 data.tutor_document_back,
+                data.minor_document_front,
+                data.minor_document_back,
                 data.contract_text,
             )
             cursor.execute(query, values)
@@ -1089,27 +1093,46 @@ class AppointmentRepository:
     # --- Encuestas ---
 
     def create_survey(self, data: Survey) -> int:
-        """Persiste la encuesta y, si aplica, las respuestas por pregunta (survey_answers)."""
+        """Crea o actualiza la encuesta de la cita (única por appointment_id) y sus respuestas."""
         conn = self.db.get_connection()
         try:
-            cursor = self._get_cursor(conn)
+            cursor = self._get_cursor(conn, dictionary=True)
+            # Unique uk_surveys_appointment: upsert atómico para reintentos de firma.
             cursor.execute(
                 """
                 INSERT INTO surveys (appointment_id, rating, comments, would_recommend)
                 VALUES (%s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    id = LAST_INSERT_ID(id),
+                    rating = VALUES(rating),
+                    comments = VALUES(comments),
+                    would_recommend = VALUES(would_recommend)
                 """,
                 (data.appointment_id, data.rating, data.comments, data.would_recommend),
             )
-            new_id = cursor.lastrowid
+            survey_id = int(cursor.lastrowid)
+            if survey_id <= 0:
+                cursor.execute(
+                    "SELECT id FROM surveys WHERE appointment_id = %s",
+                    (data.appointment_id,),
+                )
+                row = cursor.fetchone() or {}
+                survey_id = int(row.get("id") or 0)
+            if survey_id <= 0:
+                raise RuntimeError("No se pudo obtener el id de la encuesta.")
+
+            cursor.execute("DELETE FROM survey_answers WHERE survey_id = %s", (survey_id,))
             if data.answers:
                 for a in data.answers:
                     cursor.execute(
                         """
-                        INSERT INTO survey_answers (survey_id, question_id, answer_rating, answer_bool, answer_text, answer_number)
+                        INSERT INTO survey_answers (
+                            survey_id, question_id, answer_rating, answer_bool, answer_text, answer_number
+                        )
                         VALUES (%s, %s, %s, %s, %s, %s)
                         """,
                         (
-                            int(new_id),
+                            survey_id,
                             a.question_id,
                             a.answer_rating,
                             a.answer_bool,
@@ -1118,7 +1141,7 @@ class AppointmentRepository:
                         ),
                     )
             conn.commit()
-            return int(new_id)
+            return survey_id
         finally:
             if conn:
                 conn.close()

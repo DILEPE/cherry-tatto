@@ -35,6 +35,8 @@ class ContractSign:
     artist_signature: Optional[str] = None
     tutor_document_front: Optional[str] = None
     tutor_document_back: Optional[str] = None
+    minor_document_front: Optional[str] = None
+    minor_document_back: Optional[str] = None
     contract_text: Optional[str] = None
     template_id: Optional[int] = None  # Para vincular con una plantilla específica 
 
