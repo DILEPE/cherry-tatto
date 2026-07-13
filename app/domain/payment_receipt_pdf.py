@@ -14,6 +14,7 @@ Personalización opcional vía entorno:
 """
 from __future__ import annotations
 
+import html
 import os
 import re
 from dataclasses import dataclass, field
@@ -540,6 +541,97 @@ def _render_terms_blocks(doc: fitz.Document, page: fitz.Page, y: float, mx: floa
     return page
 
 
+def _html_to_term_blocks(raw_html: str) -> list[tuple[str, bool]]:
+    """Convierte HTML de plantilla recibo a párrafos (texto, es_viñeta) para la zona legal del PDF."""
+    from html.parser import HTMLParser
+
+    class _Parser(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=True)
+            self.blocks: list[tuple[str, bool]] = []
+            self._buf: list[str] = []
+            self._in_li = False
+            self._skip = 0
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+            t = tag.lower()
+            if t in ("script", "style"):
+                self._skip += 1
+                return
+            if self._skip:
+                return
+            if t == "li":
+                self._flush(False)
+                self._in_li = True
+            elif t in ("p", "div", "h1", "h2", "h3", "h4", "tr", "br"):
+                if t == "br":
+                    self._buf.append("\n")
+                else:
+                    self._flush(False)
+
+        def handle_endtag(self, tag: str) -> None:
+            t = tag.lower()
+            if t in ("script", "style") and self._skip:
+                self._skip -= 1
+                return
+            if self._skip:
+                return
+            if t == "li":
+                self._flush(True)
+                self._in_li = False
+            elif t in ("p", "div", "h1", "h2", "h3", "h4", "tr"):
+                self._flush(False)
+
+        def handle_data(self, data: str) -> None:
+            if self._skip:
+                return
+            if data:
+                self._buf.append(data)
+
+        def _flush(self, as_bullet: bool) -> None:
+            text = " ".join("".join(self._buf).split())
+            self._buf = []
+            if text:
+                self.blocks.append((text, as_bullet or self._in_li))
+
+        def close(self) -> None:
+            self._flush(False)
+            super().close()
+
+    src = (raw_html or "").strip()
+    if not src:
+        return []
+    parser = _Parser()
+    try:
+        parser.feed(src)
+        parser.close()
+    except Exception:
+        plain = re.sub(r"<[^>]+>", " ", src)
+        plain = " ".join(html.unescape(plain).split())
+        return [(plain, False)] if plain else []
+    if parser.blocks:
+        return parser.blocks
+    plain = re.sub(r"<[^>]+>", " ", src)
+    plain = " ".join(html.unescape(plain).split())
+    return [(plain, False)] if plain else []
+
+
+def _render_contract_html_as_terms(
+    doc: fitz.Document,
+    page: fitz.Page,
+    y: float,
+    mx: float,
+    contract_html: str,
+) -> fitz.Page:
+    """Pinta el contenido de la plantilla recibo en la zona de condiciones (mismo layout tipográfico)."""
+    blocks = _html_to_term_blocks(contract_html)
+    if not blocks:
+        return _render_terms_blocks(doc, page, y, mx)
+    for text, bullet in blocks:
+        page, y = _emit_terms_paragraph(doc, page, y, mx, text, bullet=bullet, color=_INK)
+    return page
+
+
 @dataclass
 class PaymentReceiptPdfContext:
     """Contexto para rellenar la orden de trabajo / recibo de abono."""
@@ -559,6 +651,8 @@ class PaymentReceiptPdfContext:
     appointment_id: int = 0
     client_email: str = ""
     payment_history: list[tuple[float, Optional[str]]] = field(default_factory=list)
+    # HTML de plantilla activa `recibo` (placeholders ya sustituidos). Se pinta bajo la franja ATENCIÓN.
+    contract_html: Optional[str] = None
 
 
 def build_payment_receipt_pdf(ctx: PaymentReceiptPdfContext) -> bytes:
@@ -755,7 +849,11 @@ def build_payment_receipt_pdf(ctx: PaymentReceiptPdfContext) -> bytes:
     )
 
     body_top = banner_y0 + banner_h + 14.0
-    last_terms_page = _render_terms_blocks(doc, page, body_top, mx)
+    contract_src = (ctx.contract_html or "").strip()
+    if contract_src:
+        last_terms_page = _render_contract_html_as_terms(doc, page, body_top, mx, contract_src)
+    else:
+        last_terms_page = _render_terms_blocks(doc, page, body_top, mx)
 
     foot_bits = [
         f"Documento generado el {_issued_dd_mm_yyyy(ctx.issued_at)} a las {_issued_time_hm(ctx.issued_at)}"

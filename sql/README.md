@@ -22,10 +22,11 @@ Esta carpeta contiene scripts SQL para crear la estructura base y aplicar cambio
 16. `016_panel_users_profile.sql` (nombre, contacto, tienda y rol para cada usuario del panel)
 17. `017_panel_user_module_access.sql` (qué pestañas del panel puede ver cada usuario no administrador; los administradores tienen acceso total)
 18. `018_appointments_assigned_panel_user.sql` (columna `assigned_panel_user_id` en citas; FK a `panel_users` para agenda por tatuador/perforador)
-19. … migraciones `019`–`023` según tu despliegue (recibos, consentimientos, encuesta, abonos, etc.)
+19. … migraciones `019`–`029` según tu despliegue (recibos, consentimientos, encuesta, abonos, verificación, documento menor, etc.)
 20. `024_stores.sql` (tabla `stores`; `panel_users.store_id` FK; sin slug `code`)
 21. `025_stores_drop_code_panel_store_id.sql` (solo si aplicaste un `024` antiguo que aún tenía `stores.code`)
 22. `026_contract_templates_signing_flow.sql` (flujo de firma por plantilla: `phased` | `single`; incluye `USE cherry_tatto`)
+23. `030_contract_templates_kind_recibo.sql` (documenta `recibo` en `contract_templates.contract_kind`; PDF de abonos usa la plantilla activa de ese tipo)
 
 > Nota: `001_customers_and_appointments_fk.sql` queda como referencia histórica porque la estructura base ya está consolidada en `000_initial_schema_cherry_tatto.sql`.
 

@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS appointments (
 CREATE TABLE IF NOT EXISTS contract_templates (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     name VARCHAR(200) NOT NULL,
-    contract_kind VARCHAR(20) NOT NULL DEFAULT 'tattoo' COMMENT 'tattoo | piercing',
+    contract_kind VARCHAR(20) NOT NULL DEFAULT 'tattoo' COMMENT 'tattoo | piercing | recibo',
     version VARCHAR(50) NOT NULL,
     content LONGTEXT NOT NULL,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
