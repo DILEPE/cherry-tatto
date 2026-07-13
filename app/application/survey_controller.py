@@ -14,7 +14,7 @@ class SurveyController(Controller):
 
     @post(status_code=status_codes.HTTP_201_CREATED)
     async def create_survey(self, data: SurveyCreate, state: State) -> ApiSuccessResponse:
-        """Punto de entrada para recibir encuestas."""
+        """Punto de entrada para recibir encuestas (crea o actualiza la de la cita)."""
         try:
             new_id = await state.service.register_survey(survey_create_to_domain(data))
             return ApiSuccessResponse(
@@ -22,6 +22,8 @@ class SurveyController(Controller):
                 message="Survey registered successfully.",
                 id=new_id,
             )
+        except ValueError as e:
+            raise HTTPException(detail=str(e), status_code=400) from e
         except Exception as e:
             raise HTTPException(detail=f"Error: {str(e)}", status_code=500) from e
 

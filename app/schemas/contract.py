@@ -39,6 +39,8 @@ class ContractSignRequest(BaseModel):
     artist_signature: Optional[str] = Field(None, max_length=1_000_000)
     tutor_document_front: Optional[str] = None
     tutor_document_back: Optional[str] = None
+    minor_document_front: Optional[str] = None
+    minor_document_back: Optional[str] = None
     contract_text: Optional[str] = None
     template_id: Optional[int] = Field(None, ge=1)
 
@@ -62,6 +64,10 @@ class ContractSignRequest(BaseModel):
                 raise ValueError("Debes adjuntar la foto del anverso del documento del tutor.")
             if not _is_document_capture(self.tutor_document_back):
                 raise ValueError("Debes adjuntar la foto del reverso del documento del tutor.")
+            if not _is_document_capture(self.minor_document_front):
+                raise ValueError("Debes adjuntar o tomar la foto del anverso del documento del menor.")
+            if not _is_document_capture(self.minor_document_back):
+                raise ValueError("Debes adjuntar o tomar la foto del reverso del documento del menor.")
         return self
 
 
@@ -92,6 +98,8 @@ def contract_sign_to_domain(req: ContractSignRequest) -> ContractSign:
         artist_signature=req.artist_signature,
         tutor_document_front=req.tutor_document_front,
         tutor_document_back=req.tutor_document_back,
+        minor_document_front=req.minor_document_front,
+        minor_document_back=req.minor_document_back,
         contract_text=req.contract_text,
         template_id=req.template_id,
     )
