@@ -83,8 +83,11 @@ def main() -> int:
     by_kind: dict[str, list[dict[str, Any]]] = {}
     for e in active:
         kind = str(e.get("contract_kind") or "").strip().lower()
-        if kind not in ("tattoo", "piercing"):
-            print(f"contract_kind inválido en entrada {e!r}: use tattoo o piercing", file=sys.stderr)
+        if kind not in ("tattoo", "piercing", "recibo"):
+            print(
+                f"contract_kind inválido en entrada {e!r}: use tattoo, piercing o recibo",
+                file=sys.stderr,
+            )
             return 1
         by_kind.setdefault(kind, []).append(e)
     for kind, lst in by_kind.items():

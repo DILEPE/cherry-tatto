@@ -47,7 +47,7 @@ class ContractTemplate:
     name: str          # Ej: "Consentimiento Tatuaje V1"
     version: str       # Ej: "1.0.2"
     content: str       # Texto o HTML del contrato (placeholders {{nombres}}, etc.)
-    contract_kind: str = "tattoo"  # tattoo | piercing
+    contract_kind: str = "tattoo"  # tattoo | piercing | recibo
     is_active: bool = True
     signing_flow: str = "phased"  # phased | single
 
