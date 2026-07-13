@@ -14,7 +14,10 @@ from app.domain.contract_kinds import (
     service_type_to_assignee_panel_role,
     service_type_to_contract_kind,
 )
-from app.domain.contract_signing_guard import appointment_must_be_fully_paid_for_contract
+from app.domain.contract_signing_guard import (
+    appointment_must_be_fully_paid_for_contract,
+    appointment_payments_must_be_verified_for_contract,
+)
 from app.domain.piercing_procedure_labels import (
     build_piercing_type_index,
     expand_procedure_answer_candidates,
@@ -514,6 +517,12 @@ class BusinessLogicService:
             raise ValueError(
                 pay_err or "La cita no cumple las condiciones de pago para firmar el contrato."
             )
+        payments = self.repository.list_payments_by_appointment(data.appointment_id)
+        ok_ver, ver_err = appointment_payments_must_be_verified_for_contract(payments)
+        if not ok_ver:
+            raise ValueError(
+                ver_err or "Los abonos deben estar verificados por un administrador."
+            )
 
         if self.repository.has_contract_for_appointment(data.appointment_id):
             raise ValueError(
@@ -577,6 +586,12 @@ class BusinessLogicService:
         if not ok_pay:
             raise ValueError(
                 pay_err or "La cita no cumple las condiciones de pago para completar el contrato."
+            )
+        payments = self.repository.list_payments_by_appointment(appointment_id)
+        ok_ver, ver_err = appointment_payments_must_be_verified_for_contract(payments)
+        if not ok_ver:
+            raise ValueError(
+                ver_err or "Los abonos deben estar verificados por un administrador."
             )
 
         row = self.repository.get_latest_contract_row_for_appointment(appointment_id)
@@ -1150,6 +1165,30 @@ class BusinessLogicService:
             )
 
         await asyncio.to_thread(_patch)
+
+    async def verify_appointment_payment(
+        self, appointment_id: int, payment_id: int, verified_by: int
+    ) -> None:
+        """Solo un administrador puede confirmar que el abono se realizó."""
+        if self.panel_user_repo is None:
+            raise RuntimeError("Repositorio de usuarios del panel no configurado.")
+
+        def _run() -> None:
+            user = self.panel_user_repo.get_by_id(int(verified_by))
+            if not user:
+                raise ValueError("Usuario del panel no encontrado.")
+            if str(user.get("role") or "") != "administrador":
+                raise ValueError("Solo un administrador puede verificar abonos.")
+            row = self.repository.get_payment_by_id(int(payment_id))
+            if not row:
+                raise ValueError("Abono no encontrado")
+            if int(row.get("appointment_id") or 0) != int(appointment_id):
+                raise ValueError("El abono no pertenece a esta cita")
+            if bool(int(row.get("is_verified") or 0)):
+                return
+            self.repository.mark_payment_verified(int(payment_id), int(verified_by))
+
+        await asyncio.to_thread(_run)
 
     async def list_appointment_payment_receipts(self, appointment_id: int) -> list[dict[str, object]]:
         appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)

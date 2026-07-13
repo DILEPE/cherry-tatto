@@ -16,6 +16,11 @@ from app.schemas.health import N8nHealthResponse
 class HealthController(Controller):
     path = "/health"
 
+    @get()
+    async def root(self) -> dict[str, str]:
+        """Ping básico del API (evita 404 cuando el proxy consulta /health)."""
+        return {"status": "ok"}
+
     @get("/n8n")
     async def n8n_upstream(self) -> Response:
         """

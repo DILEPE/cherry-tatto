@@ -16,6 +16,7 @@ from app.schemas.appointment import (
     AppointmentPaymentItem,
     AppointmentPaymentPatchRequest,
     AppointmentPaymentReceiptListItem,
+    AppointmentPaymentVerifyRequest,
     AppointmentRescheduleRequest,
     AppointmentMetaPatchRequest,
     AppointmentSearchResponse,
@@ -276,6 +277,27 @@ class AppointmentController(Controller):
         except Exception as e:
             raise HTTPException(detail=f"Error al actualizar el abono: {str(e)}", status_code=400) from e
 
+    @post("/{appointment_id:int}/payments/{payment_id:int}/verify")
+    async def verify_payment(
+        self,
+        appointment_id: int,
+        payment_id: int,
+        data: AppointmentPaymentVerifyRequest,
+        state: State,
+    ) -> MessageResponse:
+        try:
+            await state.service.verify_appointment_payment(
+                appointment_id, payment_id, data.verified_by
+            )
+            return MessageResponse(
+                status="success",
+                message="Abono verificado: se confirma que el abono ha sido realizado.",
+            )
+        except ValueError as e:
+            raise HTTPException(detail=str(e), status_code=400) from e
+        except Exception as e:
+            raise HTTPException(detail=f"Error al verificar el abono: {str(e)}", status_code=400) from e
+
     @get("/{appointment_id:int}/receipts")
     async def list_receipts(
         self,
@@ -303,7 +325,7 @@ class AppointmentController(Controller):
             return Response(
                 content=pdf_bytes,
                 media_type="application/pdf",
-                headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+                headers={"Content-Disposition": f'inline; filename="{safe_name}"'},
             )
         except ValueError as e:
             raise HTTPException(detail=str(e), status_code=404) from e
