@@ -1,15 +1,19 @@
-"""Tipos de plantilla de contrato (tatuaje vs piercing) y mapeo desde cita."""
+"""Tipos de plantilla de contrato (tatuaje, piercing, recibo) y mapeo desde cita."""
 from __future__ import annotations
 
 from typing import Any, Literal, Mapping
 
 from app.domain.service_types import configured_service_types
 
-ContractKind = Literal["tattoo", "piercing"]
+ContractKind = Literal["tattoo", "piercing", "recibo"]
+
+# Kinds usados al firmar citas (no incluye recibo: va a órdenes de abono).
+SigningContractKind = Literal["tattoo", "piercing"]
 
 KIND_LABEL_ES: dict[ContractKind, str] = {
     "tattoo": "Tatuaje",
     "piercing": "Piercing",
+    "recibo": "Recibo",
 }
 
 """Ámbito de una pregunta de encuesta (puede ser solo tatuaje, solo piercing, o ambos)."""
@@ -41,7 +45,7 @@ def service_type_requires_contract(service_type: str | None) -> bool:
     return True
 
 
-def service_type_to_contract_kind(service_type: str | None) -> ContractKind:
+def service_type_to_contract_kind(service_type: str | None) -> SigningContractKind:
     """Mapeo para citas con contrato: Tatuaje → tattoo; resto aplicable → piercing."""
     s = (service_type or "").strip().lower()
     if "tatu" in s or s == "tattoo":
@@ -61,7 +65,7 @@ def _appointment_service_type_value(appointment: Any) -> str:
     return str(getattr(appointment, "service", None) or "")
 
 
-def appointment_to_contract_kind(appointment: Any) -> ContractKind:
+def appointment_to_contract_kind(appointment: Any) -> SigningContractKind:
     """Elige plantilla activa según tipo de servicio de la cita (solo si aplica contrato)."""
     return service_type_to_contract_kind(_appointment_service_type_value(appointment))
 

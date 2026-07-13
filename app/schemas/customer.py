@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 DocumentType = Literal["CC", "TI", "CE", "PAS"]
 
@@ -42,6 +42,14 @@ CUSTOMER_EMBEDDED_IN_APPOINTMENT_DESCRIPTION = (
     "sin `document_issue_date`; `document_type` puede ser TI u otros. Completar datos reales después vía `PUT /api/customers/{{id}}`."
 )
 
+# Placeholder cuando el correo queda vacío al agendar (BD: email NOT NULL).
+def resolve_customer_email_for_storage(email: Optional[str], document_number: str) -> str:
+    raw = (email or "").strip()
+    if raw:
+        return raw[:255]
+    doc = (document_number or "").strip() or "sin-doc"
+    return f"sin-correo-{doc}@placeholder.local"
+
 
 class CustomerCreate(BaseModel):
     """Alta de cliente. Ver `birth_date` para el flujo de nacimiento pendiente en agendamiento."""
@@ -57,7 +65,11 @@ class CustomerCreate(BaseModel):
     )
     document_number: str = Field(..., min_length=5, max_length=32)
     document_issue_date: Optional[date] = Field(default=None, description=DOCUMENT_ISSUE_CLIENT_DESCRIPTION)
-    email: EmailStr
+    email: Optional[str] = Field(
+        default=None,
+        max_length=255,
+        description="Opcional al agendar. Vacío o sin formato se acepta; en BD se guarda placeholder si falta.",
+    )
     phone_number: str = Field(..., min_length=7, max_length=32)
     address: Optional[str] = Field(None, max_length=500)
     nationality: Optional[str] = Field(None, max_length=100)
@@ -75,9 +87,9 @@ class CustomerCreate(BaseModel):
     guardian_document_number: Optional[str] = Field(None, max_length=32)
     guardian_document_issue_date: Optional[date] = None
 
-    @field_validator("social_media", mode="before")
+    @field_validator("email", "social_media", mode="before")
     @classmethod
-    def _social_media_empty_string(cls, v: object) -> object:
+    def _email_and_social_empty_string(cls, v: object) -> object:
         if v == "":
             return None
         return v
@@ -172,7 +184,11 @@ class CustomerUpdate(BaseModel):
     )
     document_number: str = Field(..., min_length=5, max_length=32)
     document_issue_date: Optional[date] = Field(default=None, description=DOCUMENT_ISSUE_CLIENT_DESCRIPTION)
-    email: EmailStr
+    email: Optional[str] = Field(
+        default=None,
+        max_length=255,
+        description="Opcional al agendar. Vacío o sin formato se acepta; en BD se guarda placeholder si falta.",
+    )
     phone_number: str = Field(..., min_length=7, max_length=32)
     address: Optional[str] = Field(None, max_length=500)
     nationality: Optional[str] = Field(None, max_length=100)
@@ -190,9 +206,9 @@ class CustomerUpdate(BaseModel):
     guardian_document_number: Optional[str] = Field(None, max_length=32)
     guardian_document_issue_date: Optional[date] = None
 
-    @field_validator("social_media", mode="before")
+    @field_validator("email", "social_media", mode="before")
     @classmethod
-    def _social_media_empty_string_u(cls, v: object) -> object:
+    def _email_and_social_empty_string_u(cls, v: object) -> object:
         if v == "":
             return None
         return v

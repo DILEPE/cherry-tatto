@@ -642,9 +642,11 @@ class AppointmentRepository:
                     artist_signature,
                     tutor_document_front,
                     tutor_document_back,
+                    minor_document_front,
+                    minor_document_back,
                     contract_text
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             values = (
                 data.appointment_id,
@@ -656,6 +658,8 @@ class AppointmentRepository:
                 data.artist_signature,
                 data.tutor_document_front,
                 data.tutor_document_back,
+                data.minor_document_front,
+                data.minor_document_back,
                 data.contract_text,
             )
             cursor.execute(query, values)
@@ -823,7 +827,8 @@ class AppointmentRepository:
             cursor = self._get_cursor(conn, dictionary=True)
             cursor.execute(
                 """
-                SELECT id, appointment_id, amount, note, paid_on, created_at
+                SELECT id, appointment_id, amount, note, paid_on, created_at,
+                       COALESCE(is_verified, 0) AS is_verified, verified_at, verified_by
                 FROM appointment_payments
                 WHERE appointment_id = %s
                 ORDER BY COALESCE(paid_on, DATE(created_at)) ASC, created_at ASC, id ASC
@@ -910,7 +915,11 @@ class AppointmentRepository:
         try:
             cursor = self._get_cursor(conn, dictionary=True)
             cursor.execute(
-                "SELECT id, appointment_id, amount, note, paid_on, created_at FROM appointment_payments WHERE id = %s",
+                """
+                SELECT id, appointment_id, amount, note, paid_on, created_at,
+                       COALESCE(is_verified, 0) AS is_verified, verified_at, verified_by
+                FROM appointment_payments WHERE id = %s
+                """,
                 (int(payment_id),),
             )
             row = cursor.fetchone()
@@ -937,6 +946,10 @@ class AppointmentRepository:
         if amount is not None:
             parts.append("amount = %s")
             vals.append(float(amount))
+            # Al cambiar el monto, el abono deja de estar verificado.
+            parts.append("is_verified = 0")
+            parts.append("verified_at = NULL")
+            parts.append("verified_by = NULL")
         if note != "__NO_NOTE_CHANGE__":
             parts.append("note = %s")
             vals.append(note)
@@ -957,6 +970,31 @@ class AppointmentRepository:
             if conn:
                 conn.close()
         self.sync_appointment_deposit_totals_from_payments(appt_id)
+        return appt_id
+
+    def mark_payment_verified(self, payment_id: int, verified_by: int) -> int:
+        """Marca un abono como verificado. Devuelve appointment_id."""
+        row = self.get_payment_by_id(payment_id)
+        if not row:
+            raise ValueError("Abono no encontrado")
+        appt_id = int(row["appointment_id"])
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                """
+                UPDATE appointment_payments
+                SET is_verified = 1,
+                    verified_at = CURRENT_TIMESTAMP,
+                    verified_by = %s
+                WHERE id = %s
+                """,
+                (int(verified_by), int(payment_id)),
+            )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
         return appt_id
 
     def insert_payment_ledger_row_only(
@@ -1055,27 +1093,46 @@ class AppointmentRepository:
     # --- Encuestas ---
 
     def create_survey(self, data: Survey) -> int:
-        """Persiste la encuesta y, si aplica, las respuestas por pregunta (survey_answers)."""
+        """Crea o actualiza la encuesta de la cita (única por appointment_id) y sus respuestas."""
         conn = self.db.get_connection()
         try:
-            cursor = self._get_cursor(conn)
+            cursor = self._get_cursor(conn, dictionary=True)
+            # Unique uk_surveys_appointment: upsert atómico para reintentos de firma.
             cursor.execute(
                 """
                 INSERT INTO surveys (appointment_id, rating, comments, would_recommend)
                 VALUES (%s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    id = LAST_INSERT_ID(id),
+                    rating = VALUES(rating),
+                    comments = VALUES(comments),
+                    would_recommend = VALUES(would_recommend)
                 """,
                 (data.appointment_id, data.rating, data.comments, data.would_recommend),
             )
-            new_id = cursor.lastrowid
+            survey_id = int(cursor.lastrowid)
+            if survey_id <= 0:
+                cursor.execute(
+                    "SELECT id FROM surveys WHERE appointment_id = %s",
+                    (data.appointment_id,),
+                )
+                row = cursor.fetchone() or {}
+                survey_id = int(row.get("id") or 0)
+            if survey_id <= 0:
+                raise RuntimeError("No se pudo obtener el id de la encuesta.")
+
+            cursor.execute("DELETE FROM survey_answers WHERE survey_id = %s", (survey_id,))
             if data.answers:
                 for a in data.answers:
                     cursor.execute(
                         """
-                        INSERT INTO survey_answers (survey_id, question_id, answer_rating, answer_bool, answer_text, answer_number)
+                        INSERT INTO survey_answers (
+                            survey_id, question_id, answer_rating, answer_bool, answer_text, answer_number
+                        )
                         VALUES (%s, %s, %s, %s, %s, %s)
                         """,
                         (
-                            int(new_id),
+                            survey_id,
                             a.question_id,
                             a.answer_rating,
                             a.answer_bool,
@@ -1084,7 +1141,7 @@ class AppointmentRepository:
                         ),
                     )
             conn.commit()
-            return int(new_id)
+            return survey_id
         finally:
             if conn:
                 conn.close()

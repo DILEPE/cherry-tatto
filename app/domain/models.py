@@ -35,6 +35,8 @@ class ContractSign:
     artist_signature: Optional[str] = None
     tutor_document_front: Optional[str] = None
     tutor_document_back: Optional[str] = None
+    minor_document_front: Optional[str] = None
+    minor_document_back: Optional[str] = None
     contract_text: Optional[str] = None
     template_id: Optional[int] = None  # Para vincular con una plantilla específica 
 
@@ -45,7 +47,7 @@ class ContractTemplate:
     name: str          # Ej: "Consentimiento Tatuaje V1"
     version: str       # Ej: "1.0.2"
     content: str       # Texto o HTML del contrato (placeholders {{nombres}}, etc.)
-    contract_kind: str = "tattoo"  # tattoo | piercing
+    contract_kind: str = "tattoo"  # tattoo | piercing | recibo
     is_active: bool = True
     signing_flow: str = "phased"  # phased | single
 

@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.models import ContractTemplate
 
-ContractKindLiteral = Literal["tattoo", "piercing"]
+ContractKindLiteral = Literal["tattoo", "piercing", "recibo"]
 SigningFlowLiteral = Literal["phased", "single"]
 
 

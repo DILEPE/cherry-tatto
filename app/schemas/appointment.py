@@ -355,6 +355,17 @@ class AppointmentPaymentItem(BaseModel):
     note: Optional[str] = None
     paid_on: Optional[date] = None
     created_at: Optional[datetime | str] = None
+    is_verified: bool = False
+    verified_at: Optional[datetime | str] = None
+    verified_by: Optional[int] = None
+
+
+class AppointmentPaymentVerifyRequest(BaseModel):
+    """Confirmación de abono por un administrador del panel."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    verified_by: int = Field(..., ge=1, description="ID del usuario panel (administrador).")
 
 
 class AppointmentSearchHit(BaseModel):
