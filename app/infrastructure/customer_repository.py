@@ -6,7 +6,12 @@ from typing import Optional
 
 from mysql.connector.connection import MySQLConnection
 
-from app.schemas.customer import SOCIAL_MEDIA_MAX_LEN, CustomerCreate, CustomerUpdate
+from app.schemas.customer import (
+    SOCIAL_MEDIA_MAX_LEN,
+    CustomerCreate,
+    CustomerUpdate,
+    resolve_customer_email_for_storage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +167,7 @@ class CustomerRepository:
             data.document_type,
             data.document_number.strip(),
             data.document_issue_date,
-            str(data.email),
+            resolve_customer_email_for_storage(data.email, data.document_number),
             data.phone_number,
             data.address,
             data.nationality,
@@ -200,7 +205,7 @@ class CustomerRepository:
             data.document_type,
             data.document_number.strip(),
             data.document_issue_date,
-            str(data.email),
+            resolve_customer_email_for_storage(data.email, data.document_number),
             data.phone_number,
             data.address,
             data.nationality,
