@@ -823,7 +823,8 @@ class AppointmentRepository:
             cursor = self._get_cursor(conn, dictionary=True)
             cursor.execute(
                 """
-                SELECT id, appointment_id, amount, note, paid_on, created_at
+                SELECT id, appointment_id, amount, note, paid_on, created_at,
+                       COALESCE(is_verified, 0) AS is_verified, verified_at, verified_by
                 FROM appointment_payments
                 WHERE appointment_id = %s
                 ORDER BY COALESCE(paid_on, DATE(created_at)) ASC, created_at ASC, id ASC
@@ -910,7 +911,11 @@ class AppointmentRepository:
         try:
             cursor = self._get_cursor(conn, dictionary=True)
             cursor.execute(
-                "SELECT id, appointment_id, amount, note, paid_on, created_at FROM appointment_payments WHERE id = %s",
+                """
+                SELECT id, appointment_id, amount, note, paid_on, created_at,
+                       COALESCE(is_verified, 0) AS is_verified, verified_at, verified_by
+                FROM appointment_payments WHERE id = %s
+                """,
                 (int(payment_id),),
             )
             row = cursor.fetchone()
@@ -937,6 +942,10 @@ class AppointmentRepository:
         if amount is not None:
             parts.append("amount = %s")
             vals.append(float(amount))
+            # Al cambiar el monto, el abono deja de estar verificado.
+            parts.append("is_verified = 0")
+            parts.append("verified_at = NULL")
+            parts.append("verified_by = NULL")
         if note != "__NO_NOTE_CHANGE__":
             parts.append("note = %s")
             vals.append(note)
@@ -957,6 +966,31 @@ class AppointmentRepository:
             if conn:
                 conn.close()
         self.sync_appointment_deposit_totals_from_payments(appt_id)
+        return appt_id
+
+    def mark_payment_verified(self, payment_id: int, verified_by: int) -> int:
+        """Marca un abono como verificado. Devuelve appointment_id."""
+        row = self.get_payment_by_id(payment_id)
+        if not row:
+            raise ValueError("Abono no encontrado")
+        appt_id = int(row["appointment_id"])
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                """
+                UPDATE appointment_payments
+                SET is_verified = 1,
+                    verified_at = CURRENT_TIMESTAMP,
+                    verified_by = %s
+                WHERE id = %s
+                """,
+                (int(verified_by), int(payment_id)),
+            )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
         return appt_id
 
     def insert_payment_ledger_row_only(

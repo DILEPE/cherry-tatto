@@ -32,3 +32,28 @@ def appointment_must_be_fully_paid_for_contract(
             "(**Gestión de citas → Montos**)."
         )
     return True, None
+
+
+def appointment_payments_must_be_verified_for_contract(
+    payments: list[dict[str, object]] | None,
+) -> tuple[bool, str | None]:
+    """
+    Con el trabajo completamente abonado, todos los abonos deben estar verificados
+    por un administrador antes de firmar el contrato.
+    """
+    rows = payments or []
+    if not rows:
+        return False, (
+            "No hay abonos registrados. Registra y verifica los abonos antes de firmar el contrato."
+        )
+    unverified = [
+        r
+        for r in rows
+        if not bool(int(r.get("is_verified") or 0))  # type: ignore[arg-type]
+    ]
+    if unverified:
+        return False, (
+            "Hay abonos **sin verificar**. Un **administrador** debe confirmar cada abono "
+            "en la ficha de la cita antes de firmar el contrato."
+        )
+    return True, None
