@@ -103,3 +103,18 @@ class SurveyAppointmentLookup(BaseModel):
 
     found: bool
     survey: Optional[SurveyRow] = None
+
+
+class PiercingTypeUpdate(BaseModel):
+    """Actualiza solo la respuesta de tipo de piercing (pregunta fija de encuesta)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    piercing_type: str = Field(..., min_length=1, max_length=120)
+
+
+class PiercingTypeUpdateResponse(BaseModel):
+    status: str = "success"
+    message: str
+    piercing_type: str
+    piercing_type_canonical: str
