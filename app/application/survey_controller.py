@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-from litestar import Controller, get, post, status_codes
+from litestar import Controller, get, patch, post, status_codes
 from litestar.datastructures import State
 from litestar.exceptions import HTTPException
 
 from app.schemas.common import ApiSuccessResponse
-from app.schemas.survey import SurveyAppointmentLookup, SurveyCreate, SurveyRow, survey_create_to_domain
+from app.schemas.survey import (
+    PiercingTypeUpdate,
+    PiercingTypeUpdateResponse,
+    SurveyAppointmentLookup,
+    SurveyCreate,
+    SurveyRow,
+    survey_create_to_domain,
+)
 
 
 class SurveyController(Controller):
@@ -26,6 +33,34 @@ class SurveyController(Controller):
             raise HTTPException(detail=str(e), status_code=400) from e
         except Exception as e:
             raise HTTPException(detail=f"Error: {str(e)}", status_code=500) from e
+
+    @patch("/appointment/{appointment_id:int}/piercing-type")
+    async def update_piercing_type(
+        self,
+        appointment_id: int,
+        data: PiercingTypeUpdate,
+        state: State,
+    ) -> PiercingTypeUpdateResponse:
+        """Cambia el tipo de piercing de una cita (respuesta encuesta Q3) sin tocar el resto."""
+        try:
+            label, canonical = await state.service.update_appointment_piercing_type(
+                appointment_id, data.piercing_type
+            )
+            return PiercingTypeUpdateResponse(
+                status="success",
+                message="Tipo de piercing actualizado.",
+                piercing_type=label,
+                piercing_type_canonical=canonical,
+            )
+        except ValueError as e:
+            detail = str(e)
+            code = 404 if detail == "Cita no encontrada" else 400
+            raise HTTPException(detail=detail, status_code=code) from e
+        except Exception as e:
+            raise HTTPException(
+                detail=f"Error al actualizar tipo de piercing: {str(e)}",
+                status_code=500,
+            ) from e
 
     @get("/by-appointment/{appointment_id:int}")
     async def survey_for_appointment(

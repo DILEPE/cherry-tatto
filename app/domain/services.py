@@ -830,6 +830,37 @@ class BusinessLogicService:
             asyncio.create_task(self._async_notify("survey_low_rating", pl))
         return new_id
 
+    async def update_appointment_piercing_type(
+        self, appointment_id: int, piercing_type: str
+    ) -> tuple[str, str]:
+        """Upsert de la respuesta Q3 (tipo de piercing) sin borrar el resto de la encuesta."""
+
+        def _run() -> tuple[str, str]:
+            from app.domain.piercing_procedure_labels import piercing_type_display_label
+
+            appt = self.repository.get_by_id(int(appointment_id))
+            if appt is None:
+                raise ValueError("Cita no encontrada")
+            if appointment_to_contract_kind(appt) != "piercing":
+                raise ValueError(
+                    "Solo citas de piercing pueden actualizar el tipo de perforación"
+                )
+            index = build_piercing_type_index(
+                consent_labels=self.repository.list_procedure_consent_labels()
+            )
+            canonical = resolve_piercing_type_canonical(piercing_type, index)
+            if not canonical:
+                raise ValueError("Tipo de piercing no válido")
+            label = piercing_type_display_label(canonical)
+            self.repository.upsert_survey_answer_text(
+                int(appointment_id),
+                PROCEDURE_CONSENT_SURVEY_QUESTION_ID,
+                label,
+            )
+            return label, canonical
+
+        return await asyncio.to_thread(_run)
+
     async def get_survey_by_appointment(self, appointment_id: int) -> Optional[SurveyRow]:
 
         def _run() -> Optional[SurveyRow]:
