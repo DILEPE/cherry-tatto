@@ -1236,6 +1236,75 @@ class AppointmentRepository:
             if conn:
                 conn.close()
 
+    def upsert_survey_answer_text(
+        self,
+        appointment_id: int,
+        question_id: int,
+        answer_text: str,
+    ) -> None:
+        """Crea o actualiza solo una respuesta de encuesta; no borra el resto."""
+        text = str(answer_text or "").strip()
+        if not text:
+            raise ValueError("answer_text vacío")
+        qid = int(question_id)
+        aid = int(appointment_id)
+        if aid <= 0 or qid <= 0:
+            raise ValueError("appointment_id o question_id inválido")
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute("SELECT id FROM surveys WHERE appointment_id = %s", (aid,))
+            survey_row = cursor.fetchone() or {}
+            survey_id = int(survey_row.get("id") or 0)
+            if survey_id <= 0:
+                cursor.execute(
+                    """
+                    INSERT INTO surveys (appointment_id, rating, comments, would_recommend)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (aid, 3, None, True),
+                )
+                survey_id = int(cursor.lastrowid)
+            if survey_id <= 0:
+                raise RuntimeError("No se pudo obtener el id de la encuesta.")
+
+            cursor.execute(
+                """
+                SELECT id FROM survey_answers
+                WHERE survey_id = %s AND question_id = %s
+                LIMIT 1
+                """,
+                (survey_id, qid),
+            )
+            existing = cursor.fetchone() or {}
+            answer_id = int(existing.get("id") or 0)
+            if answer_id > 0:
+                cursor.execute(
+                    """
+                    UPDATE survey_answers
+                    SET answer_text = %s,
+                        answer_rating = NULL,
+                        answer_bool = NULL,
+                        answer_number = NULL
+                    WHERE id = %s
+                    """,
+                    (text, answer_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO survey_answers (
+                        survey_id, question_id, answer_rating, answer_bool, answer_text, answer_number
+                    )
+                    VALUES (%s, %s, NULL, NULL, %s, NULL)
+                    """,
+                    (survey_id, qid, text),
+                )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
     def get_procedure_consent_document(self, survey_option_label: str) -> Optional[dict[str, object]]:
         conn = self.db.get_connection()
         try:

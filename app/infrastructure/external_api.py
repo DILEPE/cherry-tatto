@@ -38,20 +38,13 @@ def _payment_receipt_amount_positive(data: dict[str, object]) -> bool:
 class NotificationService:
     """Servicio para comunicarse con webhooks de n8n.
 
-    Los recibos PDF (`payment_receipt_pdf`) pueden ir a un webhook dedicado
-    (`receipt_webhook_url`); los consentimientos por procedimiento (`contract_consent_pdf`)
-    pueden usar `contract_consent_webhook_url` (si no, mismo criterio que el recibo).
-    El resto de eventos usan `webhook_url`.
+    Los recibos PDF (`payment_receipt_pdf`) y los cuidados/consentimiento (`contract_consent_pdf`)
+    se envían **igual**: multipart/form-data con el archivo en el campo binario ``data``
+    y el resto de metadatos como campos de texto (sin reenviar ``pdf_base64``).
 
-    Los PDF con archivo adjunto (`payment_receipt_pdf`, `contract_consent_pdf`) pueden enviarse como
-    **multipart/form-data** (binario en el campo **`data`**) con metadatos en campos de texto.
-
-    Para ``payment_receipt_pdf``, por defecto se usa **multipart** con el archivo en el campo
-    ``data`` (lo que esperan nodos como WhatsApp «binary property data»). Para solo JSON con
-    ``pdf_base64`` defina ``N8N_PAYMENT_RECEIPT_TRANSPORT=json``.
-
-    Los recibos son la orden de trabajo Rock City (PDF rellenado); solo se envían si ``amount > 0``
-    y el PDF es decodificable. Los consentimientos sin PDF válido pueden enviarse como JSON como antes.
+    Para solo JSON con ``pdf_base64`` en recibos: ``N8N_PAYMENT_RECEIPT_TRANSPORT=json``.
+    Los cuidados usan el mismo criterio con ``N8N_CONTRACT_CONSENT_TRANSPORT`` (por defecto
+    el mismo valor que el recibo / multipart).
     """
 
     def __init__(
@@ -75,6 +68,18 @@ class NotificationService:
             )
         return self.webhook_url
 
+    def _pdf_transport(self, event: str) -> str:
+        """Mismo transporte que el recibo (multipart por defecto)."""
+        if event == "payment_receipt_pdf":
+            return (os.getenv("N8N_PAYMENT_RECEIPT_TRANSPORT") or "multipart").strip().lower()
+        if event == "contract_consent_pdf":
+            # Por defecto idéntico al recibo; se puede forzar con N8N_CONTRACT_CONSENT_TRANSPORT.
+            explicit = (os.getenv("N8N_CONTRACT_CONSENT_TRANSPORT") or "").strip().lower()
+            if explicit:
+                return explicit
+            return (os.getenv("N8N_PAYMENT_RECEIPT_TRANSPORT") or "multipart").strip().lower()
+        return "json"
+
     def notify(self, event: str, data: dict[str, object]) -> bool:
         url = self._resolve_url(event)
         if not url:
@@ -92,8 +97,8 @@ class NotificationService:
             )
             return False
 
-        if event == "payment_receipt_pdf":
-            transport = (os.getenv("N8N_PAYMENT_RECEIPT_TRANSPORT") or "multipart").strip().lower()
+        if event in ("payment_receipt_pdf", "contract_consent_pdf"):
+            transport = self._pdf_transport(event)
             if transport in ("json", "application/json"):
                 payload = {
                     "event": event,
@@ -104,7 +109,59 @@ class NotificationService:
                     response = requests.post(url, json=payload, timeout=120)
                     if not _http_2xx(response.status_code):
                         logger.warning(
-                            "n8n payment_receipt_pdf (JSON): HTTP %s desde %s — %s",
+                            "n8n %s (JSON): HTTP %s desde %s — %s",
+                            event,
+                            response.status_code,
+                            url,
+                            (response.text or "")[:800],
+                        )
+                    return _http_2xx(response.status_code)
+                except Exception:
+                    logger.exception("n8n %s (JSON): error de red hacia %s", event, url)
+                    return False
+
+            # Igual que el recibo: multipart, archivo en campo «data».
+            b64 = data.get("pdf_base64")
+            pdf_bytes = b""
+            if isinstance(b64, str) and b64.strip():
+                try:
+                    pdf_bytes = base64.standard_b64decode(b64.strip().encode("ascii"))
+                except (ValueError, UnicodeEncodeError):
+                    pdf_bytes = b""
+            if pdf_bytes:
+                meta = {k: v for k, v in data.items() if k not in ("pdf_base64", "mime_type")}
+                fname = str(
+                    meta.get("file_name")
+                    or ("consentimiento.pdf" if event == "contract_consent_pdf" else "orden_trabajo.pdf")
+                )
+                ts = datetime.datetime.now().isoformat()
+                form_data: dict[str, str] = {
+                    "event": event,
+                    "timestamp": ts,
+                }
+                for key, val in meta.items():
+                    form_data[key] = _form_field_str(val)
+                try:
+                    logger.info(
+                        "n8n %s (multipart): PDF %s (%s bytes) → %s",
+                        event,
+                        fname,
+                        len(pdf_bytes),
+                        url,
+                    )
+                    response = requests.post(
+                        url,
+                        files={
+                            # Mismo nombre que el recibo / WhatsApp binary property «data»
+                            "data": (fname, pdf_bytes, "application/pdf"),
+                        },
+                        data=form_data,
+                        timeout=60,
+                    )
+                    if not _http_2xx(response.status_code):
+                        logger.warning(
+                            "n8n %s (multipart): HTTP %s desde %s — %s",
+                            event,
                             response.status_code,
                             url,
                             (response.text or "")[:800],
@@ -112,63 +169,17 @@ class NotificationService:
                     return _http_2xx(response.status_code)
                 except Exception:
                     logger.exception(
-                        "n8n payment_receipt_pdf (JSON): error de red hacia %s",
+                        "n8n %s (multipart): error enviando PDF hacia %s",
+                        event,
                         url,
                     )
                     return False
 
-        if event in ("payment_receipt_pdf", "contract_consent_pdf"):
-            b64 = data.get("pdf_base64")
-            if isinstance(b64, str) and b64.strip():
-                try:
-                    pdf_bytes = base64.standard_b64decode(b64.strip().encode("ascii"))
-                except (ValueError, UnicodeEncodeError):
-                    pdf_bytes = b""
-                if pdf_bytes:
-                    meta = {k: v for k, v in data.items() if k not in ("pdf_base64", "mime_type")}
-                    fname = str(
-                        meta.get("file_name")
-                        or ("consentimiento.pdf" if event == "contract_consent_pdf" else "orden_trabajo.pdf")
-                    )
-                    ts = datetime.datetime.now().isoformat()
-                    form_data: dict[str, str] = {
-                        "event": event,
-                        "timestamp": ts,
-                    }
-                    for key, val in meta.items():
-                        form_data[key] = _form_field_str(val)
-                    try:
-                        response = requests.post(
-                            url,
-                            files={
-                                # Nombre coherente con nodos n8n que esperan binary property `data`
-                                "data": (fname, pdf_bytes, "application/pdf"),
-                            },
-                            data=form_data,
-                            timeout=60,
-                        )
-                        if not _http_2xx(response.status_code):
-                            logger.warning(
-                                "n8n %s (multipart): HTTP %s desde %s — %s",
-                                event,
-                                response.status_code,
-                                url,
-                                (response.text or "")[:800],
-                            )
-                        return _http_2xx(response.status_code)
-                    except Exception:
-                        logger.exception(
-                            "n8n %s (multipart): error enviando PDF hacia %s",
-                            event,
-                            url,
-                        )
-                        return False
-            if event == "payment_receipt_pdf":
-                logger.warning(
-                    "n8n payment_receipt_pdf: pdf_base64 vacío o PDF no decodificable; no se envía "
-                    "(revise generación de orden de trabajo / plantilla en app/assets)."
-                )
-                return False
+            logger.warning(
+                "n8n %s: pdf_base64 vacío o PDF no decodificable; no se envía.",
+                event,
+            )
+            return False
 
         payload = {
             "event": event,

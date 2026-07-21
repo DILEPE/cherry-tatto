@@ -12,28 +12,29 @@
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
       "position": [
-        -496,
-        -112
+        80,
+        -16
       ],
-      "id": "2d900cd1-755d-43b6-a45d-56cc89b0b54c",
+      "id": "27bbf1f4-bcba-46bd-8367-e23bd8f97fb6",
       "name": "Webhook",
-      "webhookId": "b855dcce-5bba-4630-9da5-8d31137b17de"
+      "webhookId": "5d044fbe-f300-4ac3-bf8a-6adb8499a6e3"
     },
     {
       "parameters": {
         "resource": "media",
         "phoneNumberId": "1107930225741590",
+        "mediaPropertyName": "=data",
         "additionalFields": {}
       },
       "type": "n8n-nodes-base.whatsApp",
       "typeVersion": 1.1,
       "position": [
-        -288,
-        -112
+        320,
+        -16
       ],
-      "id": "360a3de5-d133-4224-bbf9-41da542d6ece",
+      "id": "3a7b882a-accb-43b6-849c-ac70f1cd3a3f",
       "name": "Transformacion pdf a id wp",
-      "webhookId": "fc1b442e-b700-4253-a45f-ea016b82ef7c",
+      "webhookId": "f1c385e7-9a3d-4bad-93fa-98dc5ce9fb2e",
       "credentials": {
         "whatsAppApi": {
           "id": "nFu6KkT6PkJuu5zh",
@@ -43,54 +44,46 @@
     },
     {
       "parameters": {
-        "operation": "send",
-        "phoneNumberId": "1107930225741590",
-        "recipientPhoneNumber": "={{ $('Webhook').item.json.body.phone }}",
-        "messageType": "document",
-        "mediaPath": "useMediaId",
-        "mediaId": "={{ $json.id }}",
-        "mediaFilename": "rock-city-threadments",
-        "additionalFields": {}
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/1107930225741590/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "whatsAppApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {}
       },
-      "type": "n8n-nodes-base.whatsApp",
-      "typeVersion": 1.1,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
       "position": [
-        -80,
-        -112
+        752,
+        -16
       ],
-      "id": "1793a105-be5b-4ae1-974a-744c645c853b",
-      "name": "Envio pdf cuidados",
-      "webhookId": "22c3c153-6a03-4408-8220-97806acc24c1",
+      "id": "acaeb7bf-08d7-474f-b2a7-9cf8b2cbdc4f",
+      "name": "HTTP Request",
       "credentials": {
+        "httpHeaderAuth": {
+          "id": "CEyH9xI1ILqjgoYI",
+          "name": "Header Auth account"
+        },
         "whatsAppApi": {
-          "id": "nFu6KkT6PkJuu5zh",
-          "name": "WhatsApp account"
+          "id": "nKm5zTleWx52x3t5",
+          "name": "WhatsApp account 2"
         }
       }
     },
     {
       "parameters": {
-        "operation": "send",
-        "phoneNumberId": "1107930225741590",
-        "recipientPhoneNumber": "={{ $('Webhook').item.json.body.phone }}",
-        "textBody": "=Hola {{ $('Webhook').item.json.body.customer_name }} , estos son los cuidados que debes tener en cuenta para tu procedimiento de {{ $('Webhook').item.json.body.procedure_label }}.",
-        "additionalFields": {}
+        "jsCode": "const mediaId = parseInt($('Transformacion pdf a id wp').item.json.id);\nconst phone = '57' + $('Webhook').item.json.body.phone;\nconst customerName = $('Webhook').item.json.body.customer_name;\nconst fileName = $('Webhook').item.json.body.file_name || 'tratamientos.pdf';\nconst servicio = $('Webhook').item.json.body.service;\n  \n \nreturn {\n  json: {\n    messaging_product: \"whatsapp\",\n    to: phone,\n    type: \"template\",\n    template: {\n      name: \"cuidados_posttratamiento\",\n      language: { code: \"es_CO\" },\n      components: [\n        {\n          type: \"header\",\n          parameters: [\n            {\n              type: \"document\",\n              document: {\n                id: mediaId,\n                filename: fileName\n              }\n            }\n          ]\n        },\n        {\n          type: \"body\",\n          parameters: [\n            { type: \"text\", text: customerName },\n            { type: \"text\", text: servicio }\n          ]\n        }\n      ]\n    }\n  }\n};"
       },
-      "type": "n8n-nodes-base.whatsApp",
-      "typeVersion": 1.1,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
-        96,
-        -112
+        544,
+        -16
       ],
-      "id": "a71957e1-9f96-493f-8068-21e80ee35d09",
-      "name": "Envio mensaje cuidados",
-      "webhookId": "3948a5c1-c41e-4246-acf5-eb481d1581f4",
-      "credentials": {
-        "whatsAppApi": {
-          "id": "nFu6KkT6PkJuu5zh",
-          "name": "WhatsApp account"
-        }
-      }
+      "id": "d8538154-7f9f-4251-a7fb-21729497b011",
+      "name": "Code in JavaScript"
     }
   ],
   "pinData": {},
@@ -110,27 +103,27 @@
       "main": [
         [
           {
-            "node": "Envio pdf cuidados",
+            "node": "Code in JavaScript",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Envio pdf cuidados": {
+    "HTTP Request": {
+      "main": [
+        []
+      ]
+    },
+    "Code in JavaScript": {
       "main": [
         [
           {
-            "node": "Envio mensaje cuidados",
+            "node": "HTTP Request",
             "type": "main",
             "index": 0
           }
         ]
-      ]
-    },
-    "Envio mensaje cuidados": {
-      "main": [
-        []
       ]
     }
   },
@@ -140,11 +133,10 @@
     "binaryMode": "separate",
     "availableInMCP": false
   },
-  "versionId": "2dfa89f1-4445-4fa5-8779-79efa0d2779b",
+  "versionId": "8d66910a-33bc-45e0-896f-cd3d58d72e1f",
   "meta": {
-    "templateCredsSetupCompleted": true,
     "instanceId": "b56ae73836276e902eab7260bda1c240d29fb935abb341d8530a9fc2085fe3df"
   },
-  "id": "Z2LF1IJGmeGYLkh0",
+  "id": "U8hfhsNesZQKzQfA",
   "tags": []
 }
