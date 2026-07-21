@@ -12,10 +12,10 @@
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
       "position": [
-        -496,
-        -112
+        80,
+        -16
       ],
-      "id": "ab0db02a-b8d7-4fb6-8876-e5fc701582d8",
+      "id": "14b6168a-814c-45eb-9371-363158fa0660",
       "name": "Webhook",
       "webhookId": "4ee1ef9d-d382-446f-8a4e-b09c3fb2ae38"
     },
@@ -23,15 +23,16 @@
       "parameters": {
         "resource": "media",
         "phoneNumberId": "1107930225741590",
+        "mediaPropertyName": "=data",
         "additionalFields": {}
       },
       "type": "n8n-nodes-base.whatsApp",
       "typeVersion": 1.1,
       "position": [
-        -288,
-        -112
+        384,
+        -16
       ],
-      "id": "957abf5f-93c9-4b8d-bcc0-813e4e6acc1d",
+      "id": "33c431bc-ff27-4596-ac6b-0539ac246b71",
       "name": "Transformacion pdf a id wp",
       "webhookId": "dc59c007-95b1-451d-b3d7-f0bfabcffadd",
       "credentials": {
@@ -43,68 +44,46 @@
     },
     {
       "parameters": {
-        "phoneNumberId": "1107930225741590",
-        "recipientPhoneNumber": "={{ $('Webhook').item.json.body.phone }}",
-        "template": "comprobacion_abono|es",
-        "components": {
-          "component": [
-            {
-              "bodyParameters": {
-                "parameter": [
-                  {
-                    "text": "={{ $('Webhook').item.json.body.customer_name }}"
-                  },
-                  {
-                    "text": "={{ new Date($('Webhook').item.json.body.timestamp.replace(\" \", \"T\")).toLocaleString(\"es-CO\", {day: \"2-digit\",month: \"long\",year: \"numeric\"}) }}"
-                  }
-                ]
-              }
-            }
-          ]
-        }
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/1107930225741590/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "whatsAppApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {}
       },
-      "type": "n8n-nodes-base.whatsApp",
-      "typeVersion": 1.1,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
       "position": [
-        96,
-        -112
+        704,
+        -16
       ],
-      "id": "2d872804-7852-4553-abda-dbb0e9852b08",
-      "name": "Envio mensaje comprobante",
-      "webhookId": "d9750d98-d1b1-4998-99ab-91d5d675a0bf",
+      "id": "868112f9-ae68-4b45-bf9b-8835a9deb650",
+      "name": "HTTP Request",
       "credentials": {
+        "httpHeaderAuth": {
+          "id": "CEyH9xI1ILqjgoYI",
+          "name": "Header Auth account"
+        },
         "whatsAppApi": {
-          "id": "nFu6KkT6PkJuu5zh",
-          "name": "WhatsApp account"
+          "id": "nKm5zTleWx52x3t5",
+          "name": "WhatsApp account 2"
         }
       }
     },
     {
       "parameters": {
-        "operation": "send",
-        "phoneNumberId": "1107930225741590",
-        "recipientPhoneNumber": "={{ $('Webhook').item.json.body.phone }}",
-        "messageType": "document",
-        "mediaPath": "useMediaId",
-        "mediaId": "={{ $json.id }}",
-        "mediaFilename": "rock-city-receipt",
-        "additionalFields": {}
+        "jsCode": "const mediaId = parseInt($('Transformacion pdf a id wp').item.json.id);\nconst phone = '57' + $('Webhook').item.json.body.phone;\nconst customerName = $('Webhook').item.json.body.customer_name;\nconst fileName = $('Webhook').item.json.body.file_name || 'comprobante.pdf';\nconst fecha = new Date($('Webhook').item.json.body.timestamp)\n  .toLocaleDateString('es-CO', { day: '2-digit', month: 'long', year: 'numeric' });\n \nreturn {\n  json: {\n    messaging_product: \"whatsapp\",\n    to: phone,\n    type: \"template\",\n    template: {\n      name: \"confirmacion_recibo\",\n      language: { code: \"es_CO\" },\n      components: [\n        {\n          type: \"header\",\n          parameters: [\n            {\n              type: \"document\",\n              document: {\n                id: mediaId,\n                filename: fileName\n              }\n            }\n          ]\n        },\n        {\n          type: \"body\",\n          parameters: [\n            { type: \"text\", text: customerName },\n            { type: \"text\", text: fecha }\n          ]\n        }\n      ]\n    }\n  }\n};"
       },
-      "type": "n8n-nodes-base.whatsApp",
-      "typeVersion": 1.1,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
-        -80,
-        -112
+        544,
+        -16
       ],
-      "id": "8c113291-d97c-463b-8242-2d0582ac5eac",
-      "name": "Envio archivo comprobante",
-      "webhookId": "f3db27ff-d939-46bb-ab38-30260119e285",
-      "credentials": {
-        "whatsAppApi": {
-          "id": "nFu6KkT6PkJuu5zh",
-          "name": "WhatsApp account"
-        }
-      }
+      "id": "6e972271-f8ef-41b3-b67e-38ccec5fe809",
+      "name": "Code in JavaScript"
     }
   ],
   "pinData": {},
@@ -124,23 +103,23 @@
       "main": [
         [
           {
-            "node": "Envio archivo comprobante",
+            "node": "Code in JavaScript",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Envio mensaje comprobante": {
+    "HTTP Request": {
       "main": [
         []
       ]
     },
-    "Envio archivo comprobante": {
+    "Code in JavaScript": {
       "main": [
         [
           {
-            "node": "Envio mensaje comprobante",
+            "node": "HTTP Request",
             "type": "main",
             "index": 0
           }
@@ -148,17 +127,15 @@
       ]
     }
   },
-  "active": false,
+  "active": true,
   "settings": {
     "executionOrder": "v1",
-    "binaryMode": "separate",
-    "availableInMCP": false
+    "binaryMode": "separate"
   },
-  "versionId": "ffd93472-53c3-4891-8a2c-c7417b8ccf1c",
+  "versionId": "72ef35ba-2700-4bf8-b803-674d4a964acd",
   "meta": {
-    "templateCredsSetupCompleted": true,
     "instanceId": "b56ae73836276e902eab7260bda1c240d29fb935abb341d8530a9fc2085fe3df"
   },
-  "id": "UMjIifopOCDTVYGQ",
+  "id": "edP07hj31R6sQFea",
   "tags": []
 }
