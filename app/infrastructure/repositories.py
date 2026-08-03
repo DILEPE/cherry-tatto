@@ -555,10 +555,73 @@ class AppointmentRepository:
                     pending_balance=float(res.get("pending_balance") or 0),
                     customer_id=res.get("customer_id"),
                     detail=(res.get("detail") or "") or "",
+                    assigned_panel_user_id=res.get("assigned_panel_user_id"),
                 )
             return None
         finally:
             if conn: conn.close()
+
+    def list_for_artist_schedule_day(
+        self,
+        day: datetime | date | str,
+        assigned_panel_user_id: int,
+        *,
+        exclude_appointment_id: Optional[int] = None,
+    ) -> list[dict[str, object]]:
+        """
+        Citas del día que ocupan agenda del profesional (asignadas a él o sin asignar).
+        Excluye canceladas.
+        """
+        if isinstance(day, datetime):
+            day_s = day.strftime("%Y-%m-%d")
+        elif isinstance(day, date):
+            day_s = day.strftime("%Y-%m-%d")
+        else:
+            day_s = str(day).strip()[:10]
+
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            params: list[object] = [day_s, int(assigned_panel_user_id)]
+            exclude_sql = ""
+            if exclude_appointment_id is not None:
+                exclude_sql = " AND a.id <> %s"
+                params.append(int(exclude_appointment_id))
+            cursor.execute(
+                f"""
+                SELECT
+                    a.id,
+                    a.customer_name,
+                    a.service_type,
+                    a.detail,
+                    a.appointment_date,
+                    a.status,
+                    a.assigned_panel_user_id
+                FROM appointments a
+                WHERE DATE(a.appointment_date) = %s
+                  AND LOWER(COALESCE(a.status, '')) <> 'cancelada'
+                  AND (
+                    a.assigned_panel_user_id = %s
+                    OR a.assigned_panel_user_id IS NULL
+                    OR a.assigned_panel_user_id = 0
+                  )
+                  {exclude_sql}
+                ORDER BY a.appointment_date ASC, a.id ASC
+                """,
+                tuple(params),
+            )
+            rows = cursor.fetchall() or []
+            out: list[dict[str, object]] = []
+            for row in rows:
+                item = dict(row)
+                item["appointment_date"] = self._appointment_datetime_sql_string(
+                    item.get("appointment_date")
+                )
+                out.append(item)
+            return out
+        finally:
+            if conn:
+                conn.close()
 
     def get_row_for_payment_receipt(self, appointment_id: int) -> Optional[Any]:
         """Cita + datos de cliente para PDF de recibo (nombre/teléfono/correo)."""
