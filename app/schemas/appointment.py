@@ -322,13 +322,14 @@ class AppointmentPaymentCreateRequest(BaseModel):
 
 
 class AppointmentPaymentPatchRequest(BaseModel):
-    """Actualización parcial de un abono registrado."""
+    """Actualización parcial de un abono registrado (solo administrador; no si verificado)."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
     amount: Optional[float] = Field(default=None, gt=0)
     note: Optional[str] = Field(default=None, max_length=300)
     paid_on: Optional[date] = None
+    edited_by: int = Field(..., ge=1, description="ID del usuario panel (administrador).")
 
     @field_validator("paid_on")
     @classmethod

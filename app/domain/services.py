@@ -1285,11 +1285,27 @@ class BusinessLogicService:
     async def patch_appointment_payment_row(
         self, appointment_id: int, payment_id: int, data: AppointmentPaymentPatchRequest
     ) -> None:
+        if self.panel_user_repo is None:
+            raise RuntimeError("Repositorio de usuarios del panel no configurado.")
+
+        def _assert_admin() -> None:
+            user = self.panel_user_repo.get_by_id(int(data.edited_by))
+            if not user:
+                raise ValueError("Usuario del panel no encontrado.")
+            if str(user.get("role") or "") != "administrador":
+                raise ValueError("Solo un administrador puede editar abonos.")
+
+        await asyncio.to_thread(_assert_admin)
+
         row = await asyncio.to_thread(self.repository.get_payment_by_id, payment_id)
         if not row:
             raise ValueError("Abono no encontrado")
         if int(row.get("appointment_id") or 0) != int(appointment_id):
             raise ValueError("El abono no pertenece a esta cita")
+        if bool(int(row.get("is_verified") or 0)):
+            raise ValueError(
+                "Un abono verificado no se puede editar; solo puedes enviar el recibo."
+            )
         appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
         if appointment is None:
             raise ValueError("Cita no encontrada")
