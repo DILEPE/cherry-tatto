@@ -67,6 +67,7 @@ from app.schemas.customer import (
     CustomerListResponse,
     CustomerPublic,
     CustomerUpdate,
+    customer_update_preserving_real_birth,
 )
 from app.schemas.panel_user import (
     PanelUserAssignable,
@@ -515,7 +516,9 @@ class BusinessLogicService:
                             raise ValueError(
                                 "El documento enviado no coincide con el cliente vinculado a la cita."
                             )
-                        self.customers.update(cid, CustomerUpdate(**c.model_dump()), conn)
+                        self.customers.update(
+                            cid, customer_update_preserving_real_birth(row, c), conn
+                        )
                 elif data.customer is not None:
                     c = CustomerCreate.model_validate(data.customer)
                     resolved_id = self.customers.upsert_by_document(c, conn)

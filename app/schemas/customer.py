@@ -330,3 +330,80 @@ class CustomerListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+def _coerce_optional_date(value: object) -> Optional[date]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            return date.fromisoformat(value.strip()[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def _nonempty_text(value: object) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def customer_update_preserving_real_birth(
+    existing_row: dict[str, object],
+    incoming: CustomerCreate,
+) -> CustomerUpdate:
+    """
+    Al re-agendar / actualizar embebido: no pisar ficha ya completada (nacimiento real,
+    expedición, contacto, tutor, etc.) cuando el payload trae sentinel o vacíos.
+    """
+    payload = incoming.model_dump()
+    existing_birth = _coerce_optional_date(existing_row.get("birth_date"))
+    if (
+        existing_birth is not None
+        and existing_birth != CUSTOMER_BIRTH_PENDING
+        and incoming.birth_date == CUSTOMER_BIRTH_PENDING
+    ):
+        payload["birth_date"] = existing_birth
+        payload["is_minor"] = bool(existing_row.get("is_minor"))
+
+    existing_issue = _coerce_optional_date(existing_row.get("document_issue_date"))
+    incoming_issue = _coerce_optional_date(payload.get("document_issue_date"))
+    if existing_issue is not None and incoming_issue is None:
+        payload["document_issue_date"] = existing_issue
+
+    for key in (
+        "address",
+        "nationality",
+        "profession",
+        "social_media",
+        "emergency_contact_name",
+        "emergency_contact_phone",
+        "guardian_name",
+        "guardian_document_type",
+        "guardian_document_number",
+    ):
+        existing_val = _nonempty_text(existing_row.get(key))
+        incoming_val = _nonempty_text(payload.get(key))
+        if existing_val is not None and incoming_val is None:
+            payload[key] = existing_row.get(key)
+
+    existing_g_issue = _coerce_optional_date(existing_row.get("guardian_document_issue_date"))
+    incoming_g_issue = _coerce_optional_date(payload.get("guardian_document_issue_date"))
+    if existing_g_issue is not None and incoming_g_issue is None:
+        payload["guardian_document_issue_date"] = existing_g_issue
+
+    # Si ya hay nacimiento real y el payload no aporta email/teléfono útiles, conservar.
+    if existing_birth is not None and existing_birth != CUSTOMER_BIRTH_PENDING:
+        for key in ("email", "phone_number"):
+            existing_val = _nonempty_text(existing_row.get(key))
+            incoming_val = _nonempty_text(payload.get(key))
+            if existing_val is not None and incoming_val is None:
+                payload[key] = existing_row.get(key)
+
+    return CustomerUpdate(**payload)
