@@ -115,7 +115,7 @@ class AppointmentCreateRequest(BaseModel):
     assigned_panel_user_id: int = Field(
         ...,
         ge=1,
-        description="Usuario del panel (tatuador o perforador) al que se asigna la franja horaria.",
+        description="Usuario del panel (tatuador o perforador) al que se asigna el horario de la cita.",
     )
     customer_id: Optional[int] = Field(default=None, ge=1)
     customer: Optional[CustomerCreate] = Field(

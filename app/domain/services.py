@@ -25,6 +25,11 @@ from app.domain.piercing_procedure_labels import (
 )
 from app.domain.procedure_consent import PROCEDURE_CONSENT_SURVEY_QUESTION_ID
 from app.domain.service_types import resolve_service_type
+from app.domain.agenda_schedule import (
+    find_schedule_conflict,
+    parse_appointment_datetime,
+    schedule_conflict_message,
+)
 from app.domain.models import (
     AppointmentCreate,
     ContractSign,
@@ -466,6 +471,26 @@ class BusinessLogicService:
                 )
 
         await asyncio.to_thread(_pre_validate)
+
+        start_dt = parse_appointment_datetime(data.date)
+        if start_dt is None:
+            raise ValueError("Fecha/hora de la cita inválida.")
+
+        def _check_schedule() -> None:
+            day_rows = self.repository.list_for_artist_schedule_day(
+                start_dt,
+                int(data.assigned_panel_user_id),
+            )
+            conflict = find_schedule_conflict(
+                candidate_start=start_dt,
+                candidate_service=resolved_type,
+                candidate_detail=data.detail,
+                day_rows=day_rows,
+            )
+            if conflict is not None:
+                raise ValueError(schedule_conflict_message(conflict))
+
+        await asyncio.to_thread(_check_schedule)
 
         dep_round = max(0.0, round(float(data.deposit or 0), 2))
         tot_round = max(0.0, round(float(data.total_amount or 0), 2))
@@ -1030,6 +1055,40 @@ class BusinessLogicService:
             design_description=design_description,
             observations=observations,
         )
+        start_dt = parse_appointment_datetime(new_date)
+        if start_dt is None:
+            raise ValueError("Fecha/hora de la cita inválida.")
+        artist_id = getattr(appointment, "assigned_panel_user_id", None)
+        if artist_id is None or int(artist_id) <= 0:
+            raise ValueError("La cita no tiene profesional asignado; no se puede reprogramar el horario.")
+        detail_for_check = (
+            merged_detail
+            if merged_detail is not None
+            else str(getattr(appointment, "detail", "") or "")
+        )
+        service_type = str(
+            getattr(appointment, "service_type", None)
+            or getattr(appointment, "service", "")
+            or ""
+        )
+
+        def _check_schedule() -> None:
+            day_rows = self.repository.list_for_artist_schedule_day(
+                start_dt,
+                int(artist_id),
+                exclude_appointment_id=appointment_id,
+            )
+            conflict = find_schedule_conflict(
+                candidate_start=start_dt,
+                candidate_service=service_type,
+                candidate_detail=detail_for_check,
+                day_rows=day_rows,
+                exclude_appointment_id=appointment_id,
+            )
+            if conflict is not None:
+                raise ValueError(schedule_conflict_message(conflict))
+
+        await asyncio.to_thread(_check_schedule)
         await asyncio.to_thread(self.repository.reprogram_appointment, appointment_id, new_date, merged_detail)
 
     async def update_appointment_financials(
@@ -1083,12 +1142,62 @@ class BusinessLogicService:
             pu = await asyncio.to_thread(self.panel_user_repo.get_by_id, int(assigned_panel_user_id))
             if pu is None:
                 raise ValueError("Usuario del panel del artista no encontrado")
+            need = service_type_to_assignee_panel_role(
+                str(
+                    getattr(appointment, "service_type", None)
+                    or getattr(appointment, "service", "")
+                    or ""
+                )
+            )
+            if str(pu.get("role") or "") != need:
+                raise ValueError(
+                    f"Para este tipo de servicio debes elegir un profesional con rol "
+                    f"«{PANEL_ROLE_LABEL_ES.get(need, need)}»."
+                )
         dnorm = self._merge_appointment_detail_fields(
             str(getattr(appointment, "detail", "") or ""),
             detail=detail,
             design_description=design_description,
             observations=observations,
         )
+
+        target_artist = (
+            int(assigned_panel_user_id)
+            if assigned_panel_user_id is not None
+            else int(getattr(appointment, "assigned_panel_user_id", 0) or 0)
+        )
+        detail_for_check = (
+            dnorm
+            if dnorm is not None
+            else str(getattr(appointment, "detail", "") or "")
+        )
+        start_dt = parse_appointment_datetime(getattr(appointment, "date", None))
+        if target_artist > 0 and start_dt is not None and (
+            assigned_panel_user_id is not None or dnorm is not None
+        ):
+            service_type = str(
+                getattr(appointment, "service_type", None)
+                or getattr(appointment, "service", "")
+                or ""
+            )
+
+            def _check_schedule() -> None:
+                day_rows = self.repository.list_for_artist_schedule_day(
+                    start_dt,
+                    target_artist,
+                    exclude_appointment_id=appointment_id,
+                )
+                conflict = find_schedule_conflict(
+                    candidate_start=start_dt,
+                    candidate_service=service_type,
+                    candidate_detail=detail_for_check,
+                    day_rows=day_rows,
+                    exclude_appointment_id=appointment_id,
+                )
+                if conflict is not None:
+                    raise ValueError(schedule_conflict_message(conflict))
+
+            await asyncio.to_thread(_check_schedule)
 
         await asyncio.to_thread(
             self.repository.patch_appointment_meta,
