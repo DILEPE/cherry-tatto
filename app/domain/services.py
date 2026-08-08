@@ -1791,6 +1791,168 @@ class BusinessLogicService:
 
         await asyncio.to_thread(_run)
 
+    def _sync_piercing_type_in_survey_question_options(
+        self,
+        *,
+        add: Optional[str] = None,
+        remove: Optional[str] = None,
+        rename_from: Optional[str] = None,
+        rename_to: Optional[str] = None,
+    ) -> None:
+        """Mantiene survey_questions.id=3 (pregunta de tipo de perforación) alineada con el catálogo PDF."""
+        tattoo = "tatuaje"
+        qid = PROCEDURE_CONSENT_SURVEY_QUESTION_ID
+        row = self.repository.get_survey_question(qid)
+        if row is None:
+            return
+        opts = parse_options_json(row.get("options_json")) or []
+        # Preserve order; drop empties.
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for o in opts:
+            t = str(o).strip()
+            if not t or t.lower() == tattoo:
+                continue
+            key = t.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(t)
+
+        if remove:
+            rem = remove.strip()
+            cleaned = [o for o in cleaned if o.casefold() != rem.casefold()]
+
+        if rename_from and rename_to:
+            old, new = rename_from.strip(), rename_to.strip()
+            if old.casefold() != new.casefold():
+                cleaned = [new if o.casefold() == old.casefold() else o for o in cleaned]
+                # ensure new present
+                if not any(o.casefold() == new.casefold() for o in cleaned):
+                    if new.lower() != tattoo:
+                        cleaned.append(new)
+
+        if add:
+            a = add.strip()
+            if a and a.lower() != tattoo and not any(o.casefold() == a.casefold() for o in cleaned):
+                cleaned.append(a)
+
+        question = SurveyQuestion(
+            id=int(row["id"]),
+            label=str(row.get("label") or ""),
+            question_type=str(row.get("question_type") or "select"),
+            options=cleaned or None,
+            sort_order=int(row.get("sort_order") or 0),
+            contract_kind=str(row.get("contract_kind") or "piercing"),
+            is_active=bool(row.get("is_active", 1)),
+        )
+        self.repository.update_survey_question(question)
+
+    async def list_procedure_consent_documents(
+        self, *, include_tattoo: bool = True
+    ) -> list:
+        from app.schemas.procedure_consent import ProcedureConsentListItem
+
+        def _run() -> list:
+            rows = self.repository.list_procedure_consent_documents()
+            out: list = []
+            for r in rows:
+                label = str(r.get("survey_option_label") or "").strip()
+                if not label:
+                    continue
+                is_tattoo = label.casefold() == "tatuaje"
+                if is_tattoo and not include_tattoo:
+                    continue
+                b64_len = int(r.get("pdf_base64_len") or 0)
+                # Longitud base64 ≈ 4/3 del binario.
+                pdf_bytes = max(0, int(b64_len * 3 / 4)) if b64_len else 0
+                out.append(
+                    ProcedureConsentListItem(
+                        survey_option_label=label,
+                        source_filename=str(r.get("source_filename") or f"{label}.pdf"),
+                        updated_at=r.get("updated_at"),
+                        pdf_bytes=pdf_bytes,
+                        is_tattoo=is_tattoo,
+                    )
+                )
+            return out
+
+        return await asyncio.to_thread(_run)
+
+    async def get_procedure_consent_document_detail(self, label: str):
+        from app.schemas.procedure_consent import ProcedureConsentDetail
+
+        def _run():
+            row = self.repository.get_procedure_consent_document(label.strip())
+            if row is None:
+                return None
+            lbl = str(row.get("survey_option_label") or "").strip()
+            b64 = str(row.get("pdf_base64") or "")
+            return ProcedureConsentDetail(
+                survey_option_label=lbl,
+                source_filename=str(row.get("source_filename") or f"{lbl}.pdf"),
+                updated_at=None,
+                pdf_bytes=max(0, int(len(b64) * 3 / 4)) if b64 else 0,
+                is_tattoo=lbl.casefold() == "tatuaje",
+                pdf_base64=b64,
+            )
+
+        return await asyncio.to_thread(_run)
+
+    async def create_procedure_consent_document(self, data) -> str:
+        def _run() -> str:
+            label = data.survey_option_label.strip()
+            existing = self.repository.get_procedure_consent_document(label)
+            if existing is not None:
+                raise ValueError(f"Ya existe el tipo «{label}».")
+            self.repository.upsert_procedure_consent_document(
+                survey_option_label=label,
+                source_filename=data.source_filename,
+                pdf_base64=data.pdf_base64,
+            )
+            if label.casefold() != "tatuaje":
+                self._sync_piercing_type_in_survey_question_options(add=label)
+            return label
+
+        return await asyncio.to_thread(_run)
+
+    async def update_procedure_consent_document(self, current_label: str, data) -> None:
+        def _run() -> None:
+            cur = current_label.strip()
+            if not cur:
+                raise ValueError("NOT_FOUND")
+            new_label = (data.survey_option_label or cur).strip()
+            ok = self.repository.update_procedure_consent_document(
+                current_label=cur,
+                new_label=new_label,
+                source_filename=data.source_filename,
+                pdf_base64=data.pdf_base64,
+            )
+            if not ok:
+                raise ValueError("NOT_FOUND")
+            if cur.casefold() == "tatuaje" and new_label.casefold() == "tatuaje":
+                return
+            if cur.casefold() != new_label.casefold():
+                self._sync_piercing_type_in_survey_question_options(
+                    rename_from=cur, rename_to=new_label
+                )
+            elif new_label.casefold() != "tatuaje":
+                self._sync_piercing_type_in_survey_question_options(add=new_label)
+
+        await asyncio.to_thread(_run)
+
+    async def delete_procedure_consent_document(self, label: str) -> None:
+        def _run() -> None:
+            lbl = label.strip()
+            if not lbl:
+                raise ValueError("NOT_FOUND")
+            if not self.repository.delete_procedure_consent_document(lbl):
+                raise ValueError("NOT_FOUND")
+            if lbl.casefold() != "tatuaje":
+                self._sync_piercing_type_in_survey_question_options(remove=lbl)
+
+        await asyncio.to_thread(_run)
+
     async def register_panel_user(self, data: PanelUserRegister) -> int:
         if self.panel_user_repo is None:
             raise RuntimeError("Repositorio de usuarios del panel no configurado.")
