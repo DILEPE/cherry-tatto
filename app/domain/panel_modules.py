@@ -22,4 +22,6 @@ PANEL_MODULE_LABEL_ES: Final[dict[str, str]] = {
     "encuestas": "Gestión encuesta",
     "reporte": "Gestión de reportes",
     "tiendas": "Gestión de tiendas",
+    # Solo administrador (no se asigna a otros roles).
+    "tipos_piercing": "Tipos de piercing",
 }

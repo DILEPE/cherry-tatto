@@ -28,6 +28,7 @@ from app.application.customer_controller import CustomerController
 from app.application.health_controller import HealthController
 from app.application.panel_user_controller import PanelUserController
 from app.application.store_controller import StoreController
+from app.application.procedure_consent_controller import ProcedureConsentController
 
 
 # 2. Extraer las variables del entorno usando os.getenv()
@@ -91,6 +92,7 @@ app = Litestar(
         CustomerController,
         PanelUserController,
         StoreController,
+        ProcedureConsentController,
     ],
     plugins=[PydanticPlugin()],
     cors_config=CORSConfig(allow_origins=["*"]),

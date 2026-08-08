@@ -1409,8 +1409,138 @@ class AppointmentRepository:
             if conn:
                 conn.close()
 
+    def list_procedure_consent_documents(self) -> list[dict[str, object]]:
+        """Listado sin el PDF completo (solo metadata y tamaño aproximado)."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT
+                    survey_option_label,
+                    source_filename,
+                    updated_at,
+                    LENGTH(pdf_base64) AS pdf_base64_len
+                FROM procedure_consent_documents
+                WHERE survey_option_label IS NOT NULL AND TRIM(survey_option_label) <> ''
+                ORDER BY survey_option_label
+                """
+            )
+            return list(cursor.fetchall() or [])
+        finally:
+            if conn:
+                conn.close()
+
+    def upsert_procedure_consent_document(
+        self,
+        *,
+        survey_option_label: str,
+        source_filename: str,
+        pdf_base64: str,
+    ) -> None:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                """
+                REPLACE INTO procedure_consent_documents
+                    (survey_option_label, source_filename, pdf_base64)
+                VALUES (%s, %s, %s)
+                """,
+                (survey_option_label, source_filename, pdf_base64),
+            )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
+    def update_procedure_consent_document(
+        self,
+        *,
+        current_label: str,
+        new_label: str,
+        source_filename: Optional[str],
+        pdf_base64: Optional[str],
+    ) -> bool:
+        """Actualiza fila por etiqueta actual. Devuelve False si no existía."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT survey_option_label, source_filename, pdf_base64
+                FROM procedure_consent_documents
+                WHERE survey_option_label = %s
+                LIMIT 1
+                """,
+                (current_label,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return False
+            final_label = new_label
+            final_fname = (
+                source_filename
+                if source_filename is not None
+                else str(row.get("source_filename") or f"{final_label}.pdf")
+            )
+            final_pdf = pdf_base64 if pdf_base64 is not None else str(row.get("pdf_base64") or "")
+            if final_label != current_label:
+                cursor.execute(
+                    """
+                    SELECT 1 FROM procedure_consent_documents
+                    WHERE survey_option_label = %s LIMIT 1
+                    """,
+                    (final_label,),
+                )
+                if cursor.fetchone():
+                    raise ValueError(
+                        f"Ya existe un tipo de piercing con el nombre «{final_label}»."
+                    )
+                cursor.execute(
+                    "DELETE FROM procedure_consent_documents WHERE survey_option_label = %s",
+                    (current_label,),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO procedure_consent_documents
+                        (survey_option_label, source_filename, pdf_base64)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (final_label, final_fname, final_pdf),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE procedure_consent_documents
+                    SET source_filename = %s, pdf_base64 = %s
+                    WHERE survey_option_label = %s
+                    """,
+                    (final_fname, final_pdf, current_label),
+                )
+            conn.commit()
+            return True
+        finally:
+            if conn:
+                conn.close()
+
+    def delete_procedure_consent_document(self, survey_option_label: str) -> bool:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                "DELETE FROM procedure_consent_documents WHERE survey_option_label = %s",
+                (survey_option_label,),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            if conn:
+                conn.close()
+
     def list_survey_answer_texts_for_appointment(self, appointment_id: int) -> list[str]:
         """Textos de respuesta guardados para la cita (p. ej. radio/select/checkbox como JSON)."""
+
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn, dictionary=True)
