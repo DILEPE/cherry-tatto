@@ -19,8 +19,10 @@ from app.domain.contract_signing_guard import (
     appointment_payments_must_be_verified_for_contract,
 )
 from app.domain.piercing_procedure_labels import (
+    _ascii_fold,
     build_piercing_type_index,
     expand_procedure_answer_candidates,
+    piercing_type_display_label,
     resolve_piercing_type_canonical,
 )
 from app.domain.procedure_consent import PROCEDURE_CONSENT_SURVEY_QUESTION_ID
@@ -758,6 +760,39 @@ class BusinessLogicService:
     async def get_contract(self, contract_id: int) -> Optional[dict[str, object]]:
         return await asyncio.to_thread(self.repository.get_contract_by_id, contract_id)
 
+    @staticmethod
+    def _coerce_survey_option(value: str, opts: list[str]) -> Optional[str]:
+        """Coincide opción exacta o ignorando mayúsculas/acentos."""
+        val = (value or "").strip()
+        if not val or not opts:
+            return None
+        if val in opts:
+            return val
+        fold = _ascii_fold(val)
+        for opt in opts:
+            if _ascii_fold(opt) == fold:
+                return opt
+        return None
+
+    def _coerce_piercing_type_survey_option(
+        self, value: str, opts: list[str]
+    ) -> Optional[str]:
+        """Acepta etiqueta canónica o de display (Lóbulo → Lobulos) para la pregunta de tipo piercing."""
+        matched = self._coerce_survey_option(value, opts)
+        if matched is not None:
+            return matched
+        index = build_piercing_type_index(
+            consent_labels=(opts or []) + self.repository.list_procedure_consent_labels()
+        )
+        canonical = resolve_piercing_type_canonical(value, index)
+        if not canonical:
+            return None
+        matched = self._coerce_survey_option(canonical, opts)
+        if matched is not None:
+            return matched
+        display = piercing_type_display_label(canonical)
+        return self._coerce_survey_option(display, opts)
+
     def _prepare_survey_for_persist(self, data: Survey) -> Survey:
         """Valida respuestas dinámicas y rellena rating/comentarios/recomendación para la fila surveys."""
         if not data.answers:
@@ -811,9 +846,13 @@ class BusinessLogicService:
                 if not opts:
                     raise ValueError(f"La pregunta «{lbl}» no tiene opciones configuradas")
                 val = (ans.answer_text or "").strip()
-                if val not in opts:
+                matched = self._coerce_survey_option(val, opts)
+                if matched is None and int(ans.question_id) == PROCEDURE_CONSENT_SURVEY_QUESTION_ID:
+                    matched = self._coerce_piercing_type_survey_option(val, opts)
+                if matched is None:
                     raise ValueError(f"Debes elegir una opción válida para «{lbl}»")
-                texts.append(f"{lbl}: {val}")
+                ans.answer_text = matched
+                texts.append(f"{lbl}: {matched}")
             elif qt == "checkbox":
                 selected: list[str] = []
                 raw_t = (ans.answer_text or "").strip()
@@ -864,8 +903,6 @@ class BusinessLogicService:
         """Upsert de la respuesta Q3 (tipo de piercing) sin borrar el resto de la encuesta."""
 
         def _run() -> tuple[str, str]:
-            from app.domain.piercing_procedure_labels import piercing_type_display_label
-
             appt = self.repository.get_by_id(int(appointment_id))
             if appt is None:
                 raise ValueError("Cita no encontrada")
@@ -879,13 +916,13 @@ class BusinessLogicService:
             canonical = resolve_piercing_type_canonical(piercing_type, index)
             if not canonical:
                 raise ValueError("Tipo de piercing no válido")
-            label = piercing_type_display_label(canonical)
+            # Guardar valor canónico (coincide con options_json); la UI/PDF usan display aparte.
             self.repository.upsert_survey_answer_text(
                 int(appointment_id),
                 PROCEDURE_CONSENT_SURVEY_QUESTION_ID,
-                label,
+                canonical,
             )
-            return label, canonical
+            return piercing_type_display_label(canonical), canonical
 
         return await asyncio.to_thread(_run)
 
