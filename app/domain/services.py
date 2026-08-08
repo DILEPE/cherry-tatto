@@ -940,11 +940,16 @@ class BusinessLogicService:
         return await asyncio.to_thread(_run)
 
     async def list_appointments(
-        self, assigned_panel_user_id: Optional[int] = None
+        self,
+        assigned_panel_user_id: Optional[int] = None,
+        from_date: Optional[str] = None,
     ) -> list[AppointmentListItem]:
 
         def _run() -> list[AppointmentListItem]:
-            rows = self.repository.get_all(assigned_panel_user_id=assigned_panel_user_id)
+            rows = self.repository.get_all(
+                assigned_panel_user_id=assigned_panel_user_id,
+                from_date=from_date,
+            )
             return [AppointmentListItem.model_validate(r) for r in rows]
 
         return await asyncio.to_thread(_run)
@@ -957,6 +962,7 @@ class BusinessLogicService:
         limit: int = 10,
         offset: int = 0,
         assigned_panel_user_id: Optional[int] = None,
+        from_date: Optional[str] = None,
     ) -> AppointmentSearchResponse:
         def _run() -> AppointmentSearchResponse:
             try:
@@ -966,6 +972,7 @@ class BusinessLogicService:
                     limit=limit,
                     offset=offset,
                     assigned_panel_user_id=assigned_panel_user_id,
+                    from_date=from_date,
                 )
             except ValueError as e:
                 code = str(e)

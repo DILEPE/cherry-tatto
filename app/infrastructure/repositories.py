@@ -38,60 +38,48 @@ class AppointmentRepository:
 
     # --- Métodos de Citas ---
 
-    def get_all(self, assigned_panel_user_id: Optional[int] = None) -> list[dict[str, object]]:
+    def get_all(
+        self,
+        assigned_panel_user_id: Optional[int] = None,
+        from_date: Optional[str] = None,
+    ) -> list[dict[str, object]]:
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn, dictionary=True)
-            if assigned_panel_user_id is None:
-                cursor.execute(
-                    """
-                    SELECT a.*,
-                        EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
-                            AS has_signed_contract,
-                        EXISTS (
-                            SELECT 1 FROM contracts c
-                            WHERE c.appointment_id = a.id
-                              AND (
-                                  c.artist_signature IS NULL
-                                  OR CHAR_LENGTH(TRIM(c.artist_signature)) < 80
-                              )
-                        ) AS contract_pending_artist_signature,
-                        pu.username AS assigned_username,
-                        pu.first_name AS assigned_first_name,
-                        pu.last_name AS assigned_last_name,
-                        pu.role AS assigned_role,
-                        pu.store_id AS assigned_store_id
-                    FROM appointments a
-                    LEFT JOIN panel_users pu ON pu.id = a.assigned_panel_user_id
-                    ORDER BY a.created_at DESC
-                    """
-                )
-            else:
-                cursor.execute(
-                    """
-                    SELECT a.*,
-                        EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
-                            AS has_signed_contract,
-                        EXISTS (
-                            SELECT 1 FROM contracts c
-                            WHERE c.appointment_id = a.id
-                              AND (
-                                  c.artist_signature IS NULL
-                                  OR CHAR_LENGTH(TRIM(c.artist_signature)) < 80
-                              )
-                        ) AS contract_pending_artist_signature,
-                        pu.username AS assigned_username,
-                        pu.first_name AS assigned_first_name,
-                        pu.last_name AS assigned_last_name,
-                        pu.role AS assigned_role,
-                        pu.store_id AS assigned_store_id
-                    FROM appointments a
-                    LEFT JOIN panel_users pu ON pu.id = a.assigned_panel_user_id
-                    WHERE a.assigned_panel_user_id = %s
-                    ORDER BY a.created_at DESC
-                    """,
-                    (assigned_panel_user_id,),
-                )
+            clauses: list[str] = []
+            params: list[object] = []
+            if assigned_panel_user_id is not None:
+                clauses.append("a.assigned_panel_user_id = %s")
+                params.append(int(assigned_panel_user_id))
+            if from_date:
+                clauses.append("DATE(a.appointment_date) >= %s")
+                params.append(from_date)
+            where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+            cursor.execute(
+                f"""
+                SELECT a.*,
+                    EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
+                        AS has_signed_contract,
+                    EXISTS (
+                        SELECT 1 FROM contracts c
+                        WHERE c.appointment_id = a.id
+                          AND (
+                              c.artist_signature IS NULL
+                              OR CHAR_LENGTH(TRIM(c.artist_signature)) < 80
+                          )
+                    ) AS contract_pending_artist_signature,
+                    pu.username AS assigned_username,
+                    pu.first_name AS assigned_first_name,
+                    pu.last_name AS assigned_last_name,
+                    pu.role AS assigned_role,
+                    pu.store_id AS assigned_store_id
+                FROM appointments a
+                LEFT JOIN panel_users pu ON pu.id = a.assigned_panel_user_id
+                {where_sql}
+                ORDER BY a.created_at DESC
+                """,
+                tuple(params),
+            )
             rows = cursor.fetchall()
             for row in rows:
                 raw = row.get("has_signed_contract")
@@ -105,7 +93,7 @@ class AppointmentRepository:
                 "Unknown column 'a.assigned_panel_user_id'" in err
                 or "Unknown column 'assigned_panel_user_id'" in err
             ):
-                return self._get_all_legacy_no_assignee()
+                return self._get_all_legacy_no_assignee(from_date=from_date)
             raise
         finally:
             if conn:
@@ -181,12 +169,19 @@ class AppointmentRepository:
             if conn:
                 conn.close()
 
-    def _get_all_legacy_no_assignee(self) -> list[dict[str, object]]:
+    def _get_all_legacy_no_assignee(
+        self, from_date: Optional[str] = None
+    ) -> list[dict[str, object]]:
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn, dictionary=True)
+            where_sql = ""
+            params: tuple[object, ...] = ()
+            if from_date:
+                where_sql = "WHERE DATE(a.appointment_date) >= %s"
+                params = (from_date,)
             cursor.execute(
-                """
+                f"""
                 SELECT a.*,
                     EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
                         AS has_signed_contract,
@@ -199,8 +194,10 @@ class AppointmentRepository:
                           )
                     ) AS contract_pending_artist_signature
                 FROM appointments a
+                {where_sql}
                 ORDER BY a.created_at DESC
-                """
+                """,
+                params,
             )
             rows = cursor.fetchall()
             for row in rows:
@@ -338,6 +335,7 @@ class AppointmentRepository:
         limit: int = 10,
         offset: int = 0,
         assigned_panel_user_id: Optional[int] = None,
+        from_date: Optional[str] = None,
     ) -> tuple[list[dict[str, object]], int]:
         where_search, params = self._search_where_clause(field, term)
         clauses = [where_search]
@@ -345,6 +343,9 @@ class AppointmentRepository:
         if assigned_panel_user_id is not None:
             clauses.append("a.assigned_panel_user_id = %s")
             all_params.append(int(assigned_panel_user_id))
+        if from_date:
+            clauses.append("DATE(a.appointment_date) >= %s")
+            all_params.append(from_date)
         where_sql = " AND ".join(f"({c})" for c in clauses)
         base_from = self._appointment_list_select_sql()
         lim = max(1, min(int(limit), 50))
