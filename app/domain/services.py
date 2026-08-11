@@ -26,7 +26,10 @@ from app.domain.piercing_procedure_labels import (
     piercing_type_display_label,
     resolve_piercing_type_canonical,
 )
-from app.domain.procedure_consent import PROCEDURE_CONSENT_SURVEY_QUESTION_ID
+from app.domain.procedure_consent import (
+    PROCEDURE_CONSENT_SURVEY_QUESTION_ID,
+    care_instructions_pdf_filename,
+)
 from app.domain.service_types import resolve_service_type
 from app.domain.agenda_schedule import (
     find_schedule_conflict,
@@ -760,7 +763,7 @@ class BusinessLogicService:
         raw_b64 = row.get("pdf_base64")
         if not isinstance(raw_b64, str) or not raw_b64.strip():
             return None
-        fname = str(row.get("source_filename") or "").strip() or f"{label}.pdf"
+        fname = care_instructions_pdf_filename(contract_kind=kind, procedure_label=label)
         return {
             "appointment_id": appointment_id,
             "procedure_label": label,
