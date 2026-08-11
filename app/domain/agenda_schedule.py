@@ -37,9 +37,9 @@ def default_duration_slots(service_type: str | None, detail: str | None = None) 
     det = (detail or "").lower()
     svc = (service_type or "").lower()
     combined = f"{svc} {det}"
-    if "limpieza" in det:
+    if "limpieza" in svc or "limpieza" in det:
         return 1
-    if "cambio" in det and "pierc" in combined:
+    if "cambio" in svc or ("cambio" in det and "pierc" in combined):
         return 1
     if "tatu" in combined or "tattoo" in svc:
         return 4
