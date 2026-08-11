@@ -771,7 +771,10 @@ class BusinessLogicService:
             "customer_name": str(getattr(appointment, "name", "") or ""),
             "phone": str(getattr(appointment, "phone", "") or ""),
             "service": str(getattr(appointment, "service", "") or ""),
+            # Nombre visible en WhatsApp / n8n (el flujo a menudo usa estos campos).
             "file_name": fname,
+            "fileName": fname,
+            "source_filename": fname,
             "mime_type": "application/pdf",
             "pdf_base64": raw_b64.strip(),
         }
