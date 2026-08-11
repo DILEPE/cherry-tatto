@@ -1095,6 +1095,10 @@ class BusinessLogicService:
                 raise ValueError("Modo de anulación de abono inválido")
             await asyncio.to_thread(self.repository.cancel_appointment, appointment_id, mode)
             return
+        if status == "Finalizada":
+            current = str(getattr(appointment, "status", "") or "")
+            if current not in {"Agendada", "Reprogramada"}:
+                raise ValueError("Solo puedes finalizar citas en estado Agendada o Reprogramada.")
         await asyncio.to_thread(self.repository.update_status, appointment_id, status)
 
     async def reprogram_appointment(
