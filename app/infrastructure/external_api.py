@@ -132,8 +132,14 @@ class NotificationService:
                 meta = {k: v for k, v in data.items() if k not in ("pdf_base64", "mime_type")}
                 fname = str(
                     meta.get("file_name")
+                    or meta.get("fileName")
+                    or meta.get("source_filename")
                     or ("consentimiento.pdf" if event == "contract_consent_pdf" else "orden_trabajo.pdf")
-                )
+                ).strip()
+                # Forzar consistencia: lo que recibe n8n como nombre del binario y en metadatos.
+                meta["file_name"] = fname
+                meta["fileName"] = fname
+                meta["source_filename"] = fname
                 ts = datetime.datetime.now().isoformat()
                 form_data: dict[str, str] = {
                     "event": event,
