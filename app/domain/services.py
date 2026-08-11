@@ -10,6 +10,7 @@ import mysql.connector
 
 from app.domain.contract_kinds import (
     SurveyQuestionScope,
+    appointment_requires_contract,
     appointment_to_contract_kind,
     service_type_to_assignee_panel_role,
     service_type_to_contract_kind,
@@ -25,7 +26,10 @@ from app.domain.piercing_procedure_labels import (
     piercing_type_display_label,
     resolve_piercing_type_canonical,
 )
-from app.domain.procedure_consent import PROCEDURE_CONSENT_SURVEY_QUESTION_ID
+from app.domain.procedure_consent import (
+    PROCEDURE_CONSENT_SURVEY_QUESTION_ID,
+    care_instructions_pdf_filename,
+)
 from app.domain.service_types import resolve_service_type
 from app.domain.agenda_schedule import (
     find_schedule_conflict,
@@ -171,8 +175,9 @@ class BusinessLogicService:
         customer_name: str,
         phone: str,
         field_overrides: Optional[dict[str, str]] = None,
+        send_webhook: bool = False,
     ) -> None:
-        """Genera PDF + webhook de recibo fuera del request HTTP para no bloquear agendar/abonar."""
+        """Genera PDF de recibo en segundo plano. El envío (n8n/WhatsApp) solo si `send_webhook=True`."""
 
         async def _runner() -> None:
             try:
@@ -188,6 +193,8 @@ class BusinessLogicService:
                 )
                 rid, pdf_b, fname = receipt_out
                 if not rid or not pdf_b or len(pdf_b) <= 0:
+                    return
+                if not send_webhook:
                     return
                 payload = self._payment_receipt_pdf_webhook_payload(
                     appointment_id=appointment_id,
@@ -453,8 +460,10 @@ class BusinessLogicService:
         Si viene `customer_id`, verifica existencia. Usa transacción para cliente + cita.
 
         Recibo PDF inicial: si el abono al agendar es **estrictamente mayor que cero** (cualquier servicio).
+        Se guarda el PDF, pero **no** se dispara el webhook `payment_receipt_pdf`
+        (el envío es manual desde el panel).
 
-        Si el abono es 0: sin movimiento en historial ni webhook `payment_receipt_pdf`.
+        Si el abono es 0: sin movimiento en historial ni PDF de recibo.
         """
         resolved_type = resolve_service_type(data.service)
 
@@ -570,7 +579,8 @@ class BusinessLogicService:
             "deposit": float(data.deposit or 0),
             "total_amount": float(data.total_amount or 0),
             "pending_balance": float(data.pending_balance or 0),
-            "payment_receipt_pdf_webhook_enqueued": deposit_amt > 0,
+            "payment_receipt_pdf_webhook_enqueued": False,
+            "payment_receipt_pdf_issued": deposit_amt > 0,
         }
         asyncio.create_task(self._async_notify("appointment_created", payload))
         return new_id, customer_id
@@ -579,6 +589,11 @@ class BusinessLogicService:
         appointment = self.repository.get_by_id(data.appointment_id)
         if not appointment:
             raise ValueError(f"Cita con ID {data.appointment_id} no encontrada.")
+
+        if not appointment_requires_contract(appointment):
+            raise ValueError(
+                "Las citas de limpieza o cambio de joya no requieren firma ni envío de contrato."
+            )
 
         ok_pay, pay_err = appointment_must_be_fully_paid_for_contract(
             total_amount=getattr(appointment, "total_amount", None),
@@ -650,6 +665,11 @@ class BusinessLogicService:
         if not appointment:
             raise ValueError(f"Cita con ID {appointment_id} no encontrada.")
 
+        if not appointment_requires_contract(appointment):
+            raise ValueError(
+                "Las citas de limpieza o cambio de joya no requieren firma ni envío de contrato."
+            )
+
         ok_pay, pay_err = appointment_must_be_fully_paid_for_contract(
             total_amount=getattr(appointment, "total_amount", None),
             deposit=getattr(appointment, "deposit", None),
@@ -713,6 +733,8 @@ class BusinessLogicService:
         self, appointment_id: int, appointment: Any
     ) -> Optional[dict[str, object]]:
         """PDF de consentimiento según tipo de cita y respuesta de encuesta (pregunta id fija)."""
+        if not appointment_requires_contract(appointment):
+            return None
         kind = appointment_to_contract_kind(appointment)
         if kind == "tattoo":
             label = "Tatuaje"
@@ -741,7 +763,7 @@ class BusinessLogicService:
         raw_b64 = row.get("pdf_base64")
         if not isinstance(raw_b64, str) or not raw_b64.strip():
             return None
-        fname = str(row.get("source_filename") or "").strip() or f"{label}.pdf"
+        fname = care_instructions_pdf_filename(contract_kind=kind, procedure_label=label)
         return {
             "appointment_id": appointment_id,
             "procedure_label": label,
@@ -1076,6 +1098,10 @@ class BusinessLogicService:
                 raise ValueError("Modo de anulación de abono inválido")
             await asyncio.to_thread(self.repository.cancel_appointment, appointment_id, mode)
             return
+        if status == "Finalizada":
+            current = str(getattr(appointment, "status", "") or "")
+            if current not in {"Agendada", "Reprogramada"}:
+                raise ValueError("Solo puedes finalizar citas en estado Agendada o Reprogramada.")
         await asyncio.to_thread(self.repository.update_status, appointment_id, status)
 
     async def reprogram_appointment(
