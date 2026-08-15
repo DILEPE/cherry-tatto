@@ -45,6 +45,8 @@ N8N_RECEIPT_WEBHOOK_URL = os.getenv("N8N_RECEIPT_WEBHOOK_URL")
 # Webhook para PDF de consentimiento por procedimiento (event contract_consent_pdf). Si no está definido,
 # se usa N8N_RECEIPT_WEBHOOK_URL y luego N8N_WEBHOOK_URL.
 N8N_CONTRACT_CONSENT_WEBHOOK_URL = os.getenv("N8N_CONTRACT_CONSENT_WEBHOOK_URL")
+# Tras firmar contrato: JSON plano a n8n (recordatorio de cuidados / cicatrización).
+N8N_TREATMENT_SENT_WEBHOOK_URL = os.getenv("N8N_TREATMENT_SENT_WEBHOOK_URL")
 # Opcional — GET /health/n8n: sondeo al endpoint de status (toma prioridad si está definido).
 # Ej.: N8N_STATUS_URL=http://localhost:5678/webhook-test/cherry-tatto/status
 APP_PORT = int(os.getenv("PORT", 5000))
@@ -71,6 +73,7 @@ notifier = NotificationService(
     webhook_url=N8N_URL,
     receipt_webhook_url=N8N_RECEIPT_WEBHOOK_URL,
     contract_consent_webhook_url=N8N_CONTRACT_CONSENT_WEBHOOK_URL,
+    treatment_sent_webhook_url=N8N_TREATMENT_SENT_WEBHOOK_URL,
 )
 
 # 4. Inicializar Servicio de Dominio
