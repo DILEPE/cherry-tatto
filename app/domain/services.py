@@ -18,7 +18,6 @@ from app.domain.contract_kinds import (
 )
 from app.domain.contract_signing_guard import (
     appointment_must_be_fully_paid_for_contract,
-    appointment_payments_must_be_verified_for_contract,
 )
 from app.domain.piercing_procedure_labels import (
     _ascii_fold,
@@ -605,12 +604,6 @@ class BusinessLogicService:
             raise ValueError(
                 pay_err or "La cita no cumple las condiciones de pago para firmar el contrato."
             )
-        payments = self.repository.list_payments_by_appointment(data.appointment_id)
-        ok_ver, ver_err = appointment_payments_must_be_verified_for_contract(payments)
-        if not ok_ver:
-            raise ValueError(
-                ver_err or "Los abonos deben estar verificados por un administrador."
-            )
 
         if self.repository.has_contract_for_appointment(data.appointment_id):
             raise ValueError(
@@ -693,12 +686,6 @@ class BusinessLogicService:
         if not ok_pay:
             raise ValueError(
                 pay_err or "La cita no cumple las condiciones de pago para completar el contrato."
-            )
-        payments = self.repository.list_payments_by_appointment(appointment_id)
-        ok_ver, ver_err = appointment_payments_must_be_verified_for_contract(payments)
-        if not ok_ver:
-            raise ValueError(
-                ver_err or "Los abonos deben estar verificados por un administrador."
             )
 
         row = self.repository.get_latest_contract_row_for_appointment(appointment_id)
