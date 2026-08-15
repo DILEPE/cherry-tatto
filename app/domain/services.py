@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 import mysql.connector
 
+from app.domain.treatment_sent import treatment_sent_payload_from_appointment
 from app.domain.contract_kinds import (
     SurveyQuestionScope,
     appointment_requires_contract,
@@ -631,6 +632,20 @@ class BusinessLogicService:
         }
         asyncio.create_task(self._async_notify("contract_signed", notification_payload))
 
+        treatment_payload = self._build_treatment_sent_payload(appointment)
+        if treatment_payload:
+            logger.info(
+                "treatment_sent enviando cita=%s payload=%s",
+                data.appointment_id,
+                treatment_payload,
+            )
+            await self._async_notify("treatment_sent", treatment_payload)
+        else:
+            logger.warning(
+                "treatment_sent omitido cita=%s: falta customer_id o teléfono.",
+                data.appointment_id,
+            )
+
         consent_pdf_payload = await asyncio.to_thread(
             self._build_contract_consent_pdf_payload,
             data.appointment_id,
@@ -695,6 +710,15 @@ class BusinessLogicService:
         self.repository.update_contract_artist_signature(int(row["id"]), artist_signature)
         self.repository.update_status(appointment_id, "Finalizada")
 
+        treatment_payload = self._build_treatment_sent_payload(appointment)
+        if treatment_payload:
+            logger.info(
+                "treatment_sent (firma profesional) cita=%s payload=%s",
+                appointment_id,
+                treatment_payload,
+            )
+            await self._async_notify("treatment_sent", treatment_payload)
+
     def _resolve_piercing_procedure_label(
         self, appointment_id: int, preferred_answer: Optional[str]
     ) -> Optional[str]:
@@ -728,6 +752,33 @@ class BusinessLogicService:
                 if got:
                     return got
         return None
+
+    def _build_treatment_sent_payload(self, appointment: Any) -> Optional[dict[str, object]]:
+        """JSON plano hacia n8n `treatment-sent` tras firmar el contrato."""
+        kind = appointment_to_contract_kind(appointment)
+        customer_row = None
+        raw_id = getattr(appointment, "customer_id", None)
+        if raw_id is not None and self.customers is not None:
+            try:
+                customer_row = self.customers.get_by_id(int(raw_id))
+            except (TypeError, ValueError):
+                customer_row = None
+            except Exception:
+                logger.exception(
+                    "treatment_sent: no se pudo leer el cliente id=%s para la cita %s",
+                    raw_id,
+                    getattr(appointment, "id", None),
+                )
+                customer_row = None
+        payload = treatment_sent_payload_from_appointment(
+            appointment, customer_row=customer_row, contract_kind=kind
+        )
+        if payload is None:
+            logger.warning(
+                "treatment_sent: cita %s sin customer_id o teléfono; no se notifica n8n.",
+                getattr(appointment, "id", None),
+            )
+        return payload
 
     def _build_contract_consent_pdf_payload(
         self, appointment_id: int, appointment: Any
