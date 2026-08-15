@@ -41,21 +41,7 @@ def appointment_payments_must_be_verified_for_contract(
     Verificación de abonos por un administrador.
 
     No se exige al firmar el contrato ni al completar la firma del profesional
-    (es una tarea posterior). Se mantiene por si se reutiliza en ese flujo.
+    (es una tarea posterior). Siempre permite continuar.
     """
-    rows = payments or []
-    if not rows:
-        return False, (
-            "No hay abonos registrados. Registra y verifica los abonos antes de firmar el contrato."
-        )
-    unverified = [
-        r
-        for r in rows
-        if not bool(int(r.get("is_verified") or 0))  # type: ignore[arg-type]
-    ]
-    if unverified:
-        return False, (
-            "Hay abonos **sin verificar**. Un **administrador** debe confirmar cada abono "
-            "en la ficha de la cita antes de firmar el contrato."
-        )
+    _ = payments
     return True, None
