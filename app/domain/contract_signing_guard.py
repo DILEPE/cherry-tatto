@@ -38,8 +38,10 @@ def appointment_payments_must_be_verified_for_contract(
     payments: list[dict[str, object]] | None,
 ) -> tuple[bool, str | None]:
     """
-    Con el trabajo completamente abonado, todos los abonos deben estar verificados
-    por un administrador antes de firmar el contrato.
+    Verificación de abonos por un administrador.
+
+    No se exige al firmar el contrato ni al completar la firma del profesional
+    (es una tarea posterior). Se mantiene por si se reutiliza en ese flujo.
     """
     rows = payments or []
     if not rows:
