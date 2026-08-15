@@ -79,6 +79,10 @@ Este script:
 - hace `TRUNCATE` de tablas de negocio,
 - y restaura `FOREIGN_KEY_CHECKS`.
 
+## Importación one-shot (no es migración de esquema)
+
+- `import_customers_from_rcs_appointment.sql` — copia clientes desde `rcs_appointment.client` a `cherry_tatto.customers` (idempotente por `document_number`; requiere MySQL 8+). Ejecutar a mano; no forma parte del orden 000–032.
+
 ## Recomendaciones
 
 - Para cargar **30 citas de prueba** con contrato firmado, encuesta respondida y respuestas variadas (métricas del reporte **Encuestas**), ejecuta desde la raíz del repo: `python scripts/seed_demo_surveys.py` (opciones `--count` y `--clean` en la cabecera del script).
