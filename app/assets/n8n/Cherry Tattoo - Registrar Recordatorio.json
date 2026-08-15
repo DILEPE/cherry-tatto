@@ -1,0 +1,129 @@
+{
+  "name": "Cherry Tattoo - Registrar Recordatorio",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cherry-tatto/treatment-sent",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        304,
+        -48
+      ],
+      "id": "4d55924f-642e-4147-a3fb-8a923af2749c",
+      "name": "Webhook Tratamiento Enviado",
+      "webhookId": "cherry-tatto-treatment-sent-001"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst data = raw.body || raw;\n\nconst serviceDate = new Date(String(data.service_date).replace(' ', 'T'));\n\nfunction addMonths(date, months) {\n  const d = new Date(date);\n  d.setMonth(d.getMonth() + months);\n  const y = d.getFullYear();\n  const m = String(d.getMonth() + 1).padStart(2, '0');\n  const day = String(d.getDate()).padStart(2, '0');\n  return `${y}-${m}-${day}`;\n}\n\nconst schedules = data.service_type === 'piercing'\n  ? [\n      { months: 1, label: 'primer control' },\n      { months: 2, label: 'segundo control' },\n      { months: 3, label: 'tercer control' },\n      { months: 4, label: 'cuarto control' },\n    ]\n  : [\n      { months: 2, label: 'dos meses' },\n      { months: 4, label: 'cuatro meses' },\n    ];\n\nreturn schedules.map((item) => ({\n  json: {\n    customer_id: data.customer_id,\n    customer_name: data.customer_name,\n    phone: data.phone,\n    service_type: data.service_type,\n    service_date: data.service_date,\n    reminder_date: addMonths(serviceDate, item.months),\n    control_label: item.label,\n    status: 'pending',\n  },\n}));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        544,
+        -48
+      ],
+      "id": "deaa2457-47c8-468d-8107-edb52d12eee2",
+      "name": "Calcular Fecha Recordatorio"
+    },
+    {
+      "parameters": {
+        "table": {
+          "__rl": true,
+          "value": "reminders",
+          "mode": "list"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [
+        784,
+        -48
+      ],
+      "id": "68287653-3808-4880-9441-8ab277ba0746",
+      "name": "INSERT Recordatorio MySQL",
+      "credentials": {
+        "mySql": {
+          "id": "4m3cI3YMbuLkXLCR",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\", \"reminder_date\": \"{{ $('Calcular Fecha Recordatorio').item.json.reminder_date }}\" }",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1024,
+        -48
+      ],
+      "id": "67570c36-4e79-4f3b-9251-687a23a53201",
+      "name": "Respuesta OK"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook Tratamiento Enviado": {
+      "main": [
+        [
+          {
+            "node": "Calcular Fecha Recordatorio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calcular Fecha Recordatorio": {
+      "main": [
+        [
+          {
+            "node": "INSERT Recordatorio MySQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "INSERT Recordatorio MySQL": {
+      "main": [
+        [
+          {
+            "node": "Respuesta OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "8631e4f7-d257-40fa-b625-d9405aa33d16",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "b56ae73836276e902eab7260bda1c240d29fb935abb341d8530a9fc2085fe3df"
+  },
+  "id": "gy5sSU5G11MBPxPO",
+  "tags": [
+    {
+      "name": "cherry-tattoo",
+      "id": "akI4Pj5ymhos92hb",
+      "updatedAt": "2026-08-13T00:03:47.521Z",
+      "createdAt": "2026-08-13T00:03:47.521Z"
+    }
+  ]
+}
