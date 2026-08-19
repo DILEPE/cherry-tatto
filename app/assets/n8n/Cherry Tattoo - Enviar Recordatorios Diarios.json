@@ -86,7 +86,7 @@
       "parameters": {
         "phoneNumberId": "1107930225741590",
         "recipientPhoneNumber": "={{ $json.phone }}",
-        "template": "recordatorio_piercing|es_CO",
+        "template": "recordatorio_perforacion|es_CO",
         "components": {
           "component": [
             {
@@ -277,7 +277,7 @@
     "executionOrder": "v1",
     "binaryMode": "separate"
   },
-  "versionId": "32fcfa8a-fa18-414b-b32b-af126fd486f9",
+  "versionId": "67d694ef-e733-497f-b7ce-f3e538beea9a",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "b56ae73836276e902eab7260bda1c240d29fb935abb341d8530a9fc2085fe3df"
@@ -285,10 +285,10 @@
   "id": "QfqrYWpKdwhFExzc",
   "tags": [
     {
-      "name": "cherry-tattoo",
-      "id": "akI4Pj5ymhos92hb",
       "updatedAt": "2026-08-13T00:03:47.521Z",
-      "createdAt": "2026-08-13T00:03:47.521Z"
+      "createdAt": "2026-08-13T00:03:47.521Z",
+      "id": "akI4Pj5ymhos92hb",
+      "name": "cherry-tattoo"
     }
   ]
 }
