@@ -1,0 +1,33 @@
+{
+  "name": "treatment sent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cherry-tatto/treatment-sent",
+        "options": {
+          "responseData": ""
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "a7c3e91b-4d2e-4f8a-9b1c-6e0d5f4a3b21",
+      "name": "Webhook",
+      "webhookId": "e8b4c2a1-9d7f-4e6b-8c3a-1f5d0e9b7a42"
+    }
+  ],
+  "pinData": {},
+  "connections": {},
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "instanceId": "cherry-tatto-treatment-sent"
+  },
+  "tags": []
+}

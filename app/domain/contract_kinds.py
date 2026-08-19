@@ -26,6 +26,7 @@ SCOPE_LABEL_ES: dict[SurveyQuestionScope, str] = {
 }
 
 _NO_CONTRACT_CANONICAL = frozenset({"cambio", "limpieza"})
+_NO_CONTRACT_WORK_KINDS = frozenset({"limpieza_piercing", "cambio_piercing"})
 
 
 def service_type_requires_contract(service_type: str | None) -> bool:
@@ -43,6 +44,38 @@ def service_type_requires_contract(service_type: str | None) -> bool:
         if lk == key:
             return lk not in _NO_CONTRACT_CANONICAL
     return True
+
+
+def _appointment_detail_value(appointment: Any) -> str:
+    if appointment is None:
+        return ""
+    if isinstance(appointment, Mapping):
+        return str(appointment.get("detail") or "")
+    return str(getattr(appointment, "detail", None) or "")
+
+
+def appointment_requires_contract(appointment: Any) -> bool:
+    """
+    Firma/envío de contrato: no aplica a Limpieza ni Cambio (tipo de servicio o
+    etiquetas legacy en el detalle cuando la cita quedó guardada como Piercing).
+    """
+    from app.domain.booking_work_kind import work_kind_infer_from_existing_row
+
+    if appointment is None:
+        return True
+    if isinstance(appointment, Mapping):
+        kind = work_kind_infer_from_existing_row(appointment)
+    else:
+        kind = work_kind_infer_from_existing_row(
+            {
+                "service_type": _appointment_service_type_value(appointment),
+                "service": _appointment_service_type_value(appointment),
+                "detail": _appointment_detail_value(appointment),
+            }
+        )
+    if kind in _NO_CONTRACT_WORK_KINDS:
+        return False
+    return service_type_requires_contract(_appointment_service_type_value(appointment))
 
 
 def service_type_to_contract_kind(service_type: str | None) -> SigningContractKind:

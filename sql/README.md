@@ -27,6 +27,9 @@ Esta carpeta contiene scripts SQL para crear la estructura base y aplicar cambio
 21. `025_stores_drop_code_panel_store_id.sql` (solo si aplicaste un `024` antiguo que aún tenía `stores.code`)
 22. `026_contract_templates_signing_flow.sql` (flujo de firma por plantilla: `phased` | `single`; incluye `USE cherry_tatto`)
 23. `030_contract_templates_kind_recibo.sql` (documenta `recibo` en `contract_templates.contract_kind`; PDF de abonos usa la plantilla activa de ese tipo)
+24. `031_create_reminders_table.sql` (tabla `reminders` para recordatorios de cicatrización por WhatsApp)
+25. `032_add_control_label_to_reminders.sql` (columna `control_label` en `reminders` para el parámetro de WhatsApp)
+26. `033_alter_type_service_enum.sql` (`reminders.service_type`: `piercing` | `tatuaje`, alineado con n8n)
 
 > Nota: `001_customers_and_appointments_fk.sql` queda como referencia histórica porque la estructura base ya está consolidada en `000_initial_schema_cherry_tatto.sql`.
 
@@ -54,6 +57,10 @@ Si tu base ya existe y solo quieres actualizar:
 18. `024_stores.sql` (catálogo de tiendas; ejecutar cuando uses **Gestión de tiendas** en el panel)
 19. `025_stores_drop_code_panel_store_id.sql` (si tu `024` anterior aún tenía columna `code`)
 20. `026_contract_templates_signing_flow.sql` (flujo al firmar definido en cada plantilla de contrato; incluye `USE cherry_tatto`)
+21. `030_contract_templates_kind_recibo.sql` (tipo `recibo` en plantillas de contrato)
+22. `031_create_reminders_table.sql` (tabla `reminders` para recordatorios de cicatrización por WhatsApp)
+23. `032_add_control_label_to_reminders.sql` (columna `control_label` en `reminders` para el parámetro de WhatsApp)
+24. `033_alter_type_service_enum.sql` (`reminders.service_type`: `piercing` | `tatuaje`, alineado con n8n)
 
 ## Recuperación rápida
 
@@ -73,6 +80,10 @@ Este script:
 - desactiva temporalmente `FOREIGN_KEY_CHECKS`,
 - hace `TRUNCATE` de tablas de negocio,
 - y restaura `FOREIGN_KEY_CHECKS`.
+
+## Importación one-shot (no es migración de esquema)
+
+- `import_customers_from_rcs_appointment.sql` — copia clientes desde `rcs_appointment.client` a `cherry_tatto.customers` (idempotente por `document_number`; requiere MySQL 8+). Ejecutar a mano; no forma parte del orden 000–032.
 
 ## Recomendaciones
 

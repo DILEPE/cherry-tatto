@@ -1,6 +1,6 @@
 """PDF de recibo de abono: orden de trabajo maquetada en código (A4), alineada al diseño Rock City.
 
-Cabecera negra (datos comerciales + orden/fecha), bloque de formulario en gris oscuro con inputs blancos redondeados
+Cabecera negra (datos comerciales + título de orden y fecha), bloque de formulario en gris oscuro con inputs blancos redondeados
 y etiquetas dentro de cada campo, franja roja y condiciones legales debajo.
 
 Personalización opcional vía entorno:
@@ -730,10 +730,7 @@ def build_payment_receipt_pdf(ctx: PaymentReceiptPdfContext) -> bytes:
                 align=fitz.TEXT_ALIGN_CENTER,
             )
 
-    _lbl_black_header(page, fitz.Rect(rx0, 15, rx0 + 86, 29), "ORDEN DE TRABAJO", fontsize=6.85)
-    chip_ord = fitz.Rect(rx0 + 88, 13, PAGE_W - mx - 2, 31)
-    ord_txt = str(int(ctx.appointment_id)) if ctx.appointment_id else "-"
-    _header_white_chip(page, chip_ord, ord_txt, fontsize=9.8, bold=True)
+    _lbl_black_header(page, fitz.Rect(rx0, 15, PAGE_W - mx - 2, 29), "ORDEN DE TRABAJO", fontsize=6.85)
 
     _lbl_black_header(page, fitz.Rect(rx0, 36, rx0 + 34, 48), "FECHA", fontsize=7.5)
     d_str, m_str, y_str = _issued_dma(ctx.issued_at)

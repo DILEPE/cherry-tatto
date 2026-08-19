@@ -42,6 +42,9 @@ class NotificationService:
     se envían **igual**: multipart/form-data con el archivo en el campo binario ``data``
     y el resto de metadatos como campos de texto (sin reenviar ``pdf_base64``).
 
+    Tras firmar un contrato se envía ``treatment_sent`` como JSON plano a
+    ``N8N_TREATMENT_SENT_WEBHOOK_URL`` (sin envolver en ``event``/``data``).
+
     Para solo JSON con ``pdf_base64`` en recibos: ``N8N_PAYMENT_RECEIPT_TRANSPORT=json``.
     Los cuidados usan el mismo criterio con ``N8N_CONTRACT_CONSENT_TRANSPORT`` (por defecto
     el mismo valor que el recibo / multipart).
@@ -52,10 +55,12 @@ class NotificationService:
         webhook_url: Optional[str],
         receipt_webhook_url: Optional[str] = None,
         contract_consent_webhook_url: Optional[str] = None,
+        treatment_sent_webhook_url: Optional[str] = None,
     ):
         self.webhook_url = (webhook_url or "").strip() or None
         self.receipt_webhook_url = (receipt_webhook_url or "").strip() or None
         self.contract_consent_webhook_url = (contract_consent_webhook_url or "").strip() or None
+        self.treatment_sent_webhook_url = (treatment_sent_webhook_url or "").strip() or None
 
     def _resolve_url(self, event: str) -> Optional[str]:
         if event == "payment_receipt_pdf":
@@ -66,6 +71,8 @@ class NotificationService:
                 or self.receipt_webhook_url
                 or self.webhook_url
             )
+        if event == "treatment_sent":
+            return self.treatment_sent_webhook_url
         return self.webhook_url
 
     def _pdf_transport(self, event: str) -> str:
@@ -85,10 +92,30 @@ class NotificationService:
         if not url:
             logger.warning(
                 "n8n: sin URL configurada para event=%s "
-                "(defina N8N_WEBHOOK_URL y/o N8N_RECEIPT_WEBHOOK_URL según el caso).",
+                "(defina N8N_WEBHOOK_URL, N8N_RECEIPT_WEBHOOK_URL, "
+                "N8N_CONTRACT_CONSENT_WEBHOOK_URL o N8N_TREATMENT_SENT_WEBHOOK_URL según el caso).",
                 event,
             )
             return False
+
+        if event == "treatment_sent":
+            try:
+                logger.info("n8n treatment_sent POST %s payload=%s", url, data)
+                response = requests.post(url, json=data, timeout=30)
+                if not _http_2xx(response.status_code):
+                    logger.warning(
+                        "n8n %s: HTTP %s desde %s — %s",
+                        event,
+                        response.status_code,
+                        url,
+                        (response.text or "")[:800],
+                    )
+                    return False
+                logger.info("n8n treatment_sent OK HTTP %s", response.status_code)
+                return True
+            except Exception:
+                logger.exception("n8n JSON event=%s hacia %s", event, url)
+                return False
 
         if event == "payment_receipt_pdf" and not _payment_receipt_amount_positive(data):
             logger.warning(
@@ -132,8 +159,14 @@ class NotificationService:
                 meta = {k: v for k, v in data.items() if k not in ("pdf_base64", "mime_type")}
                 fname = str(
                     meta.get("file_name")
+                    or meta.get("fileName")
+                    or meta.get("source_filename")
                     or ("consentimiento.pdf" if event == "contract_consent_pdf" else "orden_trabajo.pdf")
-                )
+                ).strip()
+                # Forzar consistencia: lo que recibe n8n como nombre del binario y en metadatos.
+                meta["file_name"] = fname
+                meta["fileName"] = fname
+                meta["source_filename"] = fname
                 ts = datetime.datetime.now().isoformat()
                 form_data: dict[str, str] = {
                     "event": event,

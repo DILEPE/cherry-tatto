@@ -38,60 +38,48 @@ class AppointmentRepository:
 
     # --- Métodos de Citas ---
 
-    def get_all(self, assigned_panel_user_id: Optional[int] = None) -> list[dict[str, object]]:
+    def get_all(
+        self,
+        assigned_panel_user_id: Optional[int] = None,
+        from_date: Optional[str] = None,
+    ) -> list[dict[str, object]]:
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn, dictionary=True)
-            if assigned_panel_user_id is None:
-                cursor.execute(
-                    """
-                    SELECT a.*,
-                        EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
-                            AS has_signed_contract,
-                        EXISTS (
-                            SELECT 1 FROM contracts c
-                            WHERE c.appointment_id = a.id
-                              AND (
-                                  c.artist_signature IS NULL
-                                  OR CHAR_LENGTH(TRIM(c.artist_signature)) < 80
-                              )
-                        ) AS contract_pending_artist_signature,
-                        pu.username AS assigned_username,
-                        pu.first_name AS assigned_first_name,
-                        pu.last_name AS assigned_last_name,
-                        pu.role AS assigned_role,
-                        pu.store_id AS assigned_store_id
-                    FROM appointments a
-                    LEFT JOIN panel_users pu ON pu.id = a.assigned_panel_user_id
-                    ORDER BY a.created_at DESC
-                    """
-                )
-            else:
-                cursor.execute(
-                    """
-                    SELECT a.*,
-                        EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
-                            AS has_signed_contract,
-                        EXISTS (
-                            SELECT 1 FROM contracts c
-                            WHERE c.appointment_id = a.id
-                              AND (
-                                  c.artist_signature IS NULL
-                                  OR CHAR_LENGTH(TRIM(c.artist_signature)) < 80
-                              )
-                        ) AS contract_pending_artist_signature,
-                        pu.username AS assigned_username,
-                        pu.first_name AS assigned_first_name,
-                        pu.last_name AS assigned_last_name,
-                        pu.role AS assigned_role,
-                        pu.store_id AS assigned_store_id
-                    FROM appointments a
-                    LEFT JOIN panel_users pu ON pu.id = a.assigned_panel_user_id
-                    WHERE a.assigned_panel_user_id = %s
-                    ORDER BY a.created_at DESC
-                    """,
-                    (assigned_panel_user_id,),
-                )
+            clauses: list[str] = []
+            params: list[object] = []
+            if assigned_panel_user_id is not None:
+                clauses.append("a.assigned_panel_user_id = %s")
+                params.append(int(assigned_panel_user_id))
+            if from_date:
+                clauses.append("DATE(a.appointment_date) >= %s")
+                params.append(from_date)
+            where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+            cursor.execute(
+                f"""
+                SELECT a.*,
+                    EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
+                        AS has_signed_contract,
+                    EXISTS (
+                        SELECT 1 FROM contracts c
+                        WHERE c.appointment_id = a.id
+                          AND (
+                              c.artist_signature IS NULL
+                              OR CHAR_LENGTH(TRIM(c.artist_signature)) < 80
+                          )
+                    ) AS contract_pending_artist_signature,
+                    pu.username AS assigned_username,
+                    pu.first_name AS assigned_first_name,
+                    pu.last_name AS assigned_last_name,
+                    pu.role AS assigned_role,
+                    pu.store_id AS assigned_store_id
+                FROM appointments a
+                LEFT JOIN panel_users pu ON pu.id = a.assigned_panel_user_id
+                {where_sql}
+                ORDER BY a.created_at DESC
+                """,
+                tuple(params),
+            )
             rows = cursor.fetchall()
             for row in rows:
                 raw = row.get("has_signed_contract")
@@ -105,7 +93,7 @@ class AppointmentRepository:
                 "Unknown column 'a.assigned_panel_user_id'" in err
                 or "Unknown column 'assigned_panel_user_id'" in err
             ):
-                return self._get_all_legacy_no_assignee()
+                return self._get_all_legacy_no_assignee(from_date=from_date)
             raise
         finally:
             if conn:
@@ -181,12 +169,19 @@ class AppointmentRepository:
             if conn:
                 conn.close()
 
-    def _get_all_legacy_no_assignee(self) -> list[dict[str, object]]:
+    def _get_all_legacy_no_assignee(
+        self, from_date: Optional[str] = None
+    ) -> list[dict[str, object]]:
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn, dictionary=True)
+            where_sql = ""
+            params: tuple[object, ...] = ()
+            if from_date:
+                where_sql = "WHERE DATE(a.appointment_date) >= %s"
+                params = (from_date,)
             cursor.execute(
-                """
+                f"""
                 SELECT a.*,
                     EXISTS (SELECT 1 FROM contracts c WHERE c.appointment_id = a.id)
                         AS has_signed_contract,
@@ -199,8 +194,10 @@ class AppointmentRepository:
                           )
                     ) AS contract_pending_artist_signature
                 FROM appointments a
+                {where_sql}
                 ORDER BY a.created_at DESC
-                """
+                """,
+                params,
             )
             rows = cursor.fetchall()
             for row in rows:
@@ -338,6 +335,7 @@ class AppointmentRepository:
         limit: int = 10,
         offset: int = 0,
         assigned_panel_user_id: Optional[int] = None,
+        from_date: Optional[str] = None,
     ) -> tuple[list[dict[str, object]], int]:
         where_search, params = self._search_where_clause(field, term)
         clauses = [where_search]
@@ -345,6 +343,9 @@ class AppointmentRepository:
         if assigned_panel_user_id is not None:
             clauses.append("a.assigned_panel_user_id = %s")
             all_params.append(int(assigned_panel_user_id))
+        if from_date:
+            clauses.append("DATE(a.appointment_date) >= %s")
+            all_params.append(from_date)
         where_sql = " AND ".join(f"({c})" for c in clauses)
         base_from = self._appointment_list_select_sql()
         lim = max(1, min(int(limit), 50))
@@ -555,10 +556,73 @@ class AppointmentRepository:
                     pending_balance=float(res.get("pending_balance") or 0),
                     customer_id=res.get("customer_id"),
                     detail=(res.get("detail") or "") or "",
+                    assigned_panel_user_id=res.get("assigned_panel_user_id"),
                 )
             return None
         finally:
             if conn: conn.close()
+
+    def list_for_artist_schedule_day(
+        self,
+        day: datetime | date | str,
+        assigned_panel_user_id: int,
+        *,
+        exclude_appointment_id: Optional[int] = None,
+    ) -> list[dict[str, object]]:
+        """
+        Citas del día que ocupan agenda del profesional (asignadas a él o sin asignar).
+        Excluye canceladas.
+        """
+        if isinstance(day, datetime):
+            day_s = day.strftime("%Y-%m-%d")
+        elif isinstance(day, date):
+            day_s = day.strftime("%Y-%m-%d")
+        else:
+            day_s = str(day).strip()[:10]
+
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            params: list[object] = [day_s, int(assigned_panel_user_id)]
+            exclude_sql = ""
+            if exclude_appointment_id is not None:
+                exclude_sql = " AND a.id <> %s"
+                params.append(int(exclude_appointment_id))
+            cursor.execute(
+                f"""
+                SELECT
+                    a.id,
+                    a.customer_name,
+                    a.service_type,
+                    a.detail,
+                    a.appointment_date,
+                    a.status,
+                    a.assigned_panel_user_id
+                FROM appointments a
+                WHERE DATE(a.appointment_date) = %s
+                  AND LOWER(COALESCE(a.status, '')) <> 'cancelada'
+                  AND (
+                    a.assigned_panel_user_id = %s
+                    OR a.assigned_panel_user_id IS NULL
+                    OR a.assigned_panel_user_id = 0
+                  )
+                  {exclude_sql}
+                ORDER BY a.appointment_date ASC, a.id ASC
+                """,
+                tuple(params),
+            )
+            rows = cursor.fetchall() or []
+            out: list[dict[str, object]] = []
+            for row in rows:
+                item = dict(row)
+                item["appointment_date"] = self._appointment_datetime_sql_string(
+                    item.get("appointment_date")
+                )
+                out.append(item)
+            return out
+        finally:
+            if conn:
+                conn.close()
 
     def get_row_for_payment_receipt(self, appointment_id: int) -> Optional[Any]:
         """Cita + datos de cliente para PDF de recibo (nombre/teléfono/correo)."""
@@ -1345,8 +1409,138 @@ class AppointmentRepository:
             if conn:
                 conn.close()
 
+    def list_procedure_consent_documents(self) -> list[dict[str, object]]:
+        """Listado sin el PDF completo (solo metadata y tamaño aproximado)."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT
+                    survey_option_label,
+                    source_filename,
+                    updated_at,
+                    LENGTH(pdf_base64) AS pdf_base64_len
+                FROM procedure_consent_documents
+                WHERE survey_option_label IS NOT NULL AND TRIM(survey_option_label) <> ''
+                ORDER BY survey_option_label
+                """
+            )
+            return list(cursor.fetchall() or [])
+        finally:
+            if conn:
+                conn.close()
+
+    def upsert_procedure_consent_document(
+        self,
+        *,
+        survey_option_label: str,
+        source_filename: str,
+        pdf_base64: str,
+    ) -> None:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                """
+                REPLACE INTO procedure_consent_documents
+                    (survey_option_label, source_filename, pdf_base64)
+                VALUES (%s, %s, %s)
+                """,
+                (survey_option_label, source_filename, pdf_base64),
+            )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
+    def update_procedure_consent_document(
+        self,
+        *,
+        current_label: str,
+        new_label: str,
+        source_filename: Optional[str],
+        pdf_base64: Optional[str],
+    ) -> bool:
+        """Actualiza fila por etiqueta actual. Devuelve False si no existía."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT survey_option_label, source_filename, pdf_base64
+                FROM procedure_consent_documents
+                WHERE survey_option_label = %s
+                LIMIT 1
+                """,
+                (current_label,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return False
+            final_label = new_label
+            final_fname = (
+                source_filename
+                if source_filename is not None
+                else str(row.get("source_filename") or f"{final_label}.pdf")
+            )
+            final_pdf = pdf_base64 if pdf_base64 is not None else str(row.get("pdf_base64") or "")
+            if final_label != current_label:
+                cursor.execute(
+                    """
+                    SELECT 1 FROM procedure_consent_documents
+                    WHERE survey_option_label = %s LIMIT 1
+                    """,
+                    (final_label,),
+                )
+                if cursor.fetchone():
+                    raise ValueError(
+                        f"Ya existe un tipo de piercing con el nombre «{final_label}»."
+                    )
+                cursor.execute(
+                    "DELETE FROM procedure_consent_documents WHERE survey_option_label = %s",
+                    (current_label,),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO procedure_consent_documents
+                        (survey_option_label, source_filename, pdf_base64)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (final_label, final_fname, final_pdf),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE procedure_consent_documents
+                    SET source_filename = %s, pdf_base64 = %s
+                    WHERE survey_option_label = %s
+                    """,
+                    (final_fname, final_pdf, current_label),
+                )
+            conn.commit()
+            return True
+        finally:
+            if conn:
+                conn.close()
+
+    def delete_procedure_consent_document(self, survey_option_label: str) -> bool:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                "DELETE FROM procedure_consent_documents WHERE survey_option_label = %s",
+                (survey_option_label,),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            if conn:
+                conn.close()
+
     def list_survey_answer_texts_for_appointment(self, appointment_id: int) -> list[str]:
         """Textos de respuesta guardados para la cita (p. ej. radio/select/checkbox como JSON)."""
+
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn, dictionary=True)

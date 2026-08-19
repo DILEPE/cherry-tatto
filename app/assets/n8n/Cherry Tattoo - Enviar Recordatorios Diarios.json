@@ -1,0 +1,294 @@
+{
+  "name": "Cherry Tattoo - Enviar Recordatorios Diarios",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -720,
+        128
+      ],
+      "id": "4390b058-c8cd-40ce-b7ce-d91f1d66ec64",
+      "name": "Cron 9AM Diario"
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "table": {
+          "__rl": true,
+          "value": "reminders",
+          "mode": "list"
+        },
+        "where": {
+          "values": []
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [
+        -480,
+        128
+      ],
+      "id": "c14a79da-31f4-4fef-942e-ddb7abbc25bf",
+      "name": "Consultar Recordatorios Pendientes",
+      "credentials": {
+        "mySql": {
+          "id": "4m3cI3YMbuLkXLCR",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-service-type",
+              "leftValue": "={{ $json.service_type.toString().toLowerCase().trim() }}",
+              "rightValue": "piercing",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -240,
+        128
+      ],
+      "id": "d414410a-cfe0-445d-b5dc-c0429ff1230e",
+      "name": "Es Piercing o Tatuaje?"
+    },
+    {
+      "parameters": {
+        "phoneNumberId": "1107930225741590",
+        "recipientPhoneNumber": "={{ $json.phone }}",
+        "template": "recordatorio_perforacion|es_CO",
+        "components": {
+          "component": [
+            {
+              "bodyParameters": {
+                "parameter": [
+                  {
+                    "text": "={{ $json.customer_name }}"
+                  },
+                  {
+                    "text": "={{ $json.control_label }}"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "da3ab1ca-4668-4120-83e2-72a134d412af",
+      "name": "WP Recordatorio Piercing",
+      "webhookId": "83ec3e96-9221-4088-bf55-5ed12e86c8f3",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "nFu6KkT6PkJuu5zh",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "phoneNumberId": "1107930225741590",
+        "recipientPhoneNumber": "={{ $json.phone }}",
+        "template": "recordatorio_tatuaje|es_CO",
+        "components": {
+          "component": [
+            {
+              "bodyParameters": {
+                "parameter": [
+                  {
+                    "text": "={{ $json.customer_name }}"
+                  },
+                  {
+                    "text": "={{ $json.control_label }}"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        240
+      ],
+      "id": "295cf458-9de9-4ae7-9dca-7d444cbea167",
+      "name": "WP Recordatorio Tatuaje",
+      "webhookId": "bca18cc6-70a0-4863-b29c-69bcdadb0328",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "nFu6KkT6PkJuu5zh",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE reminders \nSET status = 'sent', sent_at = NOW()\nWHERE id = {{ $('Consultar Recordatorios Pendientes').item.json.id }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.4,
+      "position": [
+        480,
+        128
+      ],
+      "id": "0742eaf7-9372-4b9d-b332-49afa2d2ae2d",
+      "name": "UPDATE status sent",
+      "credentials": {
+        "mySql": {
+          "id": "4m3cI3YMbuLkXLCR",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cherry-tatto/send-reminders",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -720,
+        320
+      ],
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "name": "Simular envio",
+      "webhookId": "cherry-tatto-send-reminders-001"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Cron 9AM Diario": {
+      "main": [
+        [
+          {
+            "node": "Consultar Recordatorios Pendientes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar Recordatorios Pendientes": {
+      "main": [
+        [
+          {
+            "node": "Es Piercing o Tatuaje?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Es Piercing o Tatuaje?": {
+      "main": [
+        [
+          {
+            "node": "WP Recordatorio Piercing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "WP Recordatorio Tatuaje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WP Recordatorio Piercing": {
+      "main": [
+        [
+          {
+            "node": "UPDATE status sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WP Recordatorio Tatuaje": {
+      "main": [
+        [
+          {
+            "node": "UPDATE status sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simular envio": {
+      "main": [
+        [
+          {
+            "node": "Consultar Recordatorios Pendientes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "67d694ef-e733-497f-b7ce-f3e538beea9a",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "b56ae73836276e902eab7260bda1c240d29fb935abb341d8530a9fc2085fe3df"
+  },
+  "id": "QfqrYWpKdwhFExzc",
+  "tags": [
+    {
+      "updatedAt": "2026-08-13T00:03:47.521Z",
+      "createdAt": "2026-08-13T00:03:47.521Z",
+      "id": "akI4Pj5ymhos92hb",
+      "name": "cherry-tattoo"
+    }
+  ]
+}

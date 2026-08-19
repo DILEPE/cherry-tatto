@@ -33,6 +33,29 @@ from app.schemas.common import (
 class AppointmentController(Controller):
     path = "/api/appointments"
 
+    @staticmethod
+    def _optional_from_date(value: Optional[str]) -> Optional[str]:
+        raw = (value or "").strip()
+        if not raw:
+            return None
+        # YYYY-MM-DD
+        if len(raw) != 10 or raw[4] != "-" or raw[7] != "-":
+            raise HTTPException(
+                detail="from_date debe ser YYYY-MM-DD",
+                status_code=400,
+            )
+        year_s, month_s, day_s = raw.split("-")
+        try:
+            y, m, d = int(year_s), int(month_s), int(day_s)
+            if not (1 <= m <= 12 and 1 <= d <= 31):
+                raise ValueError("out of range")
+        except ValueError as e:
+            raise HTTPException(
+                detail="from_date debe ser YYYY-MM-DD",
+                status_code=400,
+            ) from e
+        return f"{y:04d}-{m:02d}-{d:02d}"
+
     @get()
     async def list_all(
         self,
@@ -40,12 +63,20 @@ class AppointmentController(Controller):
         assigned_panel_user_id: Optional[int] = Parameter(
             default=None, ge=1, query="assigned_panel_user_id"
         ),
+        from_date: Optional[str] = Parameter(
+            default=None,
+            query="from_date",
+            description="Solo citas con fecha de cita >= este día (YYYY-MM-DD).",
+        ),
     ) -> list[AppointmentListItem]:
         """Lista citas; opcionalmente solo las asignadas a un profesional del panel."""
         try:
             return await state.service.list_appointments(
                 assigned_panel_user_id=assigned_panel_user_id,
+                from_date=self._optional_from_date(from_date),
             )
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(detail=f"Error al obtener citas: {str(e)}", status_code=500)
 
@@ -64,6 +95,11 @@ class AppointmentController(Controller):
         assigned_panel_user_id: Optional[int] = Parameter(
             default=None, ge=1, query="assigned_panel_user_id"
         ),
+        from_date: Optional[str] = Parameter(
+            default=None,
+            query="from_date",
+            description="Solo citas con fecha de cita >= este día (YYYY-MM-DD).",
+        ),
     ) -> AppointmentSearchResponse:
         try:
             return await state.service.search_appointments(
@@ -72,7 +108,10 @@ class AppointmentController(Controller):
                 limit=limit,
                 offset=offset,
                 assigned_panel_user_id=assigned_panel_user_id,
+                from_date=self._optional_from_date(from_date),
             )
+        except HTTPException:
+            raise
         except ValueError as e:
             if str(e) in ("SEARCH_TERM_EMPTY", "SEARCH_FIELD_INVALID"):
                 raise HTTPException(detail=str(e), status_code=400) from e

@@ -14,12 +14,12 @@ BOOKING_WORK_KIND_META: dict[str, dict[str, Any]] = {
     },
     "limpieza_piercing": {
         "label": "Limpieza (piercing)",
-        "service_token": "piercing",
+        "service_token": "limpieza",
         "detail_tag": "[Limpieza piercing]",
     },
     "cambio_piercing": {
         "label": "Cambio de piercing",
-        "service_token": "piercing",
+        "service_token": "cambio",
         "detail_tag": "[Cambio piercing]",
     },
     "tatuaje": {
@@ -35,9 +35,9 @@ def work_kind_infer_from_existing_row(row: Mapping[str, Any]) -> str:
     svc = str(row.get("service_type") or row.get("service") or "").strip().lower()
     det = str(row.get("detail") or "").lower()
     combined = f"{svc} {det}"
-    if "limpieza" in det:
+    if "limpieza" in svc or "limpieza" in det:
         return "limpieza_piercing"
-    if "cambio" in det and "pierc" in combined:
+    if "cambio" in svc or ("cambio" in det and "pierc" in combined):
         return "cambio_piercing"
     if "tatu" in combined or "tattoo" in svc:
         return "tatuaje"

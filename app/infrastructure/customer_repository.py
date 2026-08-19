@@ -10,6 +10,7 @@ from app.schemas.customer import (
     SOCIAL_MEDIA_MAX_LEN,
     CustomerCreate,
     CustomerUpdate,
+    customer_update_preserving_real_birth,
     resolve_customer_email_for_storage,
 )
 
@@ -245,7 +246,7 @@ class CustomerRepository:
     def upsert_by_document(self, data: CustomerCreate, conn: MySQLConnection) -> int:
         existing = self.get_by_document_number(data.document_number, conn)
         if existing:
-            upd = CustomerUpdate(**data.model_dump())
+            upd = customer_update_preserving_real_birth(existing, data)
             self.update(int(existing["id"]), upd, conn)
             return int(existing["id"])
         return self.insert(data, conn)

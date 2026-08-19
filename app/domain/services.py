@@ -8,23 +8,34 @@ from typing import Any, Optional
 
 import mysql.connector
 
+from app.domain.treatment_sent import treatment_sent_payload_from_appointment
 from app.domain.contract_kinds import (
     SurveyQuestionScope,
+    appointment_requires_contract,
     appointment_to_contract_kind,
     service_type_to_assignee_panel_role,
     service_type_to_contract_kind,
 )
 from app.domain.contract_signing_guard import (
     appointment_must_be_fully_paid_for_contract,
-    appointment_payments_must_be_verified_for_contract,
 )
 from app.domain.piercing_procedure_labels import (
+    _ascii_fold,
     build_piercing_type_index,
     expand_procedure_answer_candidates,
+    piercing_type_display_label,
     resolve_piercing_type_canonical,
 )
-from app.domain.procedure_consent import PROCEDURE_CONSENT_SURVEY_QUESTION_ID
+from app.domain.procedure_consent import (
+    PROCEDURE_CONSENT_SURVEY_QUESTION_ID,
+    care_instructions_pdf_filename,
+)
 from app.domain.service_types import resolve_service_type
+from app.domain.agenda_schedule import (
+    find_schedule_conflict,
+    parse_appointment_datetime,
+    schedule_conflict_message,
+)
 from app.domain.models import (
     AppointmentCreate,
     ContractSign,
@@ -62,6 +73,7 @@ from app.schemas.customer import (
     CustomerListResponse,
     CustomerPublic,
     CustomerUpdate,
+    customer_update_preserving_real_birth,
 )
 from app.schemas.panel_user import (
     PanelUserAssignable,
@@ -163,8 +175,9 @@ class BusinessLogicService:
         customer_name: str,
         phone: str,
         field_overrides: Optional[dict[str, str]] = None,
+        send_webhook: bool = False,
     ) -> None:
-        """Genera PDF + webhook de recibo fuera del request HTTP para no bloquear agendar/abonar."""
+        """Genera PDF de recibo en segundo plano. El envío (n8n/WhatsApp) solo si `send_webhook=True`."""
 
         async def _runner() -> None:
             try:
@@ -180,6 +193,8 @@ class BusinessLogicService:
                 )
                 rid, pdf_b, fname = receipt_out
                 if not rid or not pdf_b or len(pdf_b) <= 0:
+                    return
+                if not send_webhook:
                     return
                 payload = self._payment_receipt_pdf_webhook_payload(
                     appointment_id=appointment_id,
@@ -445,8 +460,10 @@ class BusinessLogicService:
         Si viene `customer_id`, verifica existencia. Usa transacción para cliente + cita.
 
         Recibo PDF inicial: si el abono al agendar es **estrictamente mayor que cero** (cualquier servicio).
+        Se guarda el PDF, pero **no** se dispara el webhook `payment_receipt_pdf`
+        (el envío es manual desde el panel).
 
-        Si el abono es 0: sin movimiento en historial ni webhook `payment_receipt_pdf`.
+        Si el abono es 0: sin movimiento en historial ni PDF de recibo.
         """
         resolved_type = resolve_service_type(data.service)
 
@@ -466,6 +483,26 @@ class BusinessLogicService:
                 )
 
         await asyncio.to_thread(_pre_validate)
+
+        start_dt = parse_appointment_datetime(data.date)
+        if start_dt is None:
+            raise ValueError("Fecha/hora de la cita inválida.")
+
+        def _check_schedule() -> None:
+            day_rows = self.repository.list_for_artist_schedule_day(
+                start_dt,
+                int(data.assigned_panel_user_id),
+            )
+            conflict = find_schedule_conflict(
+                candidate_start=start_dt,
+                candidate_service=resolved_type,
+                candidate_detail=data.detail,
+                day_rows=day_rows,
+            )
+            if conflict is not None:
+                raise ValueError(schedule_conflict_message(conflict))
+
+        await asyncio.to_thread(_check_schedule)
 
         dep_round = max(0.0, round(float(data.deposit or 0), 2))
         tot_round = max(0.0, round(float(data.total_amount or 0), 2))
@@ -490,7 +527,9 @@ class BusinessLogicService:
                             raise ValueError(
                                 "El documento enviado no coincide con el cliente vinculado a la cita."
                             )
-                        self.customers.update(cid, CustomerUpdate(**c.model_dump()), conn)
+                        self.customers.update(
+                            cid, customer_update_preserving_real_birth(row, c), conn
+                        )
                 elif data.customer is not None:
                     c = CustomerCreate.model_validate(data.customer)
                     resolved_id = self.customers.upsert_by_document(c, conn)
@@ -540,7 +579,8 @@ class BusinessLogicService:
             "deposit": float(data.deposit or 0),
             "total_amount": float(data.total_amount or 0),
             "pending_balance": float(data.pending_balance or 0),
-            "payment_receipt_pdf_webhook_enqueued": deposit_amt > 0,
+            "payment_receipt_pdf_webhook_enqueued": False,
+            "payment_receipt_pdf_issued": deposit_amt > 0,
         }
         asyncio.create_task(self._async_notify("appointment_created", payload))
         return new_id, customer_id
@@ -550,6 +590,11 @@ class BusinessLogicService:
         if not appointment:
             raise ValueError(f"Cita con ID {data.appointment_id} no encontrada.")
 
+        if not appointment_requires_contract(appointment):
+            raise ValueError(
+                "Las citas de limpieza o cambio de joya no requieren firma ni envío de contrato."
+            )
+
         ok_pay, pay_err = appointment_must_be_fully_paid_for_contract(
             total_amount=getattr(appointment, "total_amount", None),
             deposit=getattr(appointment, "deposit", None),
@@ -558,12 +603,6 @@ class BusinessLogicService:
         if not ok_pay:
             raise ValueError(
                 pay_err or "La cita no cumple las condiciones de pago para firmar el contrato."
-            )
-        payments = self.repository.list_payments_by_appointment(data.appointment_id)
-        ok_ver, ver_err = appointment_payments_must_be_verified_for_contract(payments)
-        if not ok_ver:
-            raise ValueError(
-                ver_err or "Los abonos deben estar verificados por un administrador."
             )
 
         if self.repository.has_contract_for_appointment(data.appointment_id):
@@ -585,6 +624,20 @@ class BusinessLogicService:
             "health_summary": data.health_data,
         }
         asyncio.create_task(self._async_notify("contract_signed", notification_payload))
+
+        treatment_payload = self._build_treatment_sent_payload(appointment)
+        if treatment_payload:
+            logger.info(
+                "treatment_sent enviando cita=%s payload=%s",
+                data.appointment_id,
+                treatment_payload,
+            )
+            await self._async_notify("treatment_sent", treatment_payload)
+        else:
+            logger.warning(
+                "treatment_sent omitido cita=%s: falta customer_id o teléfono.",
+                data.appointment_id,
+            )
 
         consent_pdf_payload = await asyncio.to_thread(
             self._build_contract_consent_pdf_payload,
@@ -620,6 +673,11 @@ class BusinessLogicService:
         if not appointment:
             raise ValueError(f"Cita con ID {appointment_id} no encontrada.")
 
+        if not appointment_requires_contract(appointment):
+            raise ValueError(
+                "Las citas de limpieza o cambio de joya no requieren firma ni envío de contrato."
+            )
+
         ok_pay, pay_err = appointment_must_be_fully_paid_for_contract(
             total_amount=getattr(appointment, "total_amount", None),
             deposit=getattr(appointment, "deposit", None),
@@ -628,12 +686,6 @@ class BusinessLogicService:
         if not ok_pay:
             raise ValueError(
                 pay_err or "La cita no cumple las condiciones de pago para completar el contrato."
-            )
-        payments = self.repository.list_payments_by_appointment(appointment_id)
-        ok_ver, ver_err = appointment_payments_must_be_verified_for_contract(payments)
-        if not ok_ver:
-            raise ValueError(
-                ver_err or "Los abonos deben estar verificados por un administrador."
             )
 
         row = self.repository.get_latest_contract_row_for_appointment(appointment_id)
@@ -644,6 +696,15 @@ class BusinessLogicService:
 
         self.repository.update_contract_artist_signature(int(row["id"]), artist_signature)
         self.repository.update_status(appointment_id, "Finalizada")
+
+        treatment_payload = self._build_treatment_sent_payload(appointment)
+        if treatment_payload:
+            logger.info(
+                "treatment_sent (firma profesional) cita=%s payload=%s",
+                appointment_id,
+                treatment_payload,
+            )
+            await self._async_notify("treatment_sent", treatment_payload)
 
     def _resolve_piercing_procedure_label(
         self, appointment_id: int, preferred_answer: Optional[str]
@@ -679,10 +740,39 @@ class BusinessLogicService:
                     return got
         return None
 
+    def _build_treatment_sent_payload(self, appointment: Any) -> Optional[dict[str, object]]:
+        """JSON plano hacia n8n `treatment-sent` tras firmar el contrato."""
+        kind = appointment_to_contract_kind(appointment)
+        customer_row = None
+        raw_id = getattr(appointment, "customer_id", None)
+        if raw_id is not None and self.customers is not None:
+            try:
+                customer_row = self.customers.get_by_id(int(raw_id))
+            except (TypeError, ValueError):
+                customer_row = None
+            except Exception:
+                logger.exception(
+                    "treatment_sent: no se pudo leer el cliente id=%s para la cita %s",
+                    raw_id,
+                    getattr(appointment, "id", None),
+                )
+                customer_row = None
+        payload = treatment_sent_payload_from_appointment(
+            appointment, customer_row=customer_row, contract_kind=kind
+        )
+        if payload is None:
+            logger.warning(
+                "treatment_sent: cita %s sin customer_id o teléfono; no se notifica n8n.",
+                getattr(appointment, "id", None),
+            )
+        return payload
+
     def _build_contract_consent_pdf_payload(
         self, appointment_id: int, appointment: Any
     ) -> Optional[dict[str, object]]:
         """PDF de consentimiento según tipo de cita y respuesta de encuesta (pregunta id fija)."""
+        if not appointment_requires_contract(appointment):
+            return None
         kind = appointment_to_contract_kind(appointment)
         if kind == "tattoo":
             label = "Tatuaje"
@@ -711,7 +801,7 @@ class BusinessLogicService:
         raw_b64 = row.get("pdf_base64")
         if not isinstance(raw_b64, str) or not raw_b64.strip():
             return None
-        fname = str(row.get("source_filename") or "").strip() or f"{label}.pdf"
+        fname = care_instructions_pdf_filename(contract_kind=kind, procedure_label=label)
         return {
             "appointment_id": appointment_id,
             "procedure_label": label,
@@ -719,7 +809,10 @@ class BusinessLogicService:
             "customer_name": str(getattr(appointment, "name", "") or ""),
             "phone": str(getattr(appointment, "phone", "") or ""),
             "service": str(getattr(appointment, "service", "") or ""),
+            # Nombre visible en WhatsApp / n8n (el flujo a menudo usa estos campos).
             "file_name": fname,
+            "fileName": fname,
+            "source_filename": fname,
             "mime_type": "application/pdf",
             "pdf_base64": raw_b64.strip(),
         }
@@ -729,6 +822,39 @@ class BusinessLogicService:
 
     async def get_contract(self, contract_id: int) -> Optional[dict[str, object]]:
         return await asyncio.to_thread(self.repository.get_contract_by_id, contract_id)
+
+    @staticmethod
+    def _coerce_survey_option(value: str, opts: list[str]) -> Optional[str]:
+        """Coincide opción exacta o ignorando mayúsculas/acentos."""
+        val = (value or "").strip()
+        if not val or not opts:
+            return None
+        if val in opts:
+            return val
+        fold = _ascii_fold(val)
+        for opt in opts:
+            if _ascii_fold(opt) == fold:
+                return opt
+        return None
+
+    def _coerce_piercing_type_survey_option(
+        self, value: str, opts: list[str]
+    ) -> Optional[str]:
+        """Acepta etiqueta canónica o de display (Lóbulo → Lobulos) para la pregunta de tipo piercing."""
+        matched = self._coerce_survey_option(value, opts)
+        if matched is not None:
+            return matched
+        index = build_piercing_type_index(
+            consent_labels=(opts or []) + self.repository.list_procedure_consent_labels()
+        )
+        canonical = resolve_piercing_type_canonical(value, index)
+        if not canonical:
+            return None
+        matched = self._coerce_survey_option(canonical, opts)
+        if matched is not None:
+            return matched
+        display = piercing_type_display_label(canonical)
+        return self._coerce_survey_option(display, opts)
 
     def _prepare_survey_for_persist(self, data: Survey) -> Survey:
         """Valida respuestas dinámicas y rellena rating/comentarios/recomendación para la fila surveys."""
@@ -783,9 +909,13 @@ class BusinessLogicService:
                 if not opts:
                     raise ValueError(f"La pregunta «{lbl}» no tiene opciones configuradas")
                 val = (ans.answer_text or "").strip()
-                if val not in opts:
+                matched = self._coerce_survey_option(val, opts)
+                if matched is None and int(ans.question_id) == PROCEDURE_CONSENT_SURVEY_QUESTION_ID:
+                    matched = self._coerce_piercing_type_survey_option(val, opts)
+                if matched is None:
                     raise ValueError(f"Debes elegir una opción válida para «{lbl}»")
-                texts.append(f"{lbl}: {val}")
+                ans.answer_text = matched
+                texts.append(f"{lbl}: {matched}")
             elif qt == "checkbox":
                 selected: list[str] = []
                 raw_t = (ans.answer_text or "").strip()
@@ -836,8 +966,6 @@ class BusinessLogicService:
         """Upsert de la respuesta Q3 (tipo de piercing) sin borrar el resto de la encuesta."""
 
         def _run() -> tuple[str, str]:
-            from app.domain.piercing_procedure_labels import piercing_type_display_label
-
             appt = self.repository.get_by_id(int(appointment_id))
             if appt is None:
                 raise ValueError("Cita no encontrada")
@@ -851,13 +979,13 @@ class BusinessLogicService:
             canonical = resolve_piercing_type_canonical(piercing_type, index)
             if not canonical:
                 raise ValueError("Tipo de piercing no válido")
-            label = piercing_type_display_label(canonical)
+            # Guardar valor canónico (coincide con options_json); la UI/PDF usan display aparte.
             self.repository.upsert_survey_answer_text(
                 int(appointment_id),
                 PROCEDURE_CONSENT_SURVEY_QUESTION_ID,
-                label,
+                canonical,
             )
-            return label, canonical
+            return piercing_type_display_label(canonical), canonical
 
         return await asyncio.to_thread(_run)
 
@@ -912,11 +1040,16 @@ class BusinessLogicService:
         return await asyncio.to_thread(_run)
 
     async def list_appointments(
-        self, assigned_panel_user_id: Optional[int] = None
+        self,
+        assigned_panel_user_id: Optional[int] = None,
+        from_date: Optional[str] = None,
     ) -> list[AppointmentListItem]:
 
         def _run() -> list[AppointmentListItem]:
-            rows = self.repository.get_all(assigned_panel_user_id=assigned_panel_user_id)
+            rows = self.repository.get_all(
+                assigned_panel_user_id=assigned_panel_user_id,
+                from_date=from_date,
+            )
             return [AppointmentListItem.model_validate(r) for r in rows]
 
         return await asyncio.to_thread(_run)
@@ -929,6 +1062,7 @@ class BusinessLogicService:
         limit: int = 10,
         offset: int = 0,
         assigned_panel_user_id: Optional[int] = None,
+        from_date: Optional[str] = None,
     ) -> AppointmentSearchResponse:
         def _run() -> AppointmentSearchResponse:
             try:
@@ -938,6 +1072,7 @@ class BusinessLogicService:
                     limit=limit,
                     offset=offset,
                     assigned_panel_user_id=assigned_panel_user_id,
+                    from_date=from_date,
                 )
             except ValueError as e:
                 code = str(e)
@@ -1004,6 +1139,10 @@ class BusinessLogicService:
                 raise ValueError("Modo de anulación de abono inválido")
             await asyncio.to_thread(self.repository.cancel_appointment, appointment_id, mode)
             return
+        if status == "Finalizada":
+            current = str(getattr(appointment, "status", "") or "")
+            if current not in {"Agendada", "Reprogramada"}:
+                raise ValueError("Solo puedes finalizar citas en estado Agendada o Reprogramada.")
         await asyncio.to_thread(self.repository.update_status, appointment_id, status)
 
     async def reprogram_appointment(
@@ -1030,6 +1169,40 @@ class BusinessLogicService:
             design_description=design_description,
             observations=observations,
         )
+        start_dt = parse_appointment_datetime(new_date)
+        if start_dt is None:
+            raise ValueError("Fecha/hora de la cita inválida.")
+        artist_id = getattr(appointment, "assigned_panel_user_id", None)
+        if artist_id is None or int(artist_id) <= 0:
+            raise ValueError("La cita no tiene profesional asignado; no se puede reprogramar el horario.")
+        detail_for_check = (
+            merged_detail
+            if merged_detail is not None
+            else str(getattr(appointment, "detail", "") or "")
+        )
+        service_type = str(
+            getattr(appointment, "service_type", None)
+            or getattr(appointment, "service", "")
+            or ""
+        )
+
+        def _check_schedule() -> None:
+            day_rows = self.repository.list_for_artist_schedule_day(
+                start_dt,
+                int(artist_id),
+                exclude_appointment_id=appointment_id,
+            )
+            conflict = find_schedule_conflict(
+                candidate_start=start_dt,
+                candidate_service=service_type,
+                candidate_detail=detail_for_check,
+                day_rows=day_rows,
+                exclude_appointment_id=appointment_id,
+            )
+            if conflict is not None:
+                raise ValueError(schedule_conflict_message(conflict))
+
+        await asyncio.to_thread(_check_schedule)
         await asyncio.to_thread(self.repository.reprogram_appointment, appointment_id, new_date, merged_detail)
 
     async def update_appointment_financials(
@@ -1083,12 +1256,62 @@ class BusinessLogicService:
             pu = await asyncio.to_thread(self.panel_user_repo.get_by_id, int(assigned_panel_user_id))
             if pu is None:
                 raise ValueError("Usuario del panel del artista no encontrado")
+            need = service_type_to_assignee_panel_role(
+                str(
+                    getattr(appointment, "service_type", None)
+                    or getattr(appointment, "service", "")
+                    or ""
+                )
+            )
+            if str(pu.get("role") or "") != need:
+                raise ValueError(
+                    f"Para este tipo de servicio debes elegir un profesional con rol "
+                    f"«{PANEL_ROLE_LABEL_ES.get(need, need)}»."
+                )
         dnorm = self._merge_appointment_detail_fields(
             str(getattr(appointment, "detail", "") or ""),
             detail=detail,
             design_description=design_description,
             observations=observations,
         )
+
+        target_artist = (
+            int(assigned_panel_user_id)
+            if assigned_panel_user_id is not None
+            else int(getattr(appointment, "assigned_panel_user_id", 0) or 0)
+        )
+        detail_for_check = (
+            dnorm
+            if dnorm is not None
+            else str(getattr(appointment, "detail", "") or "")
+        )
+        start_dt = parse_appointment_datetime(getattr(appointment, "date", None))
+        if target_artist > 0 and start_dt is not None and (
+            assigned_panel_user_id is not None or dnorm is not None
+        ):
+            service_type = str(
+                getattr(appointment, "service_type", None)
+                or getattr(appointment, "service", "")
+                or ""
+            )
+
+            def _check_schedule() -> None:
+                day_rows = self.repository.list_for_artist_schedule_day(
+                    start_dt,
+                    target_artist,
+                    exclude_appointment_id=appointment_id,
+                )
+                conflict = find_schedule_conflict(
+                    candidate_start=start_dt,
+                    candidate_service=service_type,
+                    candidate_detail=detail_for_check,
+                    day_rows=day_rows,
+                    exclude_appointment_id=appointment_id,
+                )
+                if conflict is not None:
+                    raise ValueError(schedule_conflict_message(conflict))
+
+            await asyncio.to_thread(_check_schedule)
 
         await asyncio.to_thread(
             self.repository.patch_appointment_meta,
@@ -1176,11 +1399,27 @@ class BusinessLogicService:
     async def patch_appointment_payment_row(
         self, appointment_id: int, payment_id: int, data: AppointmentPaymentPatchRequest
     ) -> None:
+        if self.panel_user_repo is None:
+            raise RuntimeError("Repositorio de usuarios del panel no configurado.")
+
+        def _assert_admin() -> None:
+            user = self.panel_user_repo.get_by_id(int(data.edited_by))
+            if not user:
+                raise ValueError("Usuario del panel no encontrado.")
+            if str(user.get("role") or "") != "administrador":
+                raise ValueError("Solo un administrador puede editar abonos.")
+
+        await asyncio.to_thread(_assert_admin)
+
         row = await asyncio.to_thread(self.repository.get_payment_by_id, payment_id)
         if not row:
             raise ValueError("Abono no encontrado")
         if int(row.get("appointment_id") or 0) != int(appointment_id):
             raise ValueError("El abono no pertenece a esta cita")
+        if bool(int(row.get("is_verified") or 0)):
+            raise ValueError(
+                "Un abono verificado no se puede editar; solo puedes enviar el recibo."
+            )
         appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
         if appointment is None:
             raise ValueError("Cita no encontrada")
@@ -1653,6 +1892,168 @@ class BusinessLogicService:
             if self.store_repo.count_users_with_store_id(int(store_id)) > 0:
                 raise ValueError("STORE_IN_USE")
             self.store_repo.soft_delete(store_id)
+
+        await asyncio.to_thread(_run)
+
+    def _sync_piercing_type_in_survey_question_options(
+        self,
+        *,
+        add: Optional[str] = None,
+        remove: Optional[str] = None,
+        rename_from: Optional[str] = None,
+        rename_to: Optional[str] = None,
+    ) -> None:
+        """Mantiene survey_questions.id=3 (pregunta de tipo de perforación) alineada con el catálogo PDF."""
+        tattoo = "tatuaje"
+        qid = PROCEDURE_CONSENT_SURVEY_QUESTION_ID
+        row = self.repository.get_survey_question(qid)
+        if row is None:
+            return
+        opts = parse_options_json(row.get("options_json")) or []
+        # Preserve order; drop empties.
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for o in opts:
+            t = str(o).strip()
+            if not t or t.lower() == tattoo:
+                continue
+            key = t.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(t)
+
+        if remove:
+            rem = remove.strip()
+            cleaned = [o for o in cleaned if o.casefold() != rem.casefold()]
+
+        if rename_from and rename_to:
+            old, new = rename_from.strip(), rename_to.strip()
+            if old.casefold() != new.casefold():
+                cleaned = [new if o.casefold() == old.casefold() else o for o in cleaned]
+                # ensure new present
+                if not any(o.casefold() == new.casefold() for o in cleaned):
+                    if new.lower() != tattoo:
+                        cleaned.append(new)
+
+        if add:
+            a = add.strip()
+            if a and a.lower() != tattoo and not any(o.casefold() == a.casefold() for o in cleaned):
+                cleaned.append(a)
+
+        question = SurveyQuestion(
+            id=int(row["id"]),
+            label=str(row.get("label") or ""),
+            question_type=str(row.get("question_type") or "select"),
+            options=cleaned or None,
+            sort_order=int(row.get("sort_order") or 0),
+            contract_kind=str(row.get("contract_kind") or "piercing"),
+            is_active=bool(row.get("is_active", 1)),
+        )
+        self.repository.update_survey_question(question)
+
+    async def list_procedure_consent_documents(
+        self, *, include_tattoo: bool = True
+    ) -> list:
+        from app.schemas.procedure_consent import ProcedureConsentListItem
+
+        def _run() -> list:
+            rows = self.repository.list_procedure_consent_documents()
+            out: list = []
+            for r in rows:
+                label = str(r.get("survey_option_label") or "").strip()
+                if not label:
+                    continue
+                is_tattoo = label.casefold() == "tatuaje"
+                if is_tattoo and not include_tattoo:
+                    continue
+                b64_len = int(r.get("pdf_base64_len") or 0)
+                # Longitud base64 ≈ 4/3 del binario.
+                pdf_bytes = max(0, int(b64_len * 3 / 4)) if b64_len else 0
+                out.append(
+                    ProcedureConsentListItem(
+                        survey_option_label=label,
+                        source_filename=str(r.get("source_filename") or f"{label}.pdf"),
+                        updated_at=r.get("updated_at"),
+                        pdf_bytes=pdf_bytes,
+                        is_tattoo=is_tattoo,
+                    )
+                )
+            return out
+
+        return await asyncio.to_thread(_run)
+
+    async def get_procedure_consent_document_detail(self, label: str):
+        from app.schemas.procedure_consent import ProcedureConsentDetail
+
+        def _run():
+            row = self.repository.get_procedure_consent_document(label.strip())
+            if row is None:
+                return None
+            lbl = str(row.get("survey_option_label") or "").strip()
+            b64 = str(row.get("pdf_base64") or "")
+            return ProcedureConsentDetail(
+                survey_option_label=lbl,
+                source_filename=str(row.get("source_filename") or f"{lbl}.pdf"),
+                updated_at=None,
+                pdf_bytes=max(0, int(len(b64) * 3 / 4)) if b64 else 0,
+                is_tattoo=lbl.casefold() == "tatuaje",
+                pdf_base64=b64,
+            )
+
+        return await asyncio.to_thread(_run)
+
+    async def create_procedure_consent_document(self, data) -> str:
+        def _run() -> str:
+            label = data.survey_option_label.strip()
+            existing = self.repository.get_procedure_consent_document(label)
+            if existing is not None:
+                raise ValueError(f"Ya existe el tipo «{label}».")
+            self.repository.upsert_procedure_consent_document(
+                survey_option_label=label,
+                source_filename=data.source_filename,
+                pdf_base64=data.pdf_base64,
+            )
+            if label.casefold() != "tatuaje":
+                self._sync_piercing_type_in_survey_question_options(add=label)
+            return label
+
+        return await asyncio.to_thread(_run)
+
+    async def update_procedure_consent_document(self, current_label: str, data) -> None:
+        def _run() -> None:
+            cur = current_label.strip()
+            if not cur:
+                raise ValueError("NOT_FOUND")
+            new_label = (data.survey_option_label or cur).strip()
+            ok = self.repository.update_procedure_consent_document(
+                current_label=cur,
+                new_label=new_label,
+                source_filename=data.source_filename,
+                pdf_base64=data.pdf_base64,
+            )
+            if not ok:
+                raise ValueError("NOT_FOUND")
+            if cur.casefold() == "tatuaje" and new_label.casefold() == "tatuaje":
+                return
+            if cur.casefold() != new_label.casefold():
+                self._sync_piercing_type_in_survey_question_options(
+                    rename_from=cur, rename_to=new_label
+                )
+            elif new_label.casefold() != "tatuaje":
+                self._sync_piercing_type_in_survey_question_options(add=new_label)
+
+        await asyncio.to_thread(_run)
+
+    async def delete_procedure_consent_document(self, label: str) -> None:
+        def _run() -> None:
+            lbl = label.strip()
+            if not lbl:
+                raise ValueError("NOT_FOUND")
+            if not self.repository.delete_procedure_consent_document(lbl):
+                raise ValueError("NOT_FOUND")
+            if lbl.casefold() != "tatuaje":
+                self._sync_piercing_type_in_survey_question_options(remove=lbl)
 
         await asyncio.to_thread(_run)
 
