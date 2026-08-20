@@ -83,7 +83,7 @@ Este script:
 
 ## Importación one-shot (no es migración de esquema)
 
-- `import_customers_from_rcs_appointment.sql` — copia clientes desde `rcs_appointment.client` a `cherry_tatto.customers` (idempotente por `document_number`; requiere MySQL 8+). Ejecutar a mano; no forma parte del orden 000–032.
+- `import_customers_from_rcs_appointment.sql` — copia clientes desde `rcs_appointment.client` a `cherry_tatto.customers` (idempotente por `document_number`; sin CTE/`WITH`, compatible con MySQL 5.7+ y Workbench). Ejecutar a mano; no forma parte del orden 000–032.
 
 ## Recomendaciones
 
