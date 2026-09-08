@@ -385,6 +385,7 @@ class AppointmentSearchHit(BaseModel):
     assigned_panel_user_id: Optional[int] = None
     assigned_store_id: Optional[int] = None
     service_type: Optional[str] = None
+    detail: Optional[str] = None
     status: Optional[str] = None
     has_signed_contract: bool = False
     contract_pending_artist_signature: bool = False
