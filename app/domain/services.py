@@ -1076,12 +1076,14 @@ class BusinessLogicService:
         self,
         assigned_panel_user_id: Optional[int] = None,
         from_date: Optional[str] = None,
+        assigned_store_id: Optional[int] = None,
     ) -> list[AppointmentListItem]:
 
         def _run() -> list[AppointmentListItem]:
             rows = self.repository.get_all(
                 assigned_panel_user_id=assigned_panel_user_id,
                 from_date=from_date,
+                assigned_store_id=assigned_store_id,
             )
             return [AppointmentListItem.model_validate(r) for r in rows]
 
@@ -1096,6 +1098,7 @@ class BusinessLogicService:
         offset: int = 0,
         assigned_panel_user_id: Optional[int] = None,
         from_date: Optional[str] = None,
+        assigned_store_id: Optional[int] = None,
     ) -> AppointmentSearchResponse:
         def _run() -> AppointmentSearchResponse:
             try:
@@ -1106,6 +1109,7 @@ class BusinessLogicService:
                     offset=offset,
                     assigned_panel_user_id=assigned_panel_user_id,
                     from_date=from_date,
+                    assigned_store_id=assigned_store_id,
                 )
             except ValueError as e:
                 code = str(e)
@@ -2196,10 +2200,20 @@ class BusinessLogicService:
                 return None
             if not verify_password(password, str(row["password_hash"])):
                 return None
+            raw_store = row.get("store_id")
+            try:
+                store_id = int(raw_store) if raw_store is not None else None
+            except (TypeError, ValueError):
+                store_id = None
+            if store_id is not None and store_id <= 0:
+                store_id = None
+            store_name = str(row.get("store_name") or "").strip() or None
             return PanelUserSessionPublic(
                 id=int(row["id"]),
                 username=str(row["username"]),
                 role=str(row["role"]),
+                store_id=store_id,
+                store_name=store_name,
                 session_expires_at=panel_session_expires_at_epoch(),
             )
 

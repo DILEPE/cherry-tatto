@@ -42,6 +42,7 @@ class AppointmentRepository:
         self,
         assigned_panel_user_id: Optional[int] = None,
         from_date: Optional[str] = None,
+        assigned_store_id: Optional[int] = None,
     ) -> list[dict[str, object]]:
         conn = self.db.get_connection()
         try:
@@ -54,6 +55,9 @@ class AppointmentRepository:
             if from_date:
                 clauses.append("DATE(a.appointment_date) >= %s")
                 params.append(from_date)
+            if assigned_store_id is not None:
+                clauses.append("pu.store_id = %s")
+                params.append(int(assigned_store_id))
             where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
             cursor.execute(
                 f"""
@@ -93,7 +97,10 @@ class AppointmentRepository:
                 "Unknown column 'a.assigned_panel_user_id'" in err
                 or "Unknown column 'assigned_panel_user_id'" in err
             ):
-                return self._get_all_legacy_no_assignee(from_date=from_date)
+                return self._get_all_legacy_no_assignee(
+                    from_date=from_date,
+                    assigned_store_id=assigned_store_id,
+                )
             raise
         finally:
             if conn:
@@ -170,8 +177,12 @@ class AppointmentRepository:
                 conn.close()
 
     def _get_all_legacy_no_assignee(
-        self, from_date: Optional[str] = None
+        self,
+        from_date: Optional[str] = None,
+        assigned_store_id: Optional[int] = None,
     ) -> list[dict[str, object]]:
+        if assigned_store_id is not None:
+            return []
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn, dictionary=True)
@@ -336,6 +347,7 @@ class AppointmentRepository:
         offset: int = 0,
         assigned_panel_user_id: Optional[int] = None,
         from_date: Optional[str] = None,
+        assigned_store_id: Optional[int] = None,
     ) -> tuple[list[dict[str, object]], int]:
         where_search, params = self._search_where_clause(field, term)
         clauses = [where_search]
@@ -346,17 +358,24 @@ class AppointmentRepository:
         if from_date:
             clauses.append("DATE(a.appointment_date) >= %s")
             all_params.append(from_date)
+        if assigned_store_id is not None:
+            clauses.append("pu.store_id = %s")
+            all_params.append(int(assigned_store_id))
         where_sql = " AND ".join(f"({c})" for c in clauses)
         base_from = self._appointment_list_select_sql()
         lim = max(1, min(int(limit), 50))
         off = max(0, int(offset))
+        count_from = """
+            FROM appointments a
+            LEFT JOIN panel_users pu ON pu.id = a.assigned_panel_user_id
+        """
 
         conn = self.db.get_connection()
         try:
             cursor = self._get_cursor(conn, dictionary=True)
             try:
                 cursor.execute(
-                    f"SELECT COUNT(DISTINCT a.id) AS c FROM appointments a WHERE {where_sql}",
+                    f"SELECT COUNT(DISTINCT a.id) AS c {count_from} WHERE {where_sql}",
                     tuple(all_params),
                 )
                 total_row = cursor.fetchone() or {}

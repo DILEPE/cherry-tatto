@@ -110,7 +110,7 @@ class PanelUserRepository:
             cur = conn.cursor(dictionary=True)
             cur.execute(
                 """
-                SELECT id, username, first_name, last_name, role
+                SELECT id, username, first_name, last_name, role, store_id
                 FROM panel_users
                 WHERE is_active = 1 AND role IN ('tatuador', 'perforador')
                 ORDER BY role ASC, id ASC
