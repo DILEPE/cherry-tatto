@@ -45,8 +45,8 @@ from app.domain.panel_passwords import hash_password, verify_password
 from app.domain.panel_session import panel_session_expires_at_epoch
 from app.domain.payment_receipt_pdf import (
     PAYMENT_RECEIPT_N8N_TEMPLATE_KEY,
+    PAYMENT_RECEIPT_SEND_FILENAME,
     PaymentReceiptPdfContext,
-    build_payment_receipt_pdf,
 )
 from app.domain.payment_receipt_template import (
     active_recibo_template_content,
@@ -130,6 +130,7 @@ class BusinessLogicService:
         payment_note: str,
         file_name: str,
         pdf_bytes: bytes,
+        include_abono_amounts: bool = True,
     ) -> dict[str, object]:
         """Payload único para `payment_receipt_pdf` → n8n (sustituye al PDF tipo «recibo Cherry» anterior)."""
         return {
@@ -141,6 +142,7 @@ class BusinessLogicService:
             "kind": kind,
             "appointment_payment_id": appointment_payment_id,
             "amount": amount,
+            "include_abono_amounts": bool(include_abono_amounts),
             "payment_note": payment_note,
             "file_name": file_name,
             "mime_type": "application/pdf",
@@ -202,7 +204,7 @@ class BusinessLogicService:
                     appointment_payment_id=appointment_payment_id,
                     amount=float(receipt_amount),
                     payment_note=payment_note or "",
-                    file_name=fname or "orden_trabajo.pdf",
+                    file_name=PAYMENT_RECEIPT_SEND_FILENAME,
                     pdf_bytes=pdf_b,
                 )
                 await self._async_notify("payment_receipt_pdf", payload)
@@ -313,25 +315,12 @@ class BusinessLogicService:
             payment_note=payment_note,
             client_email=fields["client_email"],
             payment_history=payment_history,
+            include_abono_amounts=True,
         )
-        try:
-            tpl_html: Optional[str] = None
-            try:
-                tpl_rows = self.repository.get_templates(only_active=True, contract_kind="recibo")
-                tpl_html = active_recibo_template_content(tpl_rows)
-            except Exception:
-                logger.exception(
-                    "No se pudo cargar plantilla activa de recibo (cita id=%s); solo orden de trabajo.",
-                    appointment_id,
-                )
-            pdf_bytes = build_payment_receipt_pdf_with_contract(ctx, tpl_html)
-        except Exception:
-            logger.exception(
-                "Fallo al generar orden de trabajo PDF (cita id=%s). Comprueba pymupdf / plantilla recibo.",
-                appointment_id,
-            )
+        pdf_bytes = self._pdf_bytes_from_receipt_context(ctx)
+        if not pdf_bytes:
             return None, None, None
-        file_name = f"orden_trabajo_cita_{appointment_id}_{int(datetime.now().timestamp() * 1000)}.pdf"
+        file_name = PAYMENT_RECEIPT_SEND_FILENAME
         linked_pay_id: Optional[int] = None
         if appointment_payment_id is not None:
             try:
@@ -376,6 +365,70 @@ class BusinessLogicService:
                         exc_info=True,
                     )
         return int(rid), pdf_bytes, file_name
+
+    def _pdf_bytes_from_receipt_context(self, ctx: PaymentReceiptPdfContext) -> Optional[bytes]:
+        """Genera el PDF de orden de trabajo (con o sin importes según el contexto)."""
+        try:
+            tpl_html: Optional[str] = None
+            try:
+                tpl_rows = self.repository.get_templates(only_active=True, contract_kind="recibo")
+                tpl_html = active_recibo_template_content(tpl_rows)
+            except Exception:
+                logger.exception(
+                    "No se pudo cargar plantilla activa de recibo (cita id=%s); solo orden de trabajo.",
+                    getattr(ctx, "appointment_id", 0),
+                )
+            return build_payment_receipt_pdf_with_contract(ctx, tpl_html)
+        except Exception:
+            logger.exception(
+                "Fallo al generar orden de trabajo PDF (cita id=%s). Comprueba pymupdf / plantilla recibo.",
+                getattr(ctx, "appointment_id", 0),
+            )
+            return None
+
+    def _render_payment_receipt_pdf_bytes(
+        self,
+        appointment_id: int,
+        *,
+        kind: str,
+        receipt_amount: float,
+        payment_note: Optional[str],
+        field_overrides: Optional[dict[str, str]] = None,
+        include_abono_amounts: bool = True,
+    ) -> Optional[bytes]:
+        """Regenera el PDF (p. ej. envío sin valor de abono). No persiste."""
+        get_row = getattr(self.repository, "get_row_for_payment_receipt", None)
+        if callable(get_row):
+            appt = get_row(appointment_id)
+        else:
+            appt = self.repository.get_by_id(appointment_id)
+        if appt is None:
+            return None
+        kind_label = "Abono adicional" if kind == "abono" else "Agendamiento / primer abono"
+        rows_pay = self.repository.list_payments_by_appointment(appointment_id)
+        payment_history: list[tuple[float, Optional[str]]] = [
+            (float(r["amount"]), str(r["note"]).strip() if r.get("note") else None) for r in rows_pay
+        ]
+        fields = self._resolve_receipt_client_fields(appt, field_overrides=field_overrides)
+        ctx = PaymentReceiptPdfContext(
+            appointment_id=int(appointment_id),
+            client_name=fields["client_name"],
+            client_phone=fields["client_phone"],
+            appointment_when=fields["appointment_when"],
+            service=str(getattr(appt, "service", "") or ""),
+            detail=str(getattr(appt, "detail", "") or ""),
+            total_amount=float(getattr(appt, "total_amount", 0) or 0),
+            this_payment=float(receipt_amount or 0),
+            deposit_total_after=float(getattr(appt, "deposit", 0) or 0),
+            pending_after=float(getattr(appt, "pending_balance", 0) or 0),
+            kind_label=kind_label,
+            issued_at=datetime.now(),
+            payment_note=payment_note,
+            client_email=fields["client_email"],
+            payment_history=payment_history,
+            include_abono_amounts=bool(include_abono_amounts),
+        )
+        return self._pdf_bytes_from_receipt_context(ctx)
 
     def _resolve_payment_id_for_receipt(
         self,
@@ -1402,25 +1455,59 @@ class BusinessLogicService:
             raise ValueError("Cita no encontrada")
         return await asyncio.to_thread(self.repository.list_payment_receipts_by_appointment, appointment_id)
 
-    async def get_appointment_receipt_pdf(self, appointment_id: int, receipt_id: int) -> tuple[bytes, str]:
+    async def get_appointment_receipt_pdf(
+        self,
+        appointment_id: int,
+        receipt_id: int,
+        *,
+        include_abono_amounts: bool = True,
+    ) -> tuple[bytes, str]:
         appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
         if appointment is None:
             raise ValueError("Cita no encontrada")
 
         def _fetch() -> Optional[dict[str, object]]:
-            return self.repository.get_payment_receipt_file(appointment_id, receipt_id)
+            return self.repository.get_payment_receipt_for_resend(appointment_id, receipt_id)
 
         row = await asyncio.to_thread(_fetch)
         if row is None:
             raise ValueError("Recibo no encontrado")
-        raw_pdf = row.get("pdf")
-        if raw_pdf is None:
-            raise ValueError("Recibo sin archivo")
-        fn = str(row.get("file_name") or "recibo.pdf")
-        return bytes(raw_pdf), fn
+        fn = PAYMENT_RECEIPT_SEND_FILENAME
+        if include_abono_amounts:
+            raw_pdf = row.get("pdf")
+            if raw_pdf is None:
+                raise ValueError("Recibo sin archivo")
+            return bytes(raw_pdf), fn
 
-    async def resend_appointment_payment_receipt(self, appointment_id: int, receipt_id: int) -> None:
-        """Reenvía el PDF guardado al webhook de recibos (n8n / WhatsApp)."""
+        kind = str(row.get("kind") or "abono").strip() or "abono"
+        try:
+            amount = float(row.get("amount") or 0)
+        except (TypeError, ValueError):
+            amount = 0.0
+        rebuilt = await asyncio.to_thread(
+            lambda: self._render_payment_receipt_pdf_bytes(
+                appointment_id,
+                kind=kind,
+                receipt_amount=amount,
+                payment_note=str(row.get("note") or "") or None,
+                include_abono_amounts=False,
+            )
+        )
+        if not rebuilt:
+            raise ValueError("No se pudo generar el recibo sin valor de abono")
+        return rebuilt, fn
+
+    async def resend_appointment_payment_receipt(
+        self,
+        appointment_id: int,
+        receipt_id: int,
+        *,
+        include_abono_amounts: bool = True,
+    ) -> None:
+        """Reenvía el PDF al webhook de recibos (n8n / WhatsApp).
+
+        Con valor: PDF guardado (cajas PRECIO/ABONO). Sin valor: regenera la orden sin esas cajas.
+        """
 
         def _build_payload() -> dict[str, object]:
             row = self.repository.get_payment_receipt_for_resend(appointment_id, receipt_id)
@@ -1429,7 +1516,6 @@ class BusinessLogicService:
             raw_pdf = row.get("pdf")
             if raw_pdf is None:
                 raise ValueError("Recibo sin archivo PDF")
-            pdf_bytes = bytes(raw_pdf)
             get_row = getattr(self.repository, "get_row_for_payment_receipt", None)
             if callable(get_row):
                 appt = get_row(appointment_id)
@@ -1445,6 +1531,19 @@ class BusinessLogicService:
                 amount = 0.0
             if amount <= 0:
                 raise ValueError("El recibo no tiene un importe válido para reenviar")
+            if include_abono_amounts:
+                pdf_bytes = bytes(raw_pdf)
+            else:
+                rebuilt = self._render_payment_receipt_pdf_bytes(
+                    appointment_id,
+                    kind=kind,
+                    receipt_amount=amount,
+                    payment_note=str(row.get("note") or "") or None,
+                    include_abono_amounts=False,
+                )
+                if not rebuilt:
+                    raise ValueError("No se pudo generar el recibo sin valor de abono")
+                pdf_bytes = rebuilt
             raw_pay = row.get("appointment_payment_id")
             pay_id: Optional[int] = None
             if raw_pay is not None:
@@ -1456,7 +1555,7 @@ class BusinessLogicService:
             if raw_cust is None:
                 raw_cust = getattr(appt, "customer_id", None)
             customer_id = int(raw_cust) if raw_cust is not None else None
-            fname = str(row.get("file_name") or f"recibo_{appointment_id}_{receipt_id}.pdf")
+            fname = PAYMENT_RECEIPT_SEND_FILENAME
             return self._payment_receipt_pdf_webhook_payload(
                 appointment_id=int(appointment_id),
                 receipt_id=int(receipt_id),
@@ -1469,10 +1568,16 @@ class BusinessLogicService:
                 payment_note=str(row.get("note") or ""),
                 file_name=fname,
                 pdf_bytes=pdf_bytes,
+                include_abono_amounts=include_abono_amounts,
             )
 
         payload = await asyncio.to_thread(_build_payload)
-        await self._async_notify("payment_receipt_pdf", payload)
+        ok = await self._async_notify("payment_receipt_pdf", payload)
+        if not ok:
+            raise ValueError(
+                "No se pudo enviar el recibo a n8n. Comprueba que n8n esté activo "
+                "y que exista el webhook de recibos (N8N_RECEIPT_WEBHOOK_URL)."
+            )
 
     async def list_surveys(self) -> list[SurveyRow]:
 
@@ -2170,9 +2275,10 @@ class BusinessLogicService:
 
         return await asyncio.to_thread(_run)
 
-    async def _async_notify(self, event: str, payload: dict[str, object]) -> None:
+    async def _async_notify(self, event: str, payload: dict[str, object]) -> bool:
         try:
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self.notifier.notify, event, payload)
+            return bool(await loop.run_in_executor(None, self.notifier.notify, event, payload))
         except Exception as e:
             logger.warning("notify n8n failed: %s", e)
+            return False

@@ -42,28 +42,32 @@ def receipt_placeholder_map(ctx: PaymentReceiptPdfContext) -> dict[str, str]:
     fecha_cita, hora_cita = _split_appointment_when(ctx.appointment_when)
     diseno = _clean_detail_for_design(ctx.detail or "")
     hist = list(ctx.payment_history or [])
-    abonos_items = "".join(
-        f"<li>{_esc(_fmt_cop(amt))}"
-        + (f" — {_esc(note)}" if note else "")
-        + "</li>"
-        for amt, note in hist
+    show_amounts = bool(getattr(ctx, "include_abono_amounts", True))
+    abonos_items = (
+        "".join(
+            f"<li>{_esc(_fmt_cop(amt))}"
+            + (f" — {_esc(note)}" if note else "")
+            + "</li>"
+            for amt, note in hist
+        )
+        if show_amounts
+        else ""
     )
-    abonos_html = f"<ul>{abonos_items}</ul>" if abonos_items else "<p>—</p>"
+    abonos_html = f"<ul>{abonos_items}</ul>" if abonos_items else ("<p>—</p>" if show_amounts else "")
 
     def abono_n(i: int) -> str:
-        if i < len(hist):
+        if show_amounts and i < len(hist):
             return _esc(_fmt_cop(hist[i][0]))
         return ""
-
     money = {
-        "precio": _fmt_cop(ctx.total_amount),
-        "total": _fmt_cop(ctx.total_amount),
-        "abono": _fmt_cop(ctx.this_payment),
-        "este_abono": _fmt_cop(ctx.this_payment),
-        "total_abonado": _fmt_cop(ctx.deposit_total_after),
-        "depositos": _fmt_cop(ctx.deposit_total_after),
-        "pendiente": _fmt_cop(ctx.pending_after),
-        "saldo": _fmt_cop(ctx.pending_after),
+        "precio": _fmt_cop(ctx.total_amount) if show_amounts else "",
+        "total": _fmt_cop(ctx.total_amount) if show_amounts else "",
+        "abono": _fmt_cop(ctx.this_payment) if show_amounts else "",
+        "este_abono": _fmt_cop(ctx.this_payment) if show_amounts else "",
+        "total_abonado": _fmt_cop(ctx.deposit_total_after) if show_amounts else "",
+        "depositos": _fmt_cop(ctx.deposit_total_after) if show_amounts else "",
+        "pendiente": _fmt_cop(ctx.pending_after) if show_amounts else "",
+        "saldo": _fmt_cop(ctx.pending_after) if show_amounts else "",
     }
     plain = {
         "nombres": ctx.client_name or "",

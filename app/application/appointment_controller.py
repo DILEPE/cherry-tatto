@@ -16,6 +16,7 @@ from app.schemas.appointment import (
     AppointmentPaymentItem,
     AppointmentPaymentPatchRequest,
     AppointmentPaymentReceiptListItem,
+    AppointmentReceiptResendRequest,
     AppointmentPaymentVerifyRequest,
     AppointmentRescheduleRequest,
     AppointmentMetaPatchRequest,
@@ -28,6 +29,12 @@ from app.schemas.common import (
     AppointmentPaymentCreatedResponse,
     MessageResponse,
 )
+
+
+def _query_flag(raw: str | None, *, default: bool) -> bool:
+    if raw is None or not str(raw).strip():
+        return default
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
 
 
 class AppointmentController(Controller):
@@ -357,9 +364,15 @@ class AppointmentController(Controller):
         appointment_id: int,
         receipt_id: int,
         state: State,
+        include_abono_amounts: str | None = Parameter(query="include_abono_amounts", default=None),
     ) -> Response:
         try:
-            pdf_bytes, filename = await state.service.get_appointment_receipt_pdf(appointment_id, receipt_id)
+            include_amounts = _query_flag(include_abono_amounts, default=True)
+            pdf_bytes, filename = await state.service.get_appointment_receipt_pdf(
+                appointment_id,
+                receipt_id,
+                include_abono_amounts=include_amounts,
+            )
             safe_name = filename.replace('"', "").replace("\r", "").replace("\n", "") or "recibo.pdf"
             return Response(
                 content=pdf_bytes,
@@ -377,11 +390,20 @@ class AppointmentController(Controller):
         appointment_id: int,
         receipt_id: int,
         state: State,
+        data: AppointmentReceiptResendRequest,
     ) -> MessageResponse:
         try:
-            await state.service.resend_appointment_payment_receipt(appointment_id, receipt_id)
-            return MessageResponse(status="success", message="Recibo reenviado a n8n.")
+            include_amounts = bool(data.include_abono_amounts)
+            await state.service.resend_appointment_payment_receipt(
+                appointment_id,
+                receipt_id,
+                include_abono_amounts=include_amounts,
+            )
+            suffix = "con valor de abono" if include_amounts else "sin valor de abono"
+            return MessageResponse(status="success", message=f"Recibo reenviado a n8n ({suffix}).")
         except ValueError as e:
-            raise HTTPException(detail=str(e), status_code=404) from e
+            msg = str(e)
+            code = 502 if "n8n" in msg.lower() else 404
+            raise HTTPException(detail=msg, status_code=code) from e
         except Exception as e:
             raise HTTPException(detail=f"Error al reenviar recibo: {str(e)}", status_code=400) from e
