@@ -4,7 +4,7 @@
 #   bash scripts/dev-stack.sh
 #   START_N8N=0 bash scripts/dev-stack.sh
 #   START_PANEL=1 bash scripts/dev-stack.sh
-#   DEV_BIND_HOST=0.0.0.0 bash scripts/dev-stack.sh
+#   DEV_BIND_HOST=127.0.0.1 bash scripts/dev-stack.sh   # solo este equipo
 #
 set -euo pipefail
 
@@ -16,7 +16,7 @@ PANEL_PORT="${PANEL_PORT:-4200}"
 N8N_PORT="${N8N_PORT:-5678}"
 START_N8N="${START_N8N:-auto}"
 N8N_DOCKER_NAME="${N8N_DOCKER_NAME:-cherry-n8n-local}"
-BIND_HOST="${DEV_BIND_HOST:-127.0.0.1}"
+BIND_HOST="${DEV_BIND_HOST:-0.0.0.0}"
 
 _activate_venv() {
   if [[ -f ".venv/Scripts/activate" ]]; then source ".venv/Scripts/activate"
@@ -101,9 +101,13 @@ _should_start_panel() {
 if _should_start_panel; then
   PANEL_ROOT="$(_resolve_panel_root || true)"
   if [[ -n "$PANEL_ROOT" ]] && command -v npm >/dev/null 2>&1; then
-    (cd "$PANEL_ROOT" && npm start) &
+    PANEL_EXTRA=()
+    if [[ "$BIND_HOST" != "127.0.0.1" && "$BIND_HOST" != "localhost" ]]; then
+      PANEL_EXTRA+=(--allowed-hosts all)
+    fi
+    (cd "$PANEL_ROOT" && npm start -- --host "$BIND_HOST" --port "$PANEL_PORT" "${PANEL_EXTRA[@]}") &
     PANEL_PID=$!
-    echo "[ok] Panel Angular → http://127.0.0.1:${PANEL_PORT}"
+    echo "[ok] Panel Angular → http://127.0.0.1:${PANEL_PORT} (host ${BIND_HOST})"
   else
     echo "[aviso] START_PANEL=1 pero no se encontró proyecto Angular." >&2
   fi
@@ -111,7 +115,7 @@ fi
 
 echo "[ok] API Litestar → http://127.0.0.1:${API_PORT} (bind ${BIND_HOST})"
 if [[ -z "${PANEL_PID:-}" ]]; then
-  echo "[info] Panel: cd cherry_tattoo_angular && npm start" >&2
+  echo "[info] Panel: cd cherry_tattoo_angular && npm start -- --host ${BIND_HOST} --port ${PANEL_PORT}" >&2
 fi
 echo "[info] Ctrl+C detiene la API." >&2
 

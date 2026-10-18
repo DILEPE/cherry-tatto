@@ -21,4 +21,4 @@ else {
     Write-Host "Desde la LAN:      http://<tu-IPv4>:$port  (panel) y :$apiPort (API)" -ForegroundColor Yellow
 }
 Write-Host ""
-Write-Host "Arranca con DEV_BIND_HOST=0.0.0.0 y proxy del panel apuntando a la API." -ForegroundColor DarkGray
+Write-Host "dev-stack y deploy escuchan en 0.0.0.0 por defecto. Solo este PC: DEV_BIND_HOST=127.0.0.1" -ForegroundColor DarkGray

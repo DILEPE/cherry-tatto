@@ -1,6 +1,7 @@
 @echo off
 setlocal EnableExtensions
 title Cherry Tattoo — sincronizar main (API + panel) y reiniciar
+REM Al reiniciar, API y panel escuchan en 0.0.0.0 (LAN). Solo este PC: set DEV_BIND_HOST=127.0.0.1
 
 REM Raíz del proyecto backend (carpeta donde está este BAT).
 set "ROOT=%~dp0"

@@ -5,7 +5,8 @@
 #   $env:START_N8N = "0"; .\scripts\dev-stack.ps1
 #   $env:START_PANEL = "1"; .\scripts\dev-stack.ps1   # npm start en cherry_tattoo_angular
 #   .\scripts\dev-stack.ps1 -N8nMode none
-# Red local API: $env:DEV_BIND_HOST='0.0.0.0'
+# Red local: API y panel escuchan en 0.0.0.0 por defecto.
+# Solo este PC: $env:DEV_BIND_HOST='127.0.0.1'
 
 [CmdletBinding()]
 param(
@@ -125,7 +126,23 @@ elseif ($N8nMode -eq "auto") {
 }
 
 $BindHost = $env:DEV_BIND_HOST
-if ([string]::IsNullOrWhiteSpace($BindHost)) { $BindHost = "127.0.0.1" }
+if ([string]::IsNullOrWhiteSpace($BindHost)) { $BindHost = "0.0.0.0" }
+
+function Write-LanUrls {
+    if ($BindHost -eq "127.0.0.1" -or $BindHost -eq "localhost") { return }
+    try {
+        $ips = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.IPAddress -notmatch '^127\.' -and
+                $_.IPAddress -notmatch '^169\.254\.'
+            } |
+            Select-Object -ExpandProperty IPAddress -Unique
+        foreach ($ip in $ips) {
+            Write-Host "[lan] Panel http://${ip}:$PanelPort   API http://${ip}:$ApiPort" -ForegroundColor Cyan
+        }
+    }
+    catch { }
+}
 
 function Resolve-PanelRoot {
     if (-not [string]::IsNullOrWhiteSpace($env:CHERRY_ANGULAR_ROOT)) {
@@ -150,8 +167,12 @@ if (Should-StartPanel) {
     if ($panelRoot) {
         $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
         if ($npm) {
-            $panelProc = Start-Process -PassThru -WindowStyle Minimized -FilePath $npm.Source -ArgumentList @("start") -WorkingDirectory $panelRoot
-            Write-Host "[ok] Panel Angular → http://127.0.0.1:$PanelPort (proxy API :$ApiPort)" -ForegroundColor Green
+            $panelArgs = @("start", "--", "--host", $BindHost, "--port", "$PanelPort")
+            if ($BindHost -ne "127.0.0.1" -and $BindHost -ne "localhost") {
+                $panelArgs += @("--allowed-hosts", "all")
+            }
+            $panelProc = Start-Process -PassThru -WindowStyle Minimized -FilePath $npm.Source -ArgumentList $panelArgs -WorkingDirectory $panelRoot
+            Write-Host "[ok] Panel Angular → http://127.0.0.1:$PanelPort (host $BindHost, proxy API :$ApiPort)" -ForegroundColor Green
         }
     }
     else {
@@ -161,8 +182,9 @@ if (Should-StartPanel) {
 
 $apiArgs = @("-m", "uvicorn", "app.main:app", "--host", $BindHost, "--port", "$ApiPort")
 Write-Host "[ok] API Litestar → http://127.0.0.1:$ApiPort (bind $BindHost)" -ForegroundColor Green
+Write-LanUrls
 if (-not $panelProc) {
-    Write-Host "[info] Panel Angular: en otra terminal, cd cherry_tattoo_angular && npm start" -ForegroundColor DarkGray
+    Write-Host "[info] Panel Angular: en otra terminal, cd cherry_tattoo_angular && npx.cmd ng serve --host $BindHost --port $PanelPort" -ForegroundColor DarkGray
     Write-Host "[info] O: `$env:START_PANEL='1'; .\scripts\dev-stack.ps1" -ForegroundColor DarkGray
 }
 Write-Host "[info] Ctrl+C detiene la API. Si se abrió el panel en otra ventana, ciérrala aparte si sigue en :$PanelPort." -ForegroundColor DarkGray
