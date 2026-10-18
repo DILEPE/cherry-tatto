@@ -75,12 +75,16 @@ class AppointmentController(Controller):
             query="from_date",
             description="Solo citas con fecha de cita >= este día (YYYY-MM-DD).",
         ),
+        assigned_store_id: Optional[int] = Parameter(
+            default=None, ge=1, query="assigned_store_id"
+        ),
     ) -> list[AppointmentListItem]:
         """Lista citas; opcionalmente solo las asignadas a un profesional del panel."""
         try:
             return await state.service.list_appointments(
                 assigned_panel_user_id=assigned_panel_user_id,
                 from_date=self._optional_from_date(from_date),
+                assigned_store_id=assigned_store_id,
             )
         except HTTPException:
             raise
@@ -107,6 +111,9 @@ class AppointmentController(Controller):
             query="from_date",
             description="Solo citas con fecha de cita >= este día (YYYY-MM-DD).",
         ),
+        assigned_store_id: Optional[int] = Parameter(
+            default=None, ge=1, query="assigned_store_id"
+        ),
     ) -> AppointmentSearchResponse:
         try:
             return await state.service.search_appointments(
@@ -116,6 +123,7 @@ class AppointmentController(Controller):
                 offset=offset,
                 assigned_panel_user_id=assigned_panel_user_id,
                 from_date=self._optional_from_date(from_date),
+                assigned_store_id=assigned_store_id,
             )
         except HTTPException:
             raise

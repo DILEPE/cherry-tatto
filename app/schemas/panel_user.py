@@ -41,6 +41,7 @@ class PanelUserAssignable(BaseModel):
     first_name: str
     last_name: str
     role: str
+    store_id: Optional[int] = None
 
 
 def _norm_optional_str(v: Optional[str], *, max_len: int) -> Optional[str]:
@@ -123,6 +124,8 @@ class PanelUserSessionPublic(BaseModel):
     id: int
     username: str
     role: str
+    store_id: Optional[int] = None
+    store_name: Optional[str] = None
     session_expires_at: float
 
 
