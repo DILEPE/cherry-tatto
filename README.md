@@ -179,11 +179,12 @@ Otros puertos: `API_PORT`, `PANEL_PORT` (por defecto 4200) y `N8N_PORT`.
 
 ### Acceso desde la red local y firewall (Windows)
 
-Por defecto la API escucha en **`127.0.0.1`**. Para acceso en LAN:
+`dev-stack` y `deploy-if-main-updated` abren API y panel en **`0.0.0.0`** por defecto (otros equipos en la LAN pueden entrar).
 
-1. Arranca la API con **`DEV_BIND_HOST=0.0.0.0`** y el panel Angular con `ng serve --host 0.0.0.0` (o el proxy configurado en tu entorno).
+1. Arranca con `Launch-Cherry-Dev-Stack.bat` o `.\scripts\dev-stack.ps1`. El panel usa `ng serve --host 0.0.0.0`.
 2. URLs: `http://<IPv4-de-esta-PC>:4200` (panel) y `:5000` (API). Ayuda: `.\scripts\show-lan-url.ps1`
-3. **Firewall:** permite TCP en **5000**, **4200** y **5678** (n8n) si aplica.
+3. **Firewall (una vez):** doble clic en [`Allow-Cherry-Lan-Firewall.bat`](Allow-Cherry-Lan-Firewall.bat) (pide administrador). Abre TCP **4200**, **5000** y **5678**, y muestra la red/IP para conectar.
+4. Solo este PC: `$env:DEV_BIND_HOST='127.0.0.1'` antes de arrancar.
 
 ### 6. Verificación rápida
 
