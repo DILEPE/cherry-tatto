@@ -45,6 +45,7 @@ from app.domain.panel_passwords import hash_password, verify_password
 from app.domain.panel_session import panel_session_expires_at_epoch
 from app.domain.payment_receipt_pdf import (
     PAYMENT_RECEIPT_N8N_TEMPLATE_KEY,
+    PAYMENT_RECEIPT_SEND_FILENAME,
     PaymentReceiptPdfContext,
 )
 from app.domain.payment_receipt_template import (
@@ -203,7 +204,7 @@ class BusinessLogicService:
                     appointment_payment_id=appointment_payment_id,
                     amount=float(receipt_amount),
                     payment_note=payment_note or "",
-                    file_name=fname or "orden_trabajo.pdf",
+                    file_name=PAYMENT_RECEIPT_SEND_FILENAME,
                     pdf_bytes=pdf_b,
                 )
                 await self._async_notify("payment_receipt_pdf", payload)
@@ -319,7 +320,7 @@ class BusinessLogicService:
         pdf_bytes = self._pdf_bytes_from_receipt_context(ctx)
         if not pdf_bytes:
             return None, None, None
-        file_name = f"orden_trabajo_cita_{appointment_id}_{int(datetime.now().timestamp() * 1000)}.pdf"
+        file_name = PAYMENT_RECEIPT_SEND_FILENAME
         linked_pay_id: Optional[int] = None
         if appointment_payment_id is not None:
             try:
@@ -1471,7 +1472,7 @@ class BusinessLogicService:
         row = await asyncio.to_thread(_fetch)
         if row is None:
             raise ValueError("Recibo no encontrado")
-        fn = str(row.get("file_name") or "recibo.pdf")
+        fn = PAYMENT_RECEIPT_SEND_FILENAME
         if include_abono_amounts:
             raw_pdf = row.get("pdf")
             if raw_pdf is None:
@@ -1554,7 +1555,7 @@ class BusinessLogicService:
             if raw_cust is None:
                 raw_cust = getattr(appt, "customer_id", None)
             customer_id = int(raw_cust) if raw_cust is not None else None
-            fname = str(row.get("file_name") or f"recibo_{appointment_id}_{receipt_id}.pdf")
+            fname = PAYMENT_RECEIPT_SEND_FILENAME
             return self._payment_receipt_pdf_webhook_payload(
                 appointment_id=int(appointment_id),
                 receipt_id=int(receipt_id),

@@ -9,6 +9,8 @@ from typing import Optional
 
 import requests
 
+from app.domain.payment_receipt_pdf import PAYMENT_RECEIPT_SEND_FILENAME
+
 logger = logging.getLogger(__name__)
 
 
@@ -172,12 +174,15 @@ class NotificationService:
                     pdf_bytes = b""
             if pdf_bytes:
                 meta = {k: v for k, v in data.items() if k not in ("pdf_base64", "mime_type")}
-                fname = str(
-                    meta.get("file_name")
-                    or meta.get("fileName")
-                    or meta.get("source_filename")
-                    or ("consentimiento.pdf" if event == "contract_consent_pdf" else "orden_trabajo.pdf")
-                ).strip()
+                if event == "payment_receipt_pdf":
+                    fname = PAYMENT_RECEIPT_SEND_FILENAME
+                else:
+                    fname = str(
+                        meta.get("file_name")
+                        or meta.get("fileName")
+                        or meta.get("source_filename")
+                        or ("consentimiento.pdf" if event == "contract_consent_pdf" else "orden_trabajo.pdf")
+                    ).strip()
                 # Forzar consistencia: lo que recibe n8n como nombre del binario y en metadatos.
                 meta["file_name"] = fname
                 meta["fileName"] = fname

@@ -39,6 +39,7 @@ _SERVICE_WORD_LEADING = re.compile(
 )
 
 PAYMENT_RECEIPT_N8N_TEMPLATE_KEY = "orden_trabajo_rock_city"
+PAYMENT_RECEIPT_SEND_FILENAME = "ORDEN DE TRABAJO.pdf"
 
 _PAGE = fitz.paper_rect("a4")
 PAGE_W = _PAGE.width
