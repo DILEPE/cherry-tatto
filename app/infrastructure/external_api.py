@@ -35,6 +35,18 @@ def _payment_receipt_amount_positive(data: dict[str, object]) -> bool:
         return False
 
 
+def _payment_receipt_has_pdf(data: dict[str, object]) -> bool:
+    b64 = data.get("pdf_base64")
+    return isinstance(b64, str) and bool(b64.strip())
+
+
+def _should_send_payment_receipt_pdf(data: dict[str, object]) -> bool:
+    """Envía si hay PDF. El envío 'sin abono' oculta cajas pero el movimiento sigue siendo válido."""
+    if _payment_receipt_has_pdf(data):
+        return True
+    return _payment_receipt_amount_positive(data)
+
+
 class NotificationService:
     """Servicio para comunicarse con webhooks de n8n.
 
@@ -117,10 +129,13 @@ class NotificationService:
                 logger.exception("n8n JSON event=%s hacia %s", event, url)
                 return False
 
-        if event == "payment_receipt_pdf" and not _payment_receipt_amount_positive(data):
+        if event == "payment_receipt_pdf" and not _should_send_payment_receipt_pdf(data):
             logger.warning(
-                "n8n: no se envía payment_receipt_pdf porque amount<=0 o no numérico (payload=%s)",
-                {k: data.get(k) for k in ("appointment_id", "amount", "kind")},
+                "n8n: no se envía payment_receipt_pdf (sin PDF y amount<=0) payload=%s",
+                {
+                    k: data.get(k)
+                    for k in ("appointment_id", "amount", "kind", "include_abono_amounts")
+                },
             )
             return False
 
@@ -176,10 +191,11 @@ class NotificationService:
                     form_data[key] = _form_field_str(val)
                 try:
                     logger.info(
-                        "n8n %s (multipart): PDF %s (%s bytes) → %s",
+                        "n8n %s (multipart): PDF %s (%s bytes) include_abono_amounts=%s → %s",
                         event,
                         fname,
                         len(pdf_bytes),
+                        data.get("include_abono_amounts"),
                         url,
                     )
                     response = requests.post(

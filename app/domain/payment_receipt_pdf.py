@@ -358,6 +358,7 @@ def _field_inline(
     fs_val: float = 9.0,
     val_bold: bool = False,
     radius_pct: float = 0.42,
+    placeholder_if_empty: str = "-",
 ) -> None:
     """Campo blanco redondeado con la etiqueta dentro a la izquierda y el valor a la derecha."""
     _draw_round_rect(page, rect, radius_pct=radius_pct, fill=_WHITE, stroke=_BOX_EDGE, width=0.28)
@@ -374,15 +375,19 @@ def _field_inline(
         align=fitz.TEXT_ALIGN_LEFT,
     )
     fn = "hebo" if val_bold else "helv"
-    _textbox_shrink_to_fit(
-        page,
-        rv,
-        (value or "").strip() or "-",
-        fontsize=fs_val,
-        fontname=fn,
-        color=_INK,
-        align=fitz.TEXT_ALIGN_LEFT,
-    )
+    shown = (value or "").strip()
+    if not shown and placeholder_if_empty:
+        shown = placeholder_if_empty
+    if shown:
+        _textbox_shrink_to_fit(
+            page,
+            rv,
+            shown,
+            fontsize=fs_val,
+            fontname=fn,
+            color=_INK,
+            align=fitz.TEXT_ALIGN_LEFT,
+        )
 
 
 def _header_white_chip(page: fitz.Page, rect: fitz.Rect, text: str, *, fontsize: float = 10.0, bold: bool = True) -> None:
@@ -653,6 +658,8 @@ class PaymentReceiptPdfContext:
     payment_history: list[tuple[float, Optional[str]]] = field(default_factory=list)
     # HTML de plantilla activa `recibo` (placeholders ya sustituidos). Se pinta bajo la franja ATENCIÓN.
     contract_html: Optional[str] = None
+    # False: oculta las cajas PRECIO / ABONO 1–3 (orden sin importes).
+    include_abono_amounts: bool = True
 
 
 def build_payment_receipt_pdf(ctx: PaymentReceiptPdfContext) -> bytes:
@@ -670,6 +677,7 @@ def build_payment_receipt_pdf(ctx: PaymentReceiptPdfContext) -> bytes:
     gap_mid = 9.0
     banner_h = 34.0
 
+    show_amounts = bool(ctx.include_abono_amounts)
     inner_top = header_h + gray_pad_v
     y1 = inner_top
     y2 = y1 + row_h + row_gap
@@ -677,7 +685,10 @@ def build_payment_receipt_pdf(ctx: PaymentReceiptPdfContext) -> bytes:
     y4 = y3 + dis_h + row_gap
     y5 = y4 + row_h
     sys_top = y5 + 6.0
-    form_bottom = sys_top + 13.0 + gray_pad_v
+    if show_amounts:
+        form_bottom = sys_top + 13.0 + gray_pad_v
+    else:
+        form_bottom = y3 + dis_h + gray_pad_v
 
     gray_top = header_h
     page.draw_rect(fitz.Rect(0, gray_top, PAGE_W, form_bottom), color=_FORM_GRAY, fill=_FORM_GRAY, width=0)
@@ -791,48 +802,47 @@ def build_payment_receipt_pdf(ctx: PaymentReceiptPdfContext) -> bytes:
         radius_pct=0.28,
     )
 
-    bw4 = (inner_w - 3 * gap_mid) / 4
-    amounts = [float(a) for a, _ in ctx.payment_history]
-    if not amounts and float(ctx.this_payment or 0) > 0:
-        amounts = [float(ctx.this_payment)]
-    a1s, a2s, a3s = _split_abono_amounts_for_boxes(amounts)
-    fs_ab = 7.85 if len(amounts) > 3 else 8.85
-
-    specs = [
-        ("PRECIO $", _fmt_cop(ctx.total_amount), True),
-        ("ABONO 1 $", _fmt_money_cell(a1s), False),
-        ("ABONO 2 $", _fmt_money_cell(a2s), False),
-        ("ABONO 3 $", _fmt_money_cell(a3s), False),
-    ]
-    for i, (lab, val, bold_price) in enumerate(specs):
-        x0 = mx + i * (bw4 + gap_mid)
-        rr = fitz.Rect(x0, y4, x0 + bw4, y4 + row_h)
-        lw = 52.0 if i else 50.0
-        _field_inline(
-            page,
-            rr,
-            lab,
-            val,
-            label_width=lw,
-            fs_label=7.35,
-            fs_val=fs_ab if i else 9.0,
-            val_bold=bold_price,
-            radius_pct=0.4,
+    if show_amounts:
+        bw4 = (inner_w - 3 * gap_mid) / 4
+        amounts = [float(a) for a, _ in ctx.payment_history]
+        if not amounts and float(ctx.this_payment or 0) > 0:
+            amounts = [float(ctx.this_payment)]
+        a1s, a2s, a3s = _split_abono_amounts_for_boxes(amounts)
+        fs_ab = 7.85 if len(amounts) > 3 else 8.85
+        specs = [
+            ("PRECIO $", _fmt_cop(ctx.total_amount), True),
+            ("ABONO 1 $", _fmt_money_cell(a1s), False),
+            ("ABONO 2 $", _fmt_money_cell(a2s), False),
+            ("ABONO 3 $", _fmt_money_cell(a3s), False),
+        ]
+        for i, (lab, val, bold_price) in enumerate(specs):
+            x0 = mx + i * (bw4 + gap_mid)
+            rr = fitz.Rect(x0, y4, x0 + bw4, y4 + row_h)
+            lw = 52.0 if i else 50.0
+            _field_inline(
+                page,
+                rr,
+                lab,
+                val,
+                label_width=lw,
+                fs_label=7.35,
+                fs_val=fs_ab if i else 9.0,
+                val_bold=bold_price,
+                radius_pct=0.4,
+            )
+        sys_line = (
+            f"{ctx.kind_label} · Abonado acum.: {_fmt_cop(ctx.deposit_total_after)} · "
+            f"Pendiente: {_fmt_cop(ctx.pending_after)} · Emitido {_issued_dd_mm_yyyy(ctx.issued_at)} "
+            f"{_issued_time_hm(ctx.issued_at)}"
         )
-
-    sys_line = (
-        f"{ctx.kind_label} · Abonado acum.: {_fmt_cop(ctx.deposit_total_after)} · "
-        f"Pendiente: {_fmt_cop(ctx.pending_after)} · Emitido {_issued_dd_mm_yyyy(ctx.issued_at)} "
-        f"{_issued_time_hm(ctx.issued_at)}"
-    )
-    page.insert_textbox(
-        fitz.Rect(mx + 2, sys_top, PAGE_W - mx - 2, sys_top + 13),
-        sys_line,
-        fontsize=6.35,
-        fontname="helv",
-        color=(0.72, 0.72, 0.72),
-        align=fitz.TEXT_ALIGN_LEFT,
-    )
+        page.insert_textbox(
+            fitz.Rect(mx + 2, sys_top, PAGE_W - mx - 2, sys_top + 13),
+            sys_line,
+            fontsize=6.35,
+            fontname="helv",
+            color=(0.72, 0.72, 0.72),
+            align=fitz.TEXT_ALIGN_LEFT,
+        )
 
     banner_y0 = form_bottom
     page.draw_rect(fitz.Rect(0, banner_y0, PAGE_W, banner_y0 + banner_h), color=_RED_STRIP, fill=_RED_STRIP, width=0)
