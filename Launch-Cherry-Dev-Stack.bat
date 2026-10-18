@@ -35,7 +35,8 @@ exit /b 1
 
 :found
 cd /d "%ROOT%"
-REM Panel Angular: repo hermano cherry_tattoo_angular (npm start, puerto 4200).
+REM Panel Angular: repo hermano cherry_tattoo_angular (ng serve --host 0.0.0.0, puerto 4200).
+REM LAN activa por defecto. Solo este PC: set DEV_BIND_HOST=127.0.0.1
 REM Solo API sin panel: set START_PANEL=0 antes de ejecutar este BAT.
 REM Ruta distinta al panel: set CHERRY_ANGULAR_ROOT=C:\ruta\cherry_tattoo_angular
 if not defined START_PANEL set "START_PANEL=1"

@@ -398,6 +398,17 @@ class AppointmentSearchResponse(BaseModel):
     offset: int
 
 
+class AppointmentReceiptResendRequest(BaseModel):
+    """Opciones al reenviar el recibo por WhatsApp / n8n."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    include_abono_amounts: bool = Field(
+        default=True,
+        description="True: PDF con cajas PRECIO y ABONO. False: oculta esas cajas.",
+    )
+
+
 class AppointmentPaymentReceiptListItem(BaseModel):
     """Metadatos de un recibo PDF (sin el binario)."""
 

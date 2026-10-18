@@ -11,7 +11,7 @@
 #   SKIP_FRONTEND_SYNC     "1" para no tocar el repo Angular
 #   SKIP_BACKEND_SYNC      "1" para no tocar el repo API
 #   API_PORT               Puerto uvicorn (por defecto: 5000)
-#   DEV_BIND_HOST          Host uvicorn (por defecto: 127.0.0.1)
+#   DEV_BIND_HOST          Host de API y panel (por defecto: 0.0.0.0, red local)
 #   PANEL_PORT             Puerto ng serve (por defecto: 4200)
 #   CHERRY_PYTHON          python.exe del venv
 #   N8N_CONTAINER_NAME     Contenedor Docker n8n (por defecto: cherry-n8n-local)
@@ -132,6 +132,13 @@ function Sync-GitBranch {
     }
 }
 
+function Get-BindHost {
+    if (-not [string]::IsNullOrWhiteSpace($env:DEV_BIND_HOST)) {
+        return $env:DEV_BIND_HOST.Trim()
+    }
+    return "0.0.0.0"
+}
+
 function Get-VenvPython {
     if (-not [string]::IsNullOrWhiteSpace($env:CHERRY_PYTHON) -and (Test-Path -LiteralPath $env:CHERRY_PYTHON)) {
         return (Resolve-Path -LiteralPath $env:CHERRY_PYTHON).Path
@@ -170,7 +177,7 @@ function Start-UvicornCherry {
         return
     }
     $port = if ($env:API_PORT) { [int]$env:API_PORT } else { 5000 }
-    $bind = if ($env:DEV_BIND_HOST) { $env:DEV_BIND_HOST.Trim() } else { "127.0.0.1" }
+    $bind = Get-BindHost
     $args = @("-m", "uvicorn", "app.main:app", "--host", $bind, "--port", "$port")
     Write-Info "Iniciando API en http://${bind}:${port} ..."
     Start-Process -WindowStyle Minimized -FilePath $py -ArgumentList $args -WorkingDirectory $RepoRoot
@@ -245,9 +252,14 @@ function Start-AngularPanel([string]$AngularRoot) {
         return
     }
     $panelPort = if ($env:PANEL_PORT) { [int]$env:PANEL_PORT } else { 4200 }
-    Write-Info "Iniciando panel Angular (npm start) en $AngularRoot (puerto $panelPort)..."
+    $bind = Get-BindHost
+    Write-Info "Iniciando panel Angular (npm start --host $bind) en $AngularRoot (puerto $panelPort)..."
     $env:PORT = "$panelPort"
-    Start-Process -WindowStyle Minimized -FilePath $npm.Source -ArgumentList @("start", "--", "--port", "$panelPort") -WorkingDirectory $AngularRoot
+    $panelArgs = @("start", "--", "--host", $bind, "--port", "$panelPort")
+    if ($bind -ne "127.0.0.1" -and $bind -ne "localhost") {
+        $panelArgs += @("--allowed-hosts", "all")
+    }
+    Start-Process -WindowStyle Minimized -FilePath $npm.Source -ArgumentList $panelArgs -WorkingDirectory $AngularRoot
 }
 
 # --- Sync repos ---
@@ -327,5 +339,5 @@ if ($frontendStatus -eq "Updated" -and $angularRoot) {
     }
 }
 
-Write-Ok ("Listo (backend={0}, frontend={1})." -f $backendStatus, $frontendStatus)
+Write-Ok ("Listo (backend={0}, frontend={1}, bind={2})." -f $backendStatus, $frontendStatus, (Get-BindHost))
 exit 0
