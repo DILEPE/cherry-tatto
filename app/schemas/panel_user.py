@@ -112,6 +112,22 @@ class PanelUserLogin(BaseModel):
     password: str = Field(..., min_length=1, max_length=72)
 
 
+class PanelUserOtLogin(BaseModel):
+    """Login de tableta/cliente con código OTP de 6 dígitos."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    code: str = Field(..., min_length=6, max_length=6)
+
+    @field_validator("code")
+    @classmethod
+    def ot_digits(cls, v: str) -> str:
+        s = (v or "").strip()
+        if not re.fullmatch(r"\d{6}", s):
+            raise ValueError("El código OTP debe tener exactamente 6 dígitos numéricos.")
+        return s
+
+
 class PanelUserLoginResponse(BaseModel):
     """Respuesta de POST /panel-users/login (Streamlit lee `user`)."""
 
@@ -127,6 +143,8 @@ class PanelUserSessionPublic(BaseModel):
     store_id: Optional[int] = None
     store_name: Optional[str] = None
     session_expires_at: float
+    appointment_id: Optional[int] = None
+    customer_id: Optional[int] = None
 
 
 class PanelUserRegisteredResponse(BaseModel):

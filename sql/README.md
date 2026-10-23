@@ -30,6 +30,7 @@ Esta carpeta contiene scripts SQL para crear la estructura base y aplicar cambio
 24. `031_create_reminders_table.sql` (tabla `reminders` para recordatorios de cicatrización por WhatsApp)
 25. `032_add_control_label_to_reminders.sql` (columna `control_label` en `reminders` para el parámetro de WhatsApp)
 26. `033_alter_type_service_enum.sql` (`reminders.service_type`: `piercing` | `tatuaje`, alineado con n8n)
+27. `034_appointment_signing_ot.sql` (código OTP de 6 dígitos para firma de contrato por el cliente)
 
 > Nota: `001_customers_and_appointments_fk.sql` queda como referencia histórica porque la estructura base ya está consolidada en `000_initial_schema_cherry_tatto.sql`.
 
@@ -61,6 +62,7 @@ Si tu base ya existe y solo quieres actualizar:
 22. `031_create_reminders_table.sql` (tabla `reminders` para recordatorios de cicatrización por WhatsApp)
 23. `032_add_control_label_to_reminders.sql` (columna `control_label` en `reminders` para el parámetro de WhatsApp)
 24. `033_alter_type_service_enum.sql` (`reminders.service_type`: `piercing` | `tatuaje`, alineado con n8n)
+25. `034_appointment_signing_ot.sql` (código OTP de 6 dígitos para firma de contrato por el cliente)
 
 ## Recuperación rápida
 

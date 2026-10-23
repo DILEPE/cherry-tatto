@@ -2148,3 +2148,120 @@ class AppointmentRepository:
         finally:
             if conn:
                 conn.close()
+
+    def get_active_signing_ot(self, appointment_id: int) -> Optional[dict[str, object]]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT ot.id, ot.appointment_id, ot.customer_id, ot.code,
+                       ot.created_at, a.customer_name
+                FROM appointment_signing_ot ot
+                INNER JOIN appointments a ON a.id = ot.appointment_id
+                WHERE ot.appointment_id = %s
+                  AND ot.consumed_at IS NULL
+                  AND ot.revoked_at IS NULL
+                ORDER BY ot.id DESC
+                LIMIT 1
+                """,
+                (int(appointment_id),),
+            )
+            row = cursor.fetchone()
+            return row if isinstance(row, dict) else None
+        finally:
+            if conn:
+                conn.close()
+
+    def get_active_signing_ot_by_code(self, code: str) -> Optional[dict[str, object]]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                SELECT ot.id, ot.appointment_id, ot.customer_id, ot.code,
+                       ot.created_at, a.customer_name, a.status
+                FROM appointment_signing_ot ot
+                INNER JOIN appointments a ON a.id = ot.appointment_id
+                WHERE ot.code = %s
+                  AND ot.consumed_at IS NULL
+                  AND ot.revoked_at IS NULL
+                LIMIT 1
+                """,
+                (code,),
+            )
+            row = cursor.fetchone()
+            return row if isinstance(row, dict) else None
+        finally:
+            if conn:
+                conn.close()
+
+    def revoke_active_signing_ot(self, appointment_id: int) -> None:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                """
+                UPDATE appointment_signing_ot
+                SET revoked_at = CURRENT_TIMESTAMP
+                WHERE appointment_id = %s
+                  AND consumed_at IS NULL
+                  AND revoked_at IS NULL
+                """,
+                (int(appointment_id),),
+            )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
+    def insert_signing_ot(self, appointment_id: int, customer_id: int, code: str) -> dict[str, object]:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn, dictionary=True)
+            cursor.execute(
+                """
+                INSERT INTO appointment_signing_ot (appointment_id, customer_id, code)
+                VALUES (%s, %s, %s)
+                """,
+                (int(appointment_id), int(customer_id), code),
+            )
+            new_id = int(cursor.lastrowid)
+            conn.commit()
+            cursor.execute(
+                """
+                SELECT ot.id, ot.appointment_id, ot.customer_id, ot.code,
+                       ot.created_at, a.customer_name
+                FROM appointment_signing_ot ot
+                INNER JOIN appointments a ON a.id = ot.appointment_id
+                WHERE ot.id = %s
+                LIMIT 1
+                """,
+                (new_id,),
+            )
+            row = cursor.fetchone()
+            if not isinstance(row, dict):
+                raise RuntimeError("No se pudo leer el código OTP recién creado.")
+            return row
+        finally:
+            if conn:
+                conn.close()
+
+    def consume_signing_ot_for_appointment(self, appointment_id: int) -> None:
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                """
+                UPDATE appointment_signing_ot
+                SET consumed_at = CURRENT_TIMESTAMP
+                WHERE appointment_id = %s
+                  AND consumed_at IS NULL
+                  AND revoked_at IS NULL
+                """,
+                (int(appointment_id),),
+            )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()

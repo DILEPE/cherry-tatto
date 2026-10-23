@@ -398,6 +398,17 @@ class AppointmentSearchResponse(BaseModel):
     offset: int
 
 
+class AppointmentSigningOtResponse(BaseModel):
+    """Código OT activo (o recién generado) para firma del cliente."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    appointment_id: int
+    customer_id: Optional[int] = None
+    customer_name: Optional[str] = None
+    code: Optional[str] = None
+
+
 class AppointmentReceiptResendRequest(BaseModel):
     """Opciones al reenviar el recibo por WhatsApp / n8n."""
 
