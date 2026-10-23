@@ -3,6 +3,7 @@ import base64
 import json
 import logging
 import math
+import secrets
 from datetime import datetime, date
 from typing import Any, Optional
 
@@ -645,6 +646,7 @@ class BusinessLogicService:
             )
 
         self.repository.create_contract(data)
+        self.repository.consume_signing_ot_for_appointment(data.appointment_id)
 
         if _is_non_empty_signature_blob(data.artist_signature):
             self.repository.update_status(data.appointment_id, "Finalizada")
@@ -2215,6 +2217,137 @@ class BusinessLogicService:
                 store_id=store_id,
                 store_name=store_name,
                 session_expires_at=panel_session_expires_at_epoch(),
+            )
+
+        return await asyncio.to_thread(_run)
+
+    @staticmethod
+    def _signing_ot_public(row: dict[str, object]) -> dict[str, object]:
+        name = str(row.get("customer_name") or "").strip() or None
+        cid_raw = row.get("customer_id")
+        try:
+            customer_id = int(cid_raw) if cid_raw is not None else None
+        except (TypeError, ValueError):
+            customer_id = None
+        if customer_id is not None and customer_id <= 0:
+            customer_id = None
+        code = str(row.get("code") or "").strip() or None
+        return {
+            "appointment_id": int(row["appointment_id"]),
+            "customer_id": customer_id,
+            "customer_name": name,
+            "code": code,
+        }
+
+    async def get_appointment_signing_ot(self, appointment_id: int) -> dict[str, object]:
+        def _run() -> dict[str, object]:
+            appt = self.repository.get_by_id(appointment_id)
+            if not appt:
+                raise ValueError("Cita no encontrada.")
+            row = self.repository.get_active_signing_ot(appointment_id)
+            if row:
+                return BusinessLogicService._signing_ot_public(row)
+            cid = getattr(appt, "customer_id", None)
+            try:
+                customer_id = int(cid) if cid is not None else None
+            except (TypeError, ValueError):
+                customer_id = None
+            if customer_id is not None and customer_id <= 0:
+                customer_id = None
+            return {
+                "appointment_id": int(appointment_id),
+                "customer_id": customer_id,
+                "customer_name": str(getattr(appt, "name", "") or "").strip() or None,
+                "code": None,
+            }
+
+        return await asyncio.to_thread(_run)
+
+    async def generate_appointment_signing_ot(self, appointment_id: int) -> dict[str, object]:
+        def _run() -> dict[str, object]:
+            appt = self.repository.get_by_id(appointment_id)
+            if not appt:
+                raise ValueError("Cita no encontrada.")
+            if not appointment_requires_contract(appt):
+                raise ValueError(
+                    "Las citas de limpieza o cambio de joya no requieren código OTP ni contrato."
+                )
+            status = str(getattr(appt, "status", "") or "").strip().lower()
+            if status in {"cancelada", "finalizada"}:
+                raise ValueError("No se puede generar un código OTP para una cita cancelada o finalizada.")
+            cid = getattr(appt, "customer_id", None)
+            try:
+                customer_id = int(cid) if cid is not None else 0
+            except (TypeError, ValueError):
+                customer_id = 0
+            if customer_id <= 0:
+                raise ValueError("La cita no tiene cliente asociado.")
+            ok_pay, pay_err = appointment_must_be_fully_paid_for_contract(
+                total_amount=getattr(appt, "total_amount", None),
+                deposit=getattr(appt, "deposit", None),
+                pending_balance=getattr(appt, "pending_balance", None),
+            )
+            if not ok_pay:
+                raise ValueError(
+                    pay_err or "El depósito debe estar completo para generar el código OTP."
+                )
+            if self.repository.has_contract_for_appointment(appointment_id):
+                raise ValueError("Esta cita ya tiene contrato firmado por el cliente.")
+
+            self.repository.revoke_active_signing_ot(appointment_id)
+            last_err: Exception | None = None
+            for _ in range(24):
+                code = f"{secrets.randbelow(900000) + 100000}"
+                try:
+                    row = self.repository.insert_signing_ot(appointment_id, customer_id, code)
+                    return BusinessLogicService._signing_ot_public(row)
+                except mysql.connector.IntegrityError as exc:
+                    last_err = exc
+                    continue
+            raise ValueError("No se pudo generar un código OTP único. Inténtalo de nuevo.") from last_err
+
+        return await asyncio.to_thread(_run)
+
+    async def login_with_signing_ot(self, code: str) -> PanelUserSessionPublic:
+        def _run() -> PanelUserSessionPublic:
+            row = self.repository.get_active_signing_ot_by_code(code)
+            if not row:
+                raise ValueError("OT_INVALID")
+            appointment_id = int(row["appointment_id"])
+            appt = self.repository.get_by_id(appointment_id)
+            if not appt:
+                raise ValueError("OT_INVALID")
+            status = str(getattr(appt, "status", "") or "").strip().lower()
+            if status in {"cancelada", "finalizada"}:
+                raise ValueError("OT_INVALID")
+            if self.repository.has_contract_for_appointment(appointment_id):
+                raise ValueError("OT_ALREADY_SIGNED")
+            ok_pay, pay_err = appointment_must_be_fully_paid_for_contract(
+                total_amount=getattr(appt, "total_amount", None),
+                deposit=getattr(appt, "deposit", None),
+                pending_balance=getattr(appt, "pending_balance", None),
+            )
+            if not ok_pay:
+                raise ValueError(pay_err or "OT_NOT_PAID")
+            cid = row.get("customer_id") or getattr(appt, "customer_id", None)
+            try:
+                customer_id = int(cid) if cid is not None else 0
+            except (TypeError, ValueError):
+                customer_id = 0
+            if customer_id <= 0:
+                raise ValueError("OT_INVALID")
+            name = (
+                str(row.get("customer_name") or getattr(appt, "name", "") or "").strip() or "Cliente"
+            )
+            return PanelUserSessionPublic(
+                id=customer_id,
+                username=name,
+                role="cliente",
+                store_id=None,
+                store_name=None,
+                session_expires_at=panel_session_expires_at_epoch(),
+                appointment_id=appointment_id,
+                customer_id=customer_id,
             )
 
         return await asyncio.to_thread(_run)

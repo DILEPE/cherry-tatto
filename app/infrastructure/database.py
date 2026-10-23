@@ -100,6 +100,40 @@ class DatabaseManager:
         finally:
             conn.close()
 
+    def ensure_appointment_signing_ot_table(self) -> None:
+        """Tabla de códigos OTP de 6 dígitos para firma del cliente."""
+        conn = self.get_connection()
+        if conn is None:
+            return
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS appointment_signing_ot (
+                    id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    appointment_id  BIGINT UNSIGNED NOT NULL,
+                    customer_id     BIGINT UNSIGNED NOT NULL,
+                    code            CHAR(6)         NOT NULL,
+                    created_at      TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    consumed_at     TIMESTAMP       NULL DEFAULT NULL,
+                    revoked_at      TIMESTAMP       NULL DEFAULT NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uq_appointment_signing_ot_code (code),
+                    INDEX idx_signing_ot_appointment (appointment_id),
+                    INDEX idx_signing_ot_active (appointment_id, consumed_at, revoked_at),
+                    CONSTRAINT fk_signing_ot_appointment
+                        FOREIGN KEY (appointment_id) REFERENCES appointments (id),
+                    CONSTRAINT fk_signing_ot_customer
+                        FOREIGN KEY (customer_id) REFERENCES customers (id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+            conn.commit()
+        except Exception as e:
+            print(f"[DB] Migración appointment_signing_ot omitida o ya aplicada: {e}")
+        finally:
+            conn.close()
+
     def get_connection(self) -> MySQLConnection | None:
         try:
             return mysql.connector.connect(**self.config)

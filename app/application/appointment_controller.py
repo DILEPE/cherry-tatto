@@ -21,6 +21,7 @@ from app.schemas.appointment import (
     AppointmentRescheduleRequest,
     AppointmentMetaPatchRequest,
     AppointmentSearchResponse,
+    AppointmentSigningOtResponse,
     AppointmentStatusUpdateRequest,
     appointment_request_to_domain,
 )
@@ -351,6 +352,36 @@ class AppointmentController(Controller):
             raise HTTPException(detail=str(e), status_code=400) from e
         except Exception as e:
             raise HTTPException(detail=f"Error al verificar el abono: {str(e)}", status_code=400) from e
+
+    @get("/{appointment_id:int}/signing-otp")
+    async def get_signing_ot(
+        self,
+        appointment_id: int,
+        state: State,
+    ) -> AppointmentSigningOtResponse:
+        try:
+            row = await state.service.get_appointment_signing_ot(appointment_id)
+            return AppointmentSigningOtResponse.model_validate(row)
+        except ValueError as e:
+            raise HTTPException(detail=str(e), status_code=404) from e
+        except Exception as e:
+            raise HTTPException(detail=f"Error al consultar el código OTP: {str(e)}", status_code=400) from e
+
+    @post("/{appointment_id:int}/signing-otp")
+    async def generate_signing_ot(
+        self,
+        appointment_id: int,
+        state: State,
+    ) -> AppointmentSigningOtResponse:
+        try:
+            row = await state.service.generate_appointment_signing_ot(appointment_id)
+            return AppointmentSigningOtResponse.model_validate(row)
+        except ValueError as e:
+            msg = str(e)
+            code = 404 if "no encontrada" in msg.lower() else 400
+            raise HTTPException(detail=msg, status_code=code) from e
+        except Exception as e:
+            raise HTTPException(detail=f"Error al generar el código OTP: {str(e)}", status_code=400) from e
 
     @get("/{appointment_id:int}/receipts")
     async def list_receipts(
