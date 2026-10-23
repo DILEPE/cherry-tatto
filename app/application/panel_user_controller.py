@@ -14,6 +14,7 @@ from app.schemas.panel_user import (
     PanelUserLogin,
     PanelUserLoginResponse,
     PanelUserModulesBody,
+    PanelUserOtLogin,
     PanelUserPublic,
     PanelUserRegister,
     PanelUserRegisteredResponse,
@@ -172,4 +173,26 @@ class PanelUserController(Controller):
             raise
         except Exception as e:
             logger.exception("panel_user login")
+            raise HTTPException(detail=str(e), status_code=500) from e
+
+    @post("/login-otp")
+    async def login_otp(self, data: PanelUserOtLogin, state: State) -> PanelUserLoginResponse:
+        try:
+            user = await state.service.login_with_signing_ot(data.code)
+            return PanelUserLoginResponse(message="Sesión de cliente válida.", user=user)
+        except ValueError as e:
+            code = str(e)
+            if code == "OT_INVALID":
+                raise HTTPException(
+                    detail="Código OTP inválido o vencido.",
+                    status_code=status_codes.HTTP_401_UNAUTHORIZED,
+                ) from e
+            if code == "OT_ALREADY_SIGNED":
+                raise HTTPException(
+                    detail="Este contrato ya fue firmado por el cliente.",
+                    status_code=status_codes.HTTP_409_CONFLICT,
+                ) from e
+            raise HTTPException(detail=str(e), status_code=400) from e
+        except Exception as e:
+            logger.exception("panel_user login-otp")
             raise HTTPException(detail=str(e), status_code=500) from e
