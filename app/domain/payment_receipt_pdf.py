@@ -1,4 +1,11 @@
-"""PDF de recibo de abono: orden de trabajo maquetada en código (A4), alineada al diseño Rock City.
+"""PDF de recibo de abono: orden de trabajo maquetada en código, alineada al diseño Rock City.
+
+El diseño se compone en A4 y al final se escala a una tira del ancho del rollo térmico
+(Zebra / 80 mm por defecto) para que al imprimir no se corte el pie ni las condiciones.
+
+Personalización del rollo:
+- PAYMENT_RECEIPT_PAGE_WIDTH_MM — ancho del papel (por defecto 80). Usa 104 si la Zebra es de 4 pulgadas.
+- PAYMENT_RECEIPT_PAGE_HEIGHT_MM — alto fijo opcional en mm; si se omite, se calcula con el contenido.
 
 Cabecera negra (datos comerciales + título de orden y fecha), bloque de formulario en gris oscuro con inputs blancos redondeados
 y etiquetas dentro de cada campo, franja roja y condiciones legales debajo.
@@ -44,6 +51,84 @@ PAYMENT_RECEIPT_SEND_FILENAME = "ORDEN DE TRABAJO.pdf"
 _PAGE = fitz.paper_rect("a4")
 PAGE_W = _PAGE.width
 PAGE_H = _PAGE.height
+
+
+def _mm_to_pt(mm: float) -> float:
+    return float(mm) * 72.0 / 25.4
+
+
+def _receipt_roll_width_mm() -> float:
+    raw = (os.getenv("PAYMENT_RECEIPT_PAGE_WIDTH_MM") or "80").strip().replace(",", ".")
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 80.0
+    return min(max(value, 50.0), 216.0)
+
+
+def _receipt_roll_height_mm() -> float | None:
+    raw = (os.getenv("PAYMENT_RECEIPT_PAGE_HEIGHT_MM") or "").strip().replace(",", ".")
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return min(max(value, 80.0), 500.0)
+
+
+def _page_used_height(page: fitz.Page) -> float:
+    """Altura real del contenido (sin el vacío inferior del A4)."""
+    bottom = 0.0
+    for block in page.get_text("blocks"):
+        bottom = max(bottom, float(block[3]))
+    try:
+        for drawing in page.get_drawings():
+            rect = drawing.get("rect")
+            if rect is not None:
+                bottom = max(bottom, float(rect.y1))
+    except (RuntimeError, ValueError, AttributeError):
+        pass
+    if bottom < 48.0:
+        return float(page.rect.height)
+    return min(float(page.rect.height), bottom + 14.0)
+
+
+def _flatten_receipt_to_thermal_roll(src: fitz.Document) -> fitz.Document:
+    """Apila las páginas A4 en una sola tira del ancho del rollo (Zebra / POS)."""
+    out_w = _mm_to_pt(_receipt_roll_width_mm())
+    cutter_pad = _mm_to_pt(14.0)
+    clips: list[fitz.Rect] = []
+    page_heights: list[float] = []
+    for i in range(src.page_count):
+        sp = src[i]
+        clip = fitz.Rect(0, 0, sp.rect.width, _page_used_height(sp))
+        clips.append(clip)
+        scale = out_w / clip.width if clip.width else 1.0
+        page_heights.append(clip.height * scale)
+    content_h = sum(page_heights)
+    forced_mm = _receipt_roll_height_mm()
+    out_h = _mm_to_pt(forced_mm) if forced_mm is not None else content_h + cutter_pad
+    fit = 1.0
+    usable = max(out_h - cutter_pad, _mm_to_pt(40.0))
+    if content_h > usable > 0:
+        fit = usable / content_h
+        out_h = content_h * fit + cutter_pad
+
+    dest = fitz.open()
+    page = dest.new_page(width=out_w, height=out_h)
+    y = 0.0
+    for i, src_h in enumerate(page_heights):
+        h = src_h * fit
+        page.show_pdf_page(
+            fitz.Rect(0, y, out_w, y + h),
+            src,
+            i,
+            clip=clips[i],
+            keep_proportion=True,
+        )
+        y += h
+    return dest
 
 _BLACK = (0.0, 0.0, 0.0)
 _WHITE = (1.0, 1.0, 1.0)
@@ -415,8 +500,8 @@ def _fmt_money_cell(s: str) -> str:
 
 
 def _terms_page_bottom() -> float:
-    """Tope vertical antes del pie reservado para «Documento generado…»."""
-    return PAGE_H - 52
+    """Tope vertical de la hoja A4; el pie va justo después del último párrafo."""
+    return PAGE_H - 16
 
 
 def _emit_terms_paragraph(
@@ -536,15 +621,14 @@ def _emit_design_delivery_paragraph(
     return page, y + 6
 
 
-def _render_terms_blocks(doc: fitz.Document, page: fitz.Page, y: float, mx: float) -> fitz.Page:
+def _render_terms_blocks(doc: fitz.Document, page: fitz.Page, y: float, mx: float) -> tuple[fitz.Page, float]:
     """Condiciones generales + política de confirmación/cita (varias páginas si hace falta)."""
     for line in _TERMS_LINES:
         page, y = _emit_terms_paragraph(doc, page, y, mx, line, bullet=True, color=_INK)
     y += 4
     for body, bullet, col in _POLICY_CONFIRMATION:
         page, y = _emit_terms_paragraph(doc, page, y, mx, body, bullet=bullet, color=col)
-    page, _y = _emit_design_delivery_paragraph(doc, page, y, mx)
-    return page
+    return _emit_design_delivery_paragraph(doc, page, y, mx)
 
 
 def _html_to_term_blocks(raw_html: str) -> list[tuple[str, bool]]:
@@ -628,14 +712,14 @@ def _render_contract_html_as_terms(
     y: float,
     mx: float,
     contract_html: str,
-) -> fitz.Page:
+) -> tuple[fitz.Page, float]:
     """Pinta el contenido de la plantilla recibo en la zona de condiciones (mismo layout tipográfico)."""
     blocks = _html_to_term_blocks(contract_html)
     if not blocks:
         return _render_terms_blocks(doc, page, y, mx)
     for text, bullet in blocks:
         page, y = _emit_terms_paragraph(doc, page, y, mx, text, bullet=bullet, color=_INK)
-    return page
+    return page, y
 
 
 @dataclass
@@ -859,9 +943,9 @@ def build_payment_receipt_pdf(ctx: PaymentReceiptPdfContext) -> bytes:
     body_top = banner_y0 + banner_h + 14.0
     contract_src = (ctx.contract_html or "").strip()
     if contract_src:
-        last_terms_page = _render_contract_html_as_terms(doc, page, body_top, mx, contract_src)
+        last_terms_page, terms_y = _render_contract_html_as_terms(doc, page, body_top, mx, contract_src)
     else:
-        last_terms_page = _render_terms_blocks(doc, page, body_top, mx)
+        last_terms_page, terms_y = _render_terms_blocks(doc, page, body_top, mx)
 
     foot_bits = [
         f"Documento generado el {_issued_dd_mm_yyyy(ctx.issued_at)} a las {_issued_time_hm(ctx.issued_at)}"
@@ -870,8 +954,12 @@ def build_payment_receipt_pdf(ctx: PaymentReceiptPdfContext) -> bytes:
     if extra:
         foot_bits.append(extra)
     foot = " · ".join(foot_bits)
+    foot_h = 24.0
+    if terms_y + foot_h > _terms_page_bottom():
+        last_terms_page = doc.new_page(width=PAGE_W, height=PAGE_H)
+        terms_y = 36.0
     last_terms_page.insert_textbox(
-        fitz.Rect(mx, PAGE_H - 38, PAGE_W - mx, PAGE_H - 14),
+        fitz.Rect(mx, terms_y, PAGE_W - mx, terms_y + foot_h),
         foot,
         fontsize=6.8,
         fontname="helv",
@@ -879,6 +967,8 @@ def build_payment_receipt_pdf(ctx: PaymentReceiptPdfContext) -> bytes:
         align=fitz.TEXT_ALIGN_CENTER,
     )
 
-    out = doc.tobytes(deflate=True, garbage=3, clean=True)
+    roll = _flatten_receipt_to_thermal_roll(doc)
+    out = roll.tobytes(deflate=True, garbage=3, clean=True)
+    roll.close()
     doc.close()
     return out
