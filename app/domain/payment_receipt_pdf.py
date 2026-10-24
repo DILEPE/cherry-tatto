@@ -1,10 +1,10 @@
 """PDF de recibo de abono: orden de trabajo maquetada en código, alineada al diseño Rock City.
 
-El diseño se compone en A4 y al final se escala a una tira del ancho del rollo térmico
-(Zebra / 80 mm por defecto) para que al imprimir no se corte el pie ni las condiciones.
+El diseño se compone en A4 y al final se escala a una tira del área imprimible del rollo
+térmico ESC/POS (80 mm de papel, 72 mm de impresión / 576 dots).
 
 Personalización del rollo:
-- PAYMENT_RECEIPT_PAGE_WIDTH_MM — ancho del papel (por defecto 80). Usa 104 si la Zebra es de 4 pulgadas.
+- PAYMENT_RECEIPT_PAGE_WIDTH_MM — ancho imprimible (por defecto 72). El papel es 80 mm.
 - PAYMENT_RECEIPT_PAGE_HEIGHT_MM — alto fijo opcional en mm; si se omite, se calcula con el contenido.
 
 Cabecera negra (datos comerciales + título de orden y fecha), bloque de formulario en gris oscuro con inputs blancos redondeados
@@ -58,11 +58,12 @@ def _mm_to_pt(mm: float) -> float:
 
 
 def _receipt_roll_width_mm() -> float:
-    raw = (os.getenv("PAYMENT_RECEIPT_PAGE_WIDTH_MM") or "80").strip().replace(",", ".")
+    """Ancho imprimible. Impresora 80 mm ESC/POS: 72 mm (576 dots/línea)."""
+    raw = (os.getenv("PAYMENT_RECEIPT_PAGE_WIDTH_MM") or "72").strip().replace(",", ".")
     try:
         value = float(raw)
     except ValueError:
-        value = 80.0
+        value = 72.0
     return min(max(value, 50.0), 216.0)
 
 
@@ -94,10 +95,44 @@ def _page_used_height(page: fitz.Page) -> float:
     return min(float(page.rect.height), bottom + 14.0)
 
 
+def _page_width_mm(page: fitz.Page) -> float:
+    return float(page.rect.width) * 25.4 / 72.0
+
+
+def ensure_thermal_receipt_pdf(pdf_bytes: bytes) -> bytes:
+    """Reescala un PDF A4 (u otro tamaño) a la tira ESC/POS de 72 mm. Si ya lo es, no lo toca."""
+    src = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        if src.page_count < 1:
+            return pdf_bytes
+        width_mm = _page_width_mm(src[0])
+        target_mm = _receipt_roll_width_mm()
+        if src.page_count == 1 and abs(width_mm - target_mm) <= 2.5:
+            return pdf_bytes
+        roll = _flatten_receipt_to_thermal_roll(src)
+        out = roll.tobytes(deflate=True, garbage=3, clean=True)
+        roll.close()
+        return out
+    finally:
+        src.close()
+
+
+def receipt_pdf_to_png(pdf_bytes: bytes, *, dpi: int = 203) -> bytes:
+    """PNG a 203 dpi (576 px en 72 mm), listo para impresora térmica ESC/POS."""
+    thermal = ensure_thermal_receipt_pdf(pdf_bytes)
+    doc = fitz.open(stream=thermal, filetype="pdf")
+    try:
+        page = doc[0]
+        pix = page.get_pixmap(dpi=max(int(dpi), 72), alpha=False)
+        return pix.tobytes("png")
+    finally:
+        doc.close()
+
+
 def _flatten_receipt_to_thermal_roll(src: fitz.Document) -> fitz.Document:
-    """Apila las páginas A4 en una sola tira del ancho del rollo (Zebra / POS)."""
+    """Apila las páginas A4 en una sola tira del área imprimible (72 mm en rollo de 80 mm)."""
     out_w = _mm_to_pt(_receipt_roll_width_mm())
-    cutter_pad = _mm_to_pt(14.0)
+    cutter_pad = _mm_to_pt(12.0)
     clips: list[fitz.Rect] = []
     page_heights: list[float] = []
     for i in range(src.page_count):

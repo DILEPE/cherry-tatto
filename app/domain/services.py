@@ -48,6 +48,7 @@ from app.domain.payment_receipt_pdf import (
     PAYMENT_RECEIPT_N8N_TEMPLATE_KEY,
     PAYMENT_RECEIPT_SEND_FILENAME,
     PaymentReceiptPdfContext,
+    ensure_thermal_receipt_pdf,
 )
 from app.domain.payment_receipt_template import (
     active_recibo_template_content,
@@ -1483,7 +1484,7 @@ class BusinessLogicService:
             raw_pdf = row.get("pdf")
             if raw_pdf is None:
                 raise ValueError("Recibo sin archivo")
-            return bytes(raw_pdf), fn
+            return ensure_thermal_receipt_pdf(bytes(raw_pdf)), fn
 
         kind = str(row.get("kind") or "abono").strip() or "abono"
         try:
@@ -1501,7 +1502,7 @@ class BusinessLogicService:
         )
         if not rebuilt:
             raise ValueError("No se pudo generar el recibo sin valor de abono")
-        return rebuilt, fn
+        return ensure_thermal_receipt_pdf(rebuilt), fn
 
     async def resend_appointment_payment_receipt(
         self,
