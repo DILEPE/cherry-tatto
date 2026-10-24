@@ -25,6 +25,7 @@ from app.schemas.appointment import (
     AppointmentStatusUpdateRequest,
     appointment_request_to_domain,
 )
+from app.domain.payment_receipt_pdf import receipt_pdf_to_png
 from app.schemas.common import (
     AppointmentCreatedResponse,
     AppointmentPaymentCreatedResponse,
@@ -404,6 +405,7 @@ class AppointmentController(Controller):
         receipt_id: int,
         state: State,
         include_abono_amounts: str | None = Parameter(query="include_abono_amounts", default=None),
+        format: str | None = Parameter(query="format", default=None),
     ) -> Response:
         try:
             include_amounts = _query_flag(include_abono_amounts, default=True)
@@ -412,6 +414,14 @@ class AppointmentController(Controller):
                 receipt_id,
                 include_abono_amounts=include_amounts,
             )
+            fmt = (format or "pdf").strip().lower()
+            if fmt in {"png", "image", "image/png"}:
+                png_bytes = receipt_pdf_to_png(pdf_bytes)
+                return Response(
+                    content=png_bytes,
+                    media_type="image/png",
+                    headers={"Content-Disposition": 'inline; filename="ORDEN DE TRABAJO.png"'},
+                )
             safe_name = filename.replace('"', "").replace("\r", "").replace("\n", "") or "recibo.pdf"
             return Response(
                 content=pdf_bytes,
