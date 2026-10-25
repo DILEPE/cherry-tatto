@@ -1480,12 +1480,6 @@ class BusinessLogicService:
         if row is None:
             raise ValueError("Recibo no encontrado")
         fn = PAYMENT_RECEIPT_SEND_FILENAME
-        if include_abono_amounts:
-            raw_pdf = row.get("pdf")
-            if raw_pdf is None:
-                raise ValueError("Recibo sin archivo")
-            return ensure_thermal_receipt_pdf(bytes(raw_pdf)), fn
-
         kind = str(row.get("kind") or "abono").strip() or "abono"
         try:
             amount = float(row.get("amount") or 0)
@@ -1497,12 +1491,15 @@ class BusinessLogicService:
                 kind=kind,
                 receipt_amount=amount,
                 payment_note=str(row.get("note") or "") or None,
-                include_abono_amounts=False,
+                include_abono_amounts=include_abono_amounts,
             )
         )
-        if not rebuilt:
-            raise ValueError("No se pudo generar el recibo sin valor de abono")
-        return ensure_thermal_receipt_pdf(rebuilt), fn
+        if rebuilt:
+            return ensure_thermal_receipt_pdf(rebuilt), fn
+        raw_pdf = row.get("pdf")
+        if raw_pdf is None:
+            raise ValueError("Recibo sin archivo")
+        return ensure_thermal_receipt_pdf(bytes(raw_pdf)), fn
 
     async def resend_appointment_payment_receipt(
         self,

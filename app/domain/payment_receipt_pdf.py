@@ -14,7 +14,6 @@ Personalización opcional vía entorno:
 - PAYMENT_RECEIPT_LOGO_IMAGE — ruta a PNG del logo (centrado en cabecera). Si no hay archivo, se intenta `app/assets/receipt_rock_city_logo.png`.
 - PAYMENT_RECEIPT_CONTACT_IMAGE — ruta a PNG del bloque comercial (izquierda). Si no hay archivo, se pinta texto en blanco en negrita.
 - PAYMENT_RECEIPT_ADDR_LINE1, PAYMENT_RECEIPT_ADDR_LINE2 — dirección si no usas imagen de contacto.
-- PAYMENT_RECEIPT_WHATSAPP — solo número; se muestra como «WHATSAPP …».
 - PAYMENT_RECEIPT_CONTACT_LINE — línea opcional al pie (además de la fecha de generación).
 - PAYMENT_RECEIPT_TERMS_EMAIL, PAYMENT_RECEIPT_TERMS_PHONE — correo y teléfono del párrafo final de envío de diseños.
 - PAYMENT_RECEIPT_LOGO_LINE1, PAYMENT_RECEIPT_LOGO_LINE2, PAYMENT_RECEIPT_LOGO_MARK — solo si **no** hay PNG de logo (texto de respaldo).
@@ -48,13 +47,14 @@ _SERVICE_WORD_LEADING = re.compile(
 PAYMENT_RECEIPT_N8N_TEMPLATE_KEY = "orden_trabajo_rock_city"
 PAYMENT_RECEIPT_SEND_FILENAME = "ORDEN DE TRABAJO.pdf"
 
-_PAGE = fitz.paper_rect("a4")
-PAGE_W = _PAGE.width
-PAGE_H = _PAGE.height
-
 
 def _mm_to_pt(mm: float) -> float:
     return float(mm) * 72.0 / 25.4
+
+
+# Lienzo nativo del rollo (72 mm). Antes se dibujaba en A4 y al escalar la letra quedaba ilegible.
+PAGE_W = _mm_to_pt(72)
+PAGE_H = _mm_to_pt(210)
 
 
 def _receipt_roll_width_mm() -> float:
@@ -92,7 +92,7 @@ def _page_used_height(page: fitz.Page) -> float:
         pass
     if bottom < 48.0:
         return float(page.rect.height)
-    return min(float(page.rect.height), bottom + 14.0)
+    return min(float(page.rect.height), bottom + 4.0)
 
 
 def _page_width_mm(page: fitz.Page) -> float:
@@ -108,8 +108,9 @@ def ensure_thermal_receipt_pdf(pdf_bytes: bytes) -> bytes:
         width_mm = _page_width_mm(src[0])
         target_mm = _receipt_roll_width_mm()
         if src.page_count == 1 and abs(width_mm - target_mm) <= 2.5:
-            return pdf_bytes
-        roll = _flatten_receipt_to_thermal_roll(src)
+            roll = _trim_roll_to_content(src)
+        else:
+            roll = _flatten_receipt_to_thermal_roll(src)
         out = roll.tobytes(deflate=True, garbage=3, clean=True)
         roll.close()
         return out
@@ -118,21 +119,140 @@ def ensure_thermal_receipt_pdf(pdf_bytes: bytes) -> bytes:
 
 
 def receipt_pdf_to_png(pdf_bytes: bytes, *, dpi: int = 203) -> bytes:
-    """PNG a 203 dpi (576 px en 72 mm), listo para impresora térmica ESC/POS."""
+    """PNG monocromo a 203 dpi (576 px en 72 mm), recortado al contenido para el corte."""
     thermal = ensure_thermal_receipt_pdf(pdf_bytes)
     doc = fitz.open(stream=thermal, filetype="pdf")
     try:
         page = doc[0]
-        pix = page.get_pixmap(dpi=max(int(dpi), 72), alpha=False)
+        pix = page.get_pixmap(dpi=max(int(dpi), 72), colorspace=fitz.csGRAY, alpha=False)
+        pix = _thermalize_pixmap(pix, dpi=max(int(dpi), 72))
         return pix.tobytes("png")
     finally:
         doc.close()
 
 
+def receipt_pdf_to_escpos(pdf_bytes: bytes, *, dpi: int = 203) -> bytes:
+    """Ticket ESC/POS: raster 576 dots + avance corto + corte (GS V)."""
+    png = receipt_pdf_to_png(pdf_bytes, dpi=dpi)
+    pix = fitz.Pixmap(png)
+    try:
+        return _pixmap_to_escpos(pix)
+    finally:
+        del pix
+
+
+def _pixmap_to_escpos(pix: fitz.Pixmap) -> bytes:
+    if pix.alpha:
+        pix = fitz.Pixmap(pix, 0)
+    if pix.n != 1:
+        pix = fitz.Pixmap(fitz.csGRAY, pix)
+    width, height, stride = pix.width, pix.height, pix.stride
+    samples = pix.samples
+    width_bytes = (width + 7) // 8
+    out = bytearray()
+    out += b"\x1b\x40"  # ESC @ init
+    out += b"\x1b\x33\x00"  # ESC 3 0 — interlineado 0
+    max_band = 1600
+    y0 = 0
+    while y0 < height:
+        band_h = min(max_band, height - y0)
+        out += bytes(
+            [
+                0x1D,
+                0x76,
+                0x30,
+                0x00,
+                width_bytes & 0xFF,
+                (width_bytes >> 8) & 0xFF,
+                band_h & 0xFF,
+                (band_h >> 8) & 0xFF,
+            ]
+        )
+        for y in range(y0, y0 + band_h):
+            row = y * stride
+            for xb in range(width_bytes):
+                byte = 0
+                for bit in range(8):
+                    x = xb * 8 + bit
+                    if x < width and samples[row + x] < 128:
+                        byte |= 0x80 >> bit
+                out.append(byte)
+        y0 += band_h
+    # ~4 mm y corte completo: la térmica corta aquí, no al final de una hoja A4.
+    out += b"\x1b\x4a\x28"  # ESC J n (avance en puntos)
+    out += b"\x1d\x56\x00"  # GS V 0 full cut
+    return bytes(out)
+
+
+def _thermalize_pixmap(pix: fitz.Pixmap, *, dpi: int) -> fitz.Pixmap:
+    """Negro sólido y recorte del blanco inferior para que el cutter actúe al final.
+
+    En filas oscuras (cabecera / franja roja) se conserva el texto blanco: un umbral
+    único de 230 se comía esas letras al binarizar el antialias. En filas claras se
+    mantiene el umbral alto para que el trazo negro salga más denso.
+    """
+    if pix.alpha:
+        pix = fitz.Pixmap(pix, 0)
+    if pix.n != 1:
+        pix = fitz.Pixmap(fitz.csGRAY, pix)
+    width, height, stride = pix.width, pix.height, pix.stride
+    samples = pix.samples_mv
+    dark_row = bytearray(height)
+    for y in range(height):
+        row = y * stride
+        acc = 0
+        for x in range(width):
+            acc += samples[row + x]
+        dark_row[y] = 1 if (acc / float(width)) < 140 else 0
+    min_ink = max(10, width // 64)
+    last_ink = 0
+    for y in range(height):
+        row = y * stride
+        ink_pixels = 0
+        threshold = 128 if dark_row[y] else 230
+        for x in range(width):
+            idx = row + x
+            if samples[idx] < threshold:
+                samples[idx] = 0
+                ink_pixels += 1
+            else:
+                samples[idx] = 255
+        if ink_pixels >= min_ink:
+            last_ink = y
+    # 2 mm tras la última letra: el cutter de ESC/POS corta al terminar la página.
+    pad = max(8, int(round(2.0 * float(dpi) / 25.4)))
+    new_h = min(height, last_ink + 1 + pad)
+    if new_h >= height:
+        return pix
+    cropped = fitz.Pixmap(fitz.csGRAY, fitz.IRect(0, 0, width, new_h), 0)
+    dst = cropped.samples_mv
+    dst_stride = cropped.stride
+    for y in range(new_h):
+        dst[y * dst_stride : y * dst_stride + width] = samples[y * stride : y * stride + width]
+    return cropped
+
+
+def _trim_roll_to_content(src: fitz.Document) -> fitz.Document:
+    """Corta la página térmica justo después del último texto, para el auto-cutter."""
+    page = src[0]
+    used = _page_used_height(page)
+    height = min(float(page.rect.height), used + _mm_to_pt(2.0))
+    dest = fitz.open()
+    out = dest.new_page(width=page.rect.width, height=height)
+    out.show_pdf_page(
+        out.rect,
+        src,
+        0,
+        clip=fitz.Rect(0, 0, page.rect.width, height),
+        keep_proportion=True,
+    )
+    return dest
+
+
 def _flatten_receipt_to_thermal_roll(src: fitz.Document) -> fitz.Document:
     """Apila las páginas A4 en una sola tira del área imprimible (72 mm en rollo de 80 mm)."""
     out_w = _mm_to_pt(_receipt_roll_width_mm())
-    cutter_pad = _mm_to_pt(12.0)
+    cutter_pad = _mm_to_pt(2.0)
     clips: list[fitz.Rect] = []
     page_heights: list[float] = []
     for i in range(src.page_count):
@@ -143,12 +263,14 @@ def _flatten_receipt_to_thermal_roll(src: fitz.Document) -> fitz.Document:
         page_heights.append(clip.height * scale)
     content_h = sum(page_heights)
     forced_mm = _receipt_roll_height_mm()
-    out_h = _mm_to_pt(forced_mm) if forced_mm is not None else content_h + cutter_pad
+    max_h = _mm_to_pt(min(forced_mm if forced_mm is not None else 200.0, 200.0))
+    cutter_pad = min(cutter_pad, _mm_to_pt(1.5))
+    out_h = min(content_h + cutter_pad, max_h)
     fit = 1.0
     usable = max(out_h - cutter_pad, _mm_to_pt(40.0))
     if content_h > usable > 0:
         fit = usable / content_h
-        out_h = content_h * fit + cutter_pad
+        out_h = min(content_h * fit + cutter_pad, max_h)
 
     dest = fitz.open()
     page = dest.new_page(width=out_w, height=out_h)
@@ -163,7 +285,9 @@ def _flatten_receipt_to_thermal_roll(src: fitz.Document) -> fitz.Document:
             keep_proportion=True,
         )
         y += h
-    return dest
+    trimmed = _trim_roll_to_content(dest)
+    dest.close()
+    return trimmed
 
 _BLACK = (0.0, 0.0, 0.0)
 _WHITE = (1.0, 1.0, 1.0)
@@ -177,14 +301,10 @@ _BOX_EDGE = (0.78, 0.78, 0.78)
 # Rojo del sello 纹身 en referencia de marca (~#E53E3E), solo si el logo va como texto.
 _MARK_RED_UI = (229 / 255, 62 / 255, 62 / 255)
 
-# Textos tomados de la lámina de muestra (franja roja y condiciones).
-_ATTENTION_TEXT = (
-    "ATENCIÓN: SI NO PUEDE ASISTIR A LA CITA, LLÁMENOS CON HORAS DE ANTICIPACIÓN.\n"
-    "NUESTRO TIEMPO VALE TANTO COMO EL SUYO."
-)
+# Franja destacada: primer aviso de la lámina (el resto va como texto legal debajo).
+_BANNER_NO_REFUND = "NO HAY DEVOLUCIONES DE DINERO DE ABONOS DE CITAS CANCELADAS"
 
 _TERMS_LINES: tuple[str, ...] = (
-    "NO HAY DEVOLUCIONES DE DINERO DE ABONOS DE CITAS CANCELADAS",
     "DESPUÉS DE CANCELAR SU CITA DOS VECES PERDERÁ EL VALOR ABONADO",
     "TODO ABONO ES INTRANSFERIBLE",
     "PARA MENORES DE EDAD, PRESENTARSE CON SU ACUDIENTE ÚNICAMENTE PADRE Y/O MADRE, "
@@ -237,23 +357,24 @@ _POLICY_DESIGN_MIDDLE = (
 
 
 def _terms_contact_email() -> str:
-    return (os.getenv("PAYMENT_RECEIPT_TERMS_EMAIL") or "rockcity72@gmail.com").strip()
+    return _strip_env_value(os.getenv("PAYMENT_RECEIPT_TERMS_EMAIL") or "rockcity72@gmail.com")
 
 
 def _terms_contact_phone() -> str:
-    return (os.getenv("PAYMENT_RECEIPT_TERMS_PHONE") or "3209259415").strip()
+    return _strip_env_value(os.getenv("PAYMENT_RECEIPT_TERMS_PHONE") or "WhatsApp: 3178000000")
+
+
+def _strip_env_value(raw: str) -> str:
+    t = (raw or "").strip()
+    if len(t) >= 2 and t[0] == t[-1] and t[0] in "'\"":
+        t = t[1:-1].strip()
+    return t
 
 
 def _addr_lines() -> tuple[str, str]:
-    a1 = (os.getenv("PAYMENT_RECEIPT_ADDR_LINE1") or "CRA 34 # 51 - 56").strip()
-    a2 = (os.getenv("PAYMENT_RECEIPT_ADDR_LINE2") or "BUCARAMANGA - COLOMBIA").strip()
+    a1 = _strip_env_value(os.getenv("PAYMENT_RECEIPT_ADDR_LINE1") or "CRA 34 # 51 - 56")
+    a2 = _strip_env_value(os.getenv("PAYMENT_RECEIPT_ADDR_LINE2") or "BUCARAMANGA - COLOMBIA")
     return a1, a2
-
-
-def _whatsapp_line() -> str:
-    # Número de la lámina comercial Rock City Bucaramanga (sobreescribible por entorno).
-    num = (os.getenv("PAYMENT_RECEIPT_WHATSAPP") or "3112157817").strip()
-    return f"WHATSAPP {num}"
 
 
 def _logo_lines() -> tuple[str, str]:
@@ -321,6 +442,20 @@ def _insert_image_cover(page: fitz.Page, rect: fitz.Rect, path: str) -> bool:
         return True
     except (RuntimeError, ValueError, AttributeError):
         return False
+
+
+def _insert_receipt_header_logo(page: fitz.Page, rect: fitz.Rect, path: str) -> bool:
+    """Logo ROCK CITY recortado (sin el sello chino) para que quepa junto a la dirección."""
+    try:
+        pix = fitz.Pixmap(path)
+        if pix.alpha:
+            pix = fitz.Pixmap(pix, 0)
+        top_h = max(1, int(pix.height * 0.72))
+        clipped = fitz.Pixmap(pix, fitz.IRect(0, 0, pix.width, top_h))
+        page.insert_image(rect, pixmap=clipped, keep_proportion=True)
+        return True
+    except (RuntimeError, ValueError, AttributeError, TypeError):
+        return _insert_image_cover(page, rect, path)
 
 
 def _fmt_cop(n: float) -> str:
@@ -483,7 +618,7 @@ def _field_inline(
 ) -> None:
     """Campo blanco redondeado con la etiqueta dentro a la izquierda y el valor a la derecha."""
     _draw_round_rect(page, rect, radius_pct=radius_pct, fill=_WHITE, stroke=_BOX_EDGE, width=0.28)
-    pad_x, pad_y = 6.0, 3.5
+    pad_x, pad_y = 4.0, 2.0
     rl = fitz.Rect(rect.x0 + pad_x, rect.y0 + pad_y, rect.x0 + pad_x + label_width, rect.y1 - pad_y)
     rv = fitz.Rect(rect.x0 + pad_x + label_width + 2.0, rect.y0 + pad_y, rect.x1 - pad_x, rect.y1 - pad_y)
     _textbox_shrink_to_fit(
@@ -535,8 +670,17 @@ def _fmt_money_cell(s: str) -> str:
 
 
 def _terms_page_bottom() -> float:
-    """Tope vertical de la hoja A4; el pie va justo después del último párrafo."""
-    return PAGE_H - 16
+    """Tope vertical de la única hoja (deja margen para que no salte a una segunda)."""
+    return PAGE_H - 4
+
+
+def _contact_box_h() -> float:
+    return 30.0
+
+
+def _terms_body_limit() -> float:
+    """El texto legal no invade la franja del correo/WhatsApp."""
+    return _terms_page_bottom() - _contact_box_h()
 
 
 def _emit_terms_paragraph(
@@ -548,52 +692,118 @@ def _emit_terms_paragraph(
     *,
     bullet: bool,
     color: tuple[float, float, float],
-    fontsize: float = 8.15,
-    gap_after: float = 10.0,
+    fontsize: float = 5.25,
+    gap_after: float = 0.75,
 ) -> tuple[fitz.Page, float]:
-    """Pinta un párrafo (opcional guión «- ») justificado y devuelve la página activa y la Y siguiente."""
+    """Pinta un párrafo (opcional «- ») en negrita para que el trazo se lea en térmica."""
     x0 = mx + 2
     x1 = PAGE_W - mx - 2
-    # Helvetica integrada no incluye «•» (U+2022); en PDF aparece como «?». Usar ASCII.
     full = f"- {body}" if bullet else body
-    limit_y = _terms_page_bottom()
-
-    def _new_sheet() -> tuple[fitz.Page, float]:
-        p = doc.new_page(width=PAGE_W, height=PAGE_H)
-        return p, 36.0
-
-    if y > limit_y - 44:
-        page, y = _new_sheet()
-    avail = limit_y - y - 6
-    if avail < 42:
-        page, y = _new_sheet()
-        avail = limit_y - y - 6
-    rect_h = min(300.0, avail)
+    limit_y = _terms_body_limit()
+    if y >= limit_y - 6:
+        return page, y
+    avail = max(limit_y - y - 1, 10.0)
+    rect_h = min(120.0, avail)
     r = fitz.Rect(x0, y, x1, y + rect_h)
     fs = fontsize
+    min_fs = 4.7
     rv = -1.0
-    while fs >= 6.45:
+    while fs >= min_fs:
         rv = page.insert_textbox(
             r,
             full,
             fontsize=fs,
-            fontname="helv",
+            fontname="hebo",
             color=color,
-            align=fitz.TEXT_ALIGN_JUSTIFY,
+            align=fitz.TEXT_ALIGN_LEFT,
         )
         if rv >= 0:
             advance = rect_h - rv
-            return page, y + max(advance, fs * 1.15) + gap_after
-        fs -= 0.28
+            return page, y + max(advance, fs * 1.12) + gap_after
+        fs -= 0.25
     page.insert_textbox(
         r,
         full,
-        fontsize=6.35,
-        fontname="helv",
+        fontsize=min_fs,
+        fontname="hebo",
         color=color,
-        align=fitz.TEXT_ALIGN_JUSTIFY,
+        align=fitz.TEXT_ALIGN_LEFT,
     )
-    return page, y + rect_h + gap_after
+    return page, min(y + min(rect_h, fs * 6.0) + gap_after, limit_y)
+
+
+def _contact_email_phone() -> tuple[str, str]:
+    email = _terms_contact_email()
+    phone = _terms_contact_phone()
+    if phone and not phone.upper().startswith("WHATSAPP"):
+        phone = f"WhatsApp: {phone}"
+    return email, phone
+
+
+def _wrap_line(text: str, *, fs: float, max_w: float) -> list[str]:
+    words = (text or "").split()
+    if not words:
+        return []
+    lines: list[str] = []
+    cur = words[0]
+    for word in words[1:]:
+        trial = f"{cur} {word}"
+        if fitz.get_text_length(trial, fontname="hebo", fontsize=fs) <= max_w:
+            cur = trial
+        else:
+            lines.append(cur)
+            cur = word
+    lines.append(cur)
+    return lines
+
+
+def _ensure_contact_on_page(page: fitz.Page, mx: float) -> None:
+    """Pinta correo y WhatsApp al final, siempre, si aún no están en la hoja."""
+    email, phone = _contact_email_phone()
+    existing = _norm_term_line(page.get_text() or "")
+    email_key = _norm_term_line(email.split("@")[0] if email else "")
+    if email_key and email_key in existing and "RECONFIRMANDO SU ENVIO" in existing:
+        return
+    fs = 5.6
+    leading = 7.2
+    max_w = PAGE_W - 2 * mx - 4
+    lines = [email] if email else []
+    lines.extend(_wrap_line(_POLICY_DESIGN_MIDDLE.strip(), fs=fs, max_w=max_w))
+    if phone:
+        lines.append(phone)
+    lines = [ln for ln in lines if ln]
+    need = leading * len(lines) + 3
+    bottom_used = 0.0
+    for block in page.get_text("blocks"):
+        if isinstance(block[4], str) and block[4].strip():
+            bottom_used = max(bottom_used, float(block[3]))
+    y = bottom_used + 2.0
+    if y + need > PAGE_H - 3:
+        y = max(10.0, PAGE_H - 3 - need)
+    x = mx + 2
+    for line in lines:
+        y += leading
+        if y > PAGE_H - 1:
+            break
+        page.insert_text(fitz.Point(x, y), line, fontsize=fs, fontname="hebo", color=_INK)
+
+
+def _text_has_receipt_contact(text: str) -> bool:
+    n = _norm_term_line(text)
+    email = _norm_term_line(_terms_contact_email())
+    return bool(email and email in n) or "RECONFIRMANDO SU ENVIO" in n
+
+
+def _is_contact_only_line(text: str) -> bool:
+    n = _norm_term_line(text)
+    email = _norm_term_line(_terms_contact_email())
+    if email and (n == email or n.startswith(email)):
+        return True
+    if n.startswith("Y RECONFIRMANDO"):
+        return True
+    if n.startswith("WHATSAPP"):
+        return True
+    return False
 
 
 def _emit_design_delivery_paragraph(
@@ -602,65 +812,31 @@ def _emit_design_delivery_paragraph(
     y: float,
     mx: float,
 ) -> tuple[fitz.Page, float]:
-    """Último bloque de política: texto + correo y teléfono en negrita."""
-    email = _terms_contact_email()
-    phone = _terms_contact_phone()
-    segments: tuple[tuple[str, bool, float], ...] = (
-        (_POLICY_DESIGN_PREFIX, False, 8.05),
-        (email, True, 8.35),
-        (_POLICY_DESIGN_MIDDLE, False, 8.05),
-        (phone, True, 8.35),
+    """Aviso de envío de diseño; el correo y WhatsApp se pintan al final de la hoja."""
+    return _emit_terms_paragraph(
+        doc, page, y, mx, _POLICY_DESIGN_PREFIX.strip(), bullet=False, color=_INK
     )
-    x0 = mx + 2
-    x1 = PAGE_W - mx - 2
-    limit_y = _terms_page_bottom()
-    gap_small = 5.0
 
-    def _new_sheet() -> tuple[fitz.Page, float]:
-        p = doc.new_page(width=PAGE_W, height=PAGE_H)
-        return p, 36.0
 
-    for text, bold, fs in segments:
-        if y > limit_y - 32:
-            page, y = _new_sheet()
-        avail = limit_y - y - 6
-        if avail < 26:
-            page, y = _new_sheet()
-            avail = limit_y - y - 6
-        rect_h = min(220.0 if not bold else 40.0, avail)
-        r = fitz.Rect(x0, y, x1, y + rect_h)
-        fn = "hebo" if bold else "helv"
-        rv = page.insert_textbox(
-            r,
-            text,
-            fontsize=fs,
-            fontname=fn,
-            color=_INK,
-            align=fitz.TEXT_ALIGN_JUSTIFY if not bold else fitz.TEXT_ALIGN_LEFT,
-        )
-        if rv < 0:
-            rr = fitz.Rect(x0, y, x1, y + min(avail, 320.0))
-            page.insert_textbox(
-                rr,
-                text,
-                fontsize=max(6.0, fs - 0.5),
-                fontname=fn,
-                color=_INK,
-                align=fitz.TEXT_ALIGN_JUSTIFY if not bold else fitz.TEXT_ALIGN_LEFT,
-            )
-            y = rr.y1 + gap_small
-        else:
-            advance = rect_h - rv
-            y = y + max(advance, fs * 1.12) + gap_small
+def _norm_term_line(text: str) -> str:
+    t = " ".join((text or "").upper().replace(".", " ").replace("-", " ").split())
+    return t
 
-    return page, y + 6
+
+def _is_banner_no_refund_line(text: str) -> bool:
+    """True si el párrafo es el aviso de no devolución (ya va en la franja)."""
+    banner = _norm_term_line(_BANNER_NO_REFUND)
+    candidate = _norm_term_line(text)
+    return candidate == banner or candidate.startswith(banner)
 
 
 def _render_terms_blocks(doc: fitz.Document, page: fitz.Page, y: float, mx: float) -> tuple[fitz.Page, float]:
     """Condiciones generales + política de confirmación/cita (varias páginas si hace falta)."""
     for line in _TERMS_LINES:
+        if _is_banner_no_refund_line(line):
+            continue
         page, y = _emit_terms_paragraph(doc, page, y, mx, line, bullet=True, color=_INK)
-    y += 4
+    y += 1
     for body, bullet, col in _POLICY_CONFIRMATION:
         page, y = _emit_terms_paragraph(doc, page, y, mx, body, bullet=bullet, color=col)
     return _emit_design_delivery_paragraph(doc, page, y, mx)
@@ -752,8 +928,15 @@ def _render_contract_html_as_terms(
     blocks = _html_to_term_blocks(contract_html)
     if not blocks:
         return _render_terms_blocks(doc, page, y, mx)
+    has_prefix = any("RECUERDE QUE LA IDEA" in _norm_term_line(t) for t, _ in blocks)
     for text, bullet in blocks:
+        if _is_banner_no_refund_line(text) or _is_contact_only_line(text):
+            continue
         page, y = _emit_terms_paragraph(doc, page, y, mx, text, bullet=bullet, color=_INK)
+    if not has_prefix:
+        page, y = _emit_terms_paragraph(
+            doc, page, y, mx, _POLICY_DESIGN_PREFIX.strip(), bullet=False, color=_INK
+        )
     return page, y
 
 
@@ -783,124 +966,99 @@ class PaymentReceiptPdfContext:
 
 
 def build_payment_receipt_pdf(ctx: PaymentReceiptPdfContext) -> bytes:
+    global PAGE_W, PAGE_H
+    PAGE_W = _mm_to_pt(_receipt_roll_width_mm())
+    PAGE_H = _mm_to_pt(200.0)
+
     doc = fitz.open()
     page = doc.new_page(width=PAGE_W, height=PAGE_H)
 
-    mx = 26.0
+    mx = 6.0
     inner_w = PAGE_W - 2 * mx
-
-    header_h = 80.0
-    gray_pad_v = 7.0
-    row_h = 22.0
-    row_gap = 5.0
-    dis_h = 38.0
-    gap_mid = 9.0
-    banner_h = 34.0
+    header_h = 44.0
+    gray_pad_v = 3.0
+    row_h = 15.5
+    row_gap = 1.8
+    dis_h = 20.0
+    gap_mid = 3.5
+    banner_h = 18.0
+    fs_lab, fs_val = 7.6, 8.8
 
     show_amounts = bool(ctx.include_abono_amounts)
-    inner_top = header_h + gray_pad_v
-    y1 = inner_top
-    y2 = y1 + row_h + row_gap
-    y3 = y2 + row_h + row_gap
-    y4 = y3 + dis_h + row_gap
-    y5 = y4 + row_h
-    sys_top = y5 + 6.0
+    y = header_h + gray_pad_v
+    y_nom = y
+    y_ch = y_nom + row_h + row_gap
+    y_em = y_ch + row_h + row_gap
+    y_dis = y_em + row_h + row_gap
+    y_pay = y_dis + dis_h + row_gap
     if show_amounts:
-        form_bottom = sys_top + 13.0 + gray_pad_v
+        form_bottom = y_pay + row_h + row_gap + row_h + gray_pad_v
     else:
-        form_bottom = y3 + dis_h + gray_pad_v
+        form_bottom = y_dis + dis_h + gray_pad_v
 
-    gray_top = header_h
-    page.draw_rect(fitz.Rect(0, gray_top, PAGE_W, form_bottom), color=_FORM_GRAY, fill=_FORM_GRAY, width=0)
+    page.draw_rect(fitz.Rect(0, header_h, PAGE_W, form_bottom), color=_FORM_GRAY, fill=_FORM_GRAY, width=0)
     page.draw_rect(fitz.Rect(0, 0, PAGE_W, header_h), color=_BLACK, fill=_BLACK, width=0)
 
-    rx0 = PAGE_W - mx - 184
-    contact_rect = fitz.Rect(mx + 2, 6, mx + 178, header_h - 5)
-    logo_rect = fitz.Rect(mx + 186, 5, rx0 - 12, header_h - 5)
-
     a1, a2 = _addr_lines()
-    contact_png = resolve_payment_receipt_contact_png()
-    if not contact_png or not _insert_image_cover(page, contact_rect, contact_png):
-        commercial_txt = f"{a1.upper()}\n{a2.upper()}\n{_whatsapp_line().upper()}"
-        page.insert_textbox(
-            contact_rect,
-            commercial_txt,
-            fontsize=9.0,
-            fontname="hebo",
-            color=_WHITE,
-            align=fitz.TEXT_ALIGN_LEFT,
-        )
-
+    d_str, m_str, y_str = _issued_dma(ctx.issued_at)
+    logo_w = 78.0
+    logo_rect = fitz.Rect(PAGE_W - mx - logo_w, 1.5, PAGE_W - mx, 30.0)
     logo_png = resolve_payment_receipt_logo_png()
-    if not logo_png or not _insert_image_cover(page, logo_rect, logo_png):
+    if not logo_png or not _insert_receipt_header_logo(page, logo_rect, logo_png):
         logo1, logo2 = _logo_lines()
         page.insert_textbox(
-            fitz.Rect(logo_rect.x0, 10, logo_rect.x1, 36),
-            logo1.upper(),
-            fontsize=14.8,
+            logo_rect,
+            f"{logo1.upper()}\n{logo2.upper()}",
+            fontsize=8.0,
             fontname="hebo",
             color=_WHITE,
             align=fitz.TEXT_ALIGN_CENTER,
         )
-        page.insert_textbox(
-            fitz.Rect(logo_rect.x0, 32, logo_rect.x1, 48),
-            logo2.upper(),
-            fontsize=8.85,
-            fontname="helv",
-            color=_WHITE,
-            align=fitz.TEXT_ALIGN_CENTER,
-        )
-        mark = _logo_mark()
-        if mark:
-            page.insert_textbox(
-                fitz.Rect(logo_rect.x0, 47, logo_rect.x1, header_h - 6),
-                mark,
-                fontsize=11.2,
-                fontname="helv",
-                color=_MARK_RED_UI,
-                align=fitz.TEXT_ALIGN_CENTER,
-            )
+    addr_x1 = mx
+    addr_x2 = max(mx + 70.0, PAGE_W - mx - logo_w - 3.0)
+    addr_block = f"{a1.upper()}\n{a2.upper()}"
+    _textbox_shrink_to_fit(
+        page,
+        fitz.Rect(addr_x1, 4.0, addr_x2, 30.5),
+        addr_block,
+        fontsize=7.2,
+        fontname="hebo",
+        color=_WHITE,
+        align=fitz.TEXT_ALIGN_LEFT,
+        min_fs=5.4,
+    )
+    page.insert_textbox(
+        fitz.Rect(mx, 31.0, PAGE_W - mx, 43.0),
+        f"FECHA  ·  {d_str}/{m_str}/{y_str}",
+        fontsize=7.0,
+        fontname="hebo",
+        color=_WHITE,
+        align=fitz.TEXT_ALIGN_CENTER,
+    )
 
-    _lbl_black_header(page, fitz.Rect(rx0, 15, PAGE_W - mx - 2, 29), "ORDEN DE TRABAJO", fontsize=6.85)
-
-    _lbl_black_header(page, fitz.Rect(rx0, 36, rx0 + 34, 48), "FECHA", fontsize=7.5)
-    d_str, m_str, y_str = _issued_dma(ctx.issued_at)
-    bx = rx0 + 38
-    bw, bh, g = 32.0, 21.0, 4.0
-    for i, lab in enumerate(("D", "M", "A")):
-        xb = bx + i * (bw + g)
-        page.insert_textbox(
-            fitz.Rect(xb, 35, xb + bw, 43),
-            lab,
-            fontsize=7.1,
-            fontname="hebo",
-            color=_WHITE,
-            align=fitz.TEXT_ALIGN_CENTER,
-        )
-        cell = fitz.Rect(xb, 45, xb + bw, 45 + bh)
-        val = (d_str, m_str, y_str)[i]
-        _header_white_chip(page, cell, val, fontsize=9.0 if i < 2 else 8.5, bold=(i == 2))
-
-    tw = (inner_w - 2 * gap_mid) / 3
-    x_a = mx
-    x_b = mx + tw + gap_mid
-    x_c = mx + 2 * (tw + gap_mid)
     cita_str, hora_str = _appointment_cita_y_hora(ctx.appointment_when)
+    half = (inner_w - gap_mid) / 2
+    _field_inline(
+        page, fitz.Rect(mx, y_nom, mx + half * 1.15, y_nom + row_h),
+        "NOMBRE:", ctx.client_name or "-", label_width=46.0, fs_label=fs_lab, fs_val=8.4, radius_pct=0.4,
+    )
+    _field_inline(
+        page, fitz.Rect(mx + half * 1.15 + gap_mid, y_nom, PAGE_W - mx, y_nom + row_h),
+        "CEL:", ctx.client_phone or "-", label_width=26.0, fs_label=fs_lab, fs_val=8.4, radius_pct=0.4,
+    )
+    _field_inline(
+        page, fitz.Rect(mx, y_ch, mx + half, y_ch + row_h),
+        "CITA:", cita_str or "-", label_width=34.0, fs_label=fs_lab, fs_val=9.2, radius_pct=0.4,
+    )
+    _field_inline(
+        page, fitz.Rect(mx + half + gap_mid, y_ch, PAGE_W - mx, y_ch + row_h),
+        "HORA:", hora_str or "-", label_width=36.0, fs_label=fs_lab, fs_val=9.2, radius_pct=0.4,
+    )
+    _field_inline(
+        page, fitz.Rect(mx, y_em, PAGE_W - mx, y_em + row_h),
+        "E-MAIL:", ctx.client_email or "-", label_width=46.0, fs_label=fs_lab, fs_val=8.6, radius_pct=0.4,
+    )
 
-    w_nom = inner_w * 0.685
-    r_nom = fitz.Rect(mx, y1, mx + w_nom, y1 + row_h)
-    _field_inline(page, r_nom, "NOMBRE:", ctx.client_name or "-", label_width=54.0, fs_val=9.4, radius_pct=0.44)
-    r_cel = fitz.Rect(r_nom.x1 + gap_mid, y1, PAGE_W - mx, y1 + row_h)
-    _field_inline(page, r_cel, "CEL:", ctx.client_phone or "-", label_width=34.0, fs_val=9.4, radius_pct=0.44)
-
-    rc = fitz.Rect(x_a, y2, x_a + tw, y2 + row_h)
-    _field_inline(page, rc, "CITA:", cita_str or "-", label_width=38.0, fs_val=9.0, radius_pct=0.42)
-    rh = fitz.Rect(x_b, y2, x_b + tw, y2 + row_h)
-    _field_inline(page, rh, "HORA:", hora_str or "-", label_width=40.0, fs_val=9.2, radius_pct=0.42)
-    rem = fitz.Rect(x_c, y2, PAGE_W - mx, y2 + row_h)
-    _field_inline(page, rem, "E-MAIL:", ctx.client_email or "-", label_width=48.0, fs_val=8.6, radius_pct=0.42)
-
-    r_dis = fitz.Rect(mx, y3, PAGE_W - mx, y3 + dis_h)
     diseno_parts: list[str] = []
     body_d = _clean_detail_for_design(ctx.detail or "")
     if body_d:
@@ -913,94 +1071,57 @@ def build_payment_receipt_pdf(ctx: PaymentReceiptPdfContext) -> bytes:
         diseno_txt = diseno_txt[:1397] + "..."
     _field_inline(
         page,
-        r_dis,
+        fitz.Rect(mx, y_dis, PAGE_W - mx, y_dis + dis_h),
         "DISEÑO:",
         diseno_txt,
-        label_width=56.0,
-        fs_label=7.55,
-        fs_val=7.85,
+        label_width=50.0,
+        fs_label=fs_lab,
+        fs_val=8.6,
         radius_pct=0.28,
     )
 
     if show_amounts:
-        bw4 = (inner_w - 3 * gap_mid) / 4
         amounts = [float(a) for a, _ in ctx.payment_history]
         if not amounts and float(ctx.this_payment or 0) > 0:
             amounts = [float(ctx.this_payment)]
         a1s, a2s, a3s = _split_abono_amounts_for_boxes(amounts)
-        fs_ab = 7.85 if len(amounts) > 3 else 8.85
-        specs = [
-            ("PRECIO $", _fmt_cop(ctx.total_amount), True),
-            ("ABONO 1 $", _fmt_money_cell(a1s), False),
-            ("ABONO 2 $", _fmt_money_cell(a2s), False),
-            ("ABONO 3 $", _fmt_money_cell(a3s), False),
-        ]
-        for i, (lab, val, bold_price) in enumerate(specs):
-            x0 = mx + i * (bw4 + gap_mid)
-            rr = fitz.Rect(x0, y4, x0 + bw4, y4 + row_h)
-            lw = 52.0 if i else 50.0
-            _field_inline(
-                page,
-                rr,
-                lab,
-                val,
-                label_width=lw,
-                fs_label=7.35,
-                fs_val=fs_ab if i else 9.0,
-                val_bold=bold_price,
-                radius_pct=0.4,
-            )
-        sys_line = (
-            f"{ctx.kind_label} · Abonado acum.: {_fmt_cop(ctx.deposit_total_after)} · "
-            f"Pendiente: {_fmt_cop(ctx.pending_after)} · Emitido {_issued_dd_mm_yyyy(ctx.issued_at)} "
-            f"{_issued_time_hm(ctx.issued_at)}"
+        _field_inline(
+            page, fitz.Rect(mx, y_pay, PAGE_W - mx, y_pay + row_h),
+            "PRECIO $", _fmt_cop(ctx.total_amount),
+            label_width=58.0, fs_label=fs_lab, fs_val=10.2, val_bold=True, radius_pct=0.4,
         )
-        page.insert_textbox(
-            fitz.Rect(mx + 2, sys_top, PAGE_W - mx - 2, sys_top + 13),
-            sys_line,
-            fontsize=6.35,
-            fontname="helv",
-            color=(0.72, 0.72, 0.72),
-            align=fitz.TEXT_ALIGN_LEFT,
+        y_ab = y_pay + row_h + row_gap
+        _field_inline(
+            page, fitz.Rect(mx, y_ab, mx + half, y_ab + row_h),
+            "ABONO 1", _fmt_money_cell(a1s),
+            label_width=48.0, fs_label=7.8, fs_val=8.8, radius_pct=0.4,
         )
-
+        _field_inline(
+            page, fitz.Rect(mx + half + gap_mid, y_ab, PAGE_W - mx, y_ab + row_h),
+            "ABONO 2", _fmt_money_cell(a2s),
+            label_width=48.0, fs_label=7.8, fs_val=8.8, radius_pct=0.4,
+        )
     banner_y0 = form_bottom
     page.draw_rect(fitz.Rect(0, banner_y0, PAGE_W, banner_y0 + banner_h), color=_RED_STRIP, fill=_RED_STRIP, width=0)
-    page.insert_textbox(
-        fitz.Rect(mx + 8, banner_y0 + 4, PAGE_W - mx - 8, banner_y0 + banner_h - 4),
-        _ATTENTION_TEXT,
-        fontsize=7.45,
+    _textbox_shrink_to_fit(
+        page,
+        fitz.Rect(mx, banner_y0 + 2, PAGE_W - mx, banner_y0 + banner_h - 2),
+        _BANNER_NO_REFUND,
+        fontsize=6.8,
         fontname="hebo",
         color=_WHITE,
         align=fitz.TEXT_ALIGN_CENTER,
+        min_fs=5.2,
+        step=0.25,
     )
 
-    body_top = banner_y0 + banner_h + 14.0
+    body_top = banner_y0 + banner_h + 2.5
     contract_src = (ctx.contract_html or "").strip()
     if contract_src:
-        last_terms_page, terms_y = _render_contract_html_as_terms(doc, page, body_top, mx, contract_src)
+        _render_contract_html_as_terms(doc, page, body_top, mx, contract_src)
     else:
-        last_terms_page, terms_y = _render_terms_blocks(doc, page, body_top, mx)
-
-    foot_bits = [
-        f"Documento generado el {_issued_dd_mm_yyyy(ctx.issued_at)} a las {_issued_time_hm(ctx.issued_at)}"
-    ]
-    extra = _contact_line()
-    if extra:
-        foot_bits.append(extra)
-    foot = " · ".join(foot_bits)
-    foot_h = 24.0
-    if terms_y + foot_h > _terms_page_bottom():
-        last_terms_page = doc.new_page(width=PAGE_W, height=PAGE_H)
-        terms_y = 36.0
-    last_terms_page.insert_textbox(
-        fitz.Rect(mx, terms_y, PAGE_W - mx, terms_y + foot_h),
-        foot,
-        fontsize=6.8,
-        fontname="helv",
-        color=(0.45, 0.45, 0.45),
-        align=fitz.TEXT_ALIGN_CENTER,
-    )
+        _render_terms_blocks(doc, page, body_top, mx)
+    _ensure_contact_on_page(page, mx)
 
     roll = _flatten_receipt_to_thermal_roll(doc)
     out = roll.tobytes(deflate=True, garbage=3, clean=True)
