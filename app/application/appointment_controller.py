@@ -25,7 +25,7 @@ from app.schemas.appointment import (
     AppointmentStatusUpdateRequest,
     appointment_request_to_domain,
 )
-from app.domain.payment_receipt_pdf import receipt_pdf_to_png
+from app.domain.payment_receipt_pdf import receipt_pdf_to_escpos, receipt_pdf_to_png
 from app.schemas.common import (
     AppointmentCreatedResponse,
     AppointmentPaymentCreatedResponse,
@@ -421,6 +421,13 @@ class AppointmentController(Controller):
                     content=png_bytes,
                     media_type="image/png",
                     headers={"Content-Disposition": 'inline; filename="ORDEN DE TRABAJO.png"'},
+                )
+            if fmt in {"escpos", "raw", "bin"}:
+                raw = receipt_pdf_to_escpos(pdf_bytes)
+                return Response(
+                    content=raw,
+                    media_type="application/octet-stream",
+                    headers={"Content-Disposition": 'inline; filename="ORDEN-DE-TRABAJO.bin"'},
                 )
             safe_name = filename.replace('"', "").replace("\r", "").replace("\n", "") or "recibo.pdf"
             return Response(
