@@ -100,26 +100,52 @@ function Start-HiddenCmd {
         [string]$PidName
     )
     $log = Join-Path $LogDir $LogName
-    $inner = "$Command >> `"$log`" 2>&1"
+    # cmd /c quita la primera y la última comilla si la orden empieza por ".
+    # npx.cmd vive en "Program Files"; sin el prefijo call, la ruta se parte y n8n no llega a arrancar.
+    $cmdText = $Command
+    if ($cmdText.StartsWith('"')) { $cmdText = "call $cmdText" }
+    $inner = "$cmdText >> `"$log`" 2>&1"
     $proc = Start-Process -FilePath $env:ComSpec -ArgumentList "/c", $inner -WindowStyle Hidden -WorkingDirectory $WorkDir -PassThru
     Save-ChildPid -Name $PidName -ProcessId $proc.Id
     return $proc
 }
 
+function Get-NodeOptionsWithSystemCa {
+    # Node trae su propio almacén y en este equipo no valida el certificado de WhatsApp.
+    # El almacén de Windows sí. Sin esta opción el flujo de confirmación falla al enviar.
+    $current = $env:NODE_OPTIONS
+    if ($current -match '(^|\s)--use-system-ca(\s|$)') { return $current }
+    if ([string]::IsNullOrWhiteSpace($current)) { return "--use-system-ca" }
+    return "$current --use-system-ca"
+}
+
 function Start-N8nNpxProcess {
     param([string]$NpxPath)
     $env:N8N_PORT = "$N8nPort"
+    $nodeOpts = Get-NodeOptionsWithSystemCa
     if ($Background) {
         if (Test-PortOpen -Port $N8nPort) {
             Write-StackLine "[ok] n8n ya escucha en el puerto $N8nPort" Green
             return
         }
-        Start-HiddenCmd -Command "`"$NpxPath`" --yes n8n" -WorkDir $Root -LogName "n8n.log" -PidName "n8n" | Out-Null
+        Start-HiddenCmd -Command "set `"NODE_OPTIONS=$nodeOpts`"&& call `"$NpxPath`" --yes n8n" -WorkDir $Root -LogName "n8n.log" -PidName "n8n" | Out-Null
         Set-Content -LiteralPath (Join-Path $PidDir "n8n.mode") -Value "npx" -Encoding ASCII
         Write-StackLine "[ok] n8n (npx) en segundo plano → http://127.0.0.1:$N8nPort" Green
         return
     }
-    Start-Process -WindowStyle Minimized -FilePath $NpxPath -ArgumentList @("--yes", "n8n") -WorkingDirectory $Root
+    $previousNodeOptions = $env:NODE_OPTIONS
+    $env:NODE_OPTIONS = $nodeOpts
+    try {
+        Start-Process -WindowStyle Minimized -FilePath $NpxPath -ArgumentList @("--yes", "n8n") -WorkingDirectory $Root
+    }
+    finally {
+        if ($null -eq $previousNodeOptions) {
+            Remove-Item Env:NODE_OPTIONS -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:NODE_OPTIONS = $previousNodeOptions
+        }
+    }
     Write-Host "[ok] n8n (npx) → http://127.0.0.1:$N8nPort" -ForegroundColor Green
 }
 
