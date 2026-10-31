@@ -148,8 +148,13 @@ En la **raíz del repositorio** puedes levantar la API y (opcionalmente) **n8n**
 | [`Launch-Cherry-Dev-Stack.bat`](Launch-Cherry-Dev-Stack.bat) | Windows | Antepone al PATH rutas típicas de Docker Desktop y Node.js y ejecuta `scripts\dev-stack.ps1`. |
 | [`Install-Cherry-Desktop-Shortcut.bat`](Install-Cherry-Desktop-Shortcut.bat) | Windows | Ejecutar **una vez** desde el repo: crea en el escritorio el acceso directo **Cherry Tattoo Dev** y `Cherry-Tattoo-Iniciar.bat`, que invocan el lanzador por ruta absoluta. |
 | [`scripts/install-desktop-shortcut.ps1`](scripts/install-desktop-shortcut.ps1) | Windows | Lo usa el instalador anterior; también puedes llamarlo con `-RepoRoot "ruta\al\repo"`. |
+| [`Install-Cherry-Logon-Task.bat`](Install-Cherry-Logon-Task.bat) | Windows | Una vez: arranque oculto al iniciar sesión (API, panel y n8n) y lo deja corriendo. |
+| [`scripts/install-logon-task.ps1`](scripts/install-logon-task.ps1) | Windows | Lo usa el BAT anterior. `-Unregister` quita la tarea. |
+| [`Stop-Cherry-Dev-Stack.bat`](Stop-Cherry-Dev-Stack.bat) | Windows | Detiene el stack en segundo plano. |
 
 **Doble clic en Windows:** `Launch-Cherry-Dev-Stack.bat` arranca API y, si existe `../cherry_tattoo_angular`, el panel (`npm start` en ventana aparte). Solo API: `set START_PANEL=0` antes del BAT o del script. Ruta custom del panel: `CHERRY_ANGULAR_ROOT`.
+
+**Sin ventanas, al iniciar sesión:** doble clic en [`Install-Cherry-Logon-Task.bat`](Install-Cherry-Logon-Task.bat) (no hace falta administrador). Registra la tarea **Cherry Tattoo Dev Stack** para el usuario actual: 30 segundos después de iniciar sesión arranca API, panel y n8n ocultos, en `0.0.0.0`, así que el resto de la red local sigue entrando por `http://<IP-de-este-PC>:4200`. Si el puerto ya está en uso, no duplica el proceso. Logs y direcciones: `%LOCALAPPDATA%\CherryTattoo\` (`logs\`, `urls.txt`). Detener: [`Stop-Cherry-Dev-Stack.bat`](Stop-Cherry-Dev-Stack.bat). Quitar el arranque automático: `.\scripts\install-logon-task.ps1 -Unregister`. El lanzador con consola (`Launch-Cherry-Dev-Stack.bat`) sigue disponible para ver el log en vivo.
 
 **Entorno virtual:** los scripts buscan Python en `.venv\Scripts\python.exe` o `venv\Scripts\python.exe` (en ese orden). Opcional: variable `CHERRY_PYTHON` con la ruta absoluta a `python.exe`.
 
