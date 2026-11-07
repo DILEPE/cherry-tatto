@@ -18,6 +18,7 @@ from app.schemas.appointment import (
     AppointmentPaymentReceiptListItem,
     AppointmentReceiptResendRequest,
     AppointmentPaymentVerifyRequest,
+    AppointmentClockRequest,
     AppointmentRescheduleRequest,
     AppointmentMetaPatchRequest,
     AppointmentSearchResponse,
@@ -222,6 +223,21 @@ class AppointmentController(Controller):
             raise HTTPException(detail=str(e), status_code=404) from e
         except Exception as e:
             raise HTTPException(detail=f"Error al actualizar estado: {str(e)}", status_code=400) from e
+
+    @patch("/{appointment_id:int}/clock")
+    async def stamp_clock(
+        self,
+        appointment_id: int,
+        data: AppointmentClockRequest,
+        state: State,
+    ) -> MessageResponse:
+        try:
+            await state.service.stamp_appointment_clock(appointment_id, data.date)
+            return MessageResponse(status="success", message="Hora de la cita actualizada.")
+        except ValueError as e:
+            raise HTTPException(detail=str(e), status_code=400) from e
+        except Exception as e:
+            raise HTTPException(detail=f"Error al actualizar la hora: {str(e)}", status_code=400) from e
 
     @patch("/{appointment_id:int}/reschedule")
     async def reprogram(

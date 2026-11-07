@@ -256,6 +256,19 @@ class AppointmentRescheduleRequest(BaseModel):
         return normalize_appointment_datetime_string(v)
 
 
+class AppointmentClockRequest(BaseModel):
+    """Hora de la cita al firmar, sin marcarla como reprogramada."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    date: str = Field(..., description="YYYY-MM-DD HH:MM")
+
+    @field_validator("date")
+    @classmethod
+    def date_ok(cls, v: str) -> str:
+        return normalize_appointment_datetime_string(v)
+
+
 class AppointmentMetaPatchRequest(BaseModel):
     """Actualiza profesional asignado, prioridad y/o texto de detalle (sin fecha/hora)."""
 

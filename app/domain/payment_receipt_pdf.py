@@ -469,9 +469,18 @@ def _clean_design_notes(detail: str) -> str:
     return _AGENDA_SLOTS_DETAIL_PATTERN.sub("", detail or "").strip()
 
 
+_DESIGN_SECTION = re.compile(
+    r"Descripción del diseño:\s*(.*?)(?=\nObservaciones:|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
 def _clean_detail_for_design(detail: str) -> str:
     """Limpia detalle de cita para el campo DISEÑO (incluye «[Tatuaje]» en cualquier posición)."""
     s = _clean_design_notes(detail or "")
+    section = _DESIGN_SECTION.search(s)
+    if section and section.group(1).strip():
+        return " ".join(section.group(1).split()).strip()
     s = _SERVICE_BRACKET_IN_TEXT.sub("", s)
     s = _LEADING_BRACKET_SERVICE_LABEL.sub("", s).strip()
     while True:
