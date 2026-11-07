@@ -1143,6 +1143,24 @@ class AppointmentRepository:
             if conn:
                 conn.close()
 
+    def update_appointment_clock(self, appointment_id: int, new_date: str) -> None:
+        """Actualiza solo la fecha/hora. No cambia el estado."""
+        conn = self.db.get_connection()
+        try:
+            cursor = self._get_cursor(conn)
+            cursor.execute(
+                """
+                UPDATE appointments
+                SET appointment_date = %s
+                WHERE id = %s
+                """,
+                (new_date, appointment_id),
+            )
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
+
     def reprogram_appointment(self, appointment_id: int, new_date: str, detail: Optional[str] = None) -> None:
         conn = self.db.get_connection()
         try:

@@ -1185,6 +1185,22 @@ class BusinessLogicService:
                 raise ValueError("Solo puedes finalizar citas en estado Agendada o Reprogramada.")
         await asyncio.to_thread(self.repository.update_status, appointment_id, status)
 
+    async def stamp_appointment_clock(self, appointment_id: int, new_date: str) -> None:
+        """Deja inicio y fin en el bloque de la firma, sin pasar la cita a Reprogramada."""
+        appointment = await asyncio.to_thread(self.repository.get_by_id, appointment_id)
+        if appointment is None:
+            raise ValueError("Cita no encontrada")
+        status = str(getattr(appointment, "status", "") or "")
+        if status not in {"Agendada", "Reprogramada"}:
+            raise ValueError("Solo puedes ajustar la hora de citas Agendadas o Reprogramadas.")
+        has_contract = await asyncio.to_thread(self.repository.has_contract_for_appointment, appointment_id)
+        if has_contract:
+            raise ValueError("No se puede cambiar la hora: esta cita ya tiene contrato firmado.")
+        start_dt = parse_appointment_datetime(new_date)
+        if start_dt is None:
+            raise ValueError("Fecha/hora de la cita inválida.")
+        await asyncio.to_thread(self.repository.update_appointment_clock, appointment_id, new_date)
+
     async def reprogram_appointment(
         self,
         appointment_id: int,
