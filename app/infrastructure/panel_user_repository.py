@@ -112,7 +112,7 @@ class PanelUserRepository:
                 """
                 SELECT id, username, first_name, last_name, role, store_id
                 FROM panel_users
-                WHERE is_active = 1 AND role IN ('tatuador', 'perforador')
+                WHERE is_active = 1 AND role IN ('tatuador', 'perforador', 'vendedor')
                 ORDER BY role ASC, id ASC
                 """
             )

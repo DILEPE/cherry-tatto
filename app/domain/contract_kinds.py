@@ -105,7 +105,11 @@ def appointment_to_contract_kind(appointment: Any) -> SigningContractKind:
 
 def service_type_to_assignee_panel_role(service_type: str | None) -> str:
     """
-    Rol en `panel_users` que debe tener el profesional asignado a la cita.
-    Tatuaje → tatuador; el resto de servicios aplicables → perforador.
+    Rol en `panel_users` que debe tener quien queda en la agenda.
+    Tatuaje → tatuador. Colocación y cambio de piercing → perforador de la tienda.
+    Limpieza → vendedor (no lleva contrato).
     """
+    st = (service_type or "").strip().lower()
+    if "limpieza" in st:
+        return "vendedor"
     return "tatuador" if service_type_to_contract_kind(service_type) == "tattoo" else "perforador"
