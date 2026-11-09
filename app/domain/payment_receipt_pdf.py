@@ -263,7 +263,8 @@ def _flatten_receipt_to_thermal_roll(src: fitz.Document) -> fitz.Document:
         page_heights.append(clip.height * scale)
     content_h = sum(page_heights)
     forced_mm = _receipt_roll_height_mm()
-    max_h = _mm_to_pt(min(forced_mm if forced_mm is not None else 200.0, 200.0))
+    # Un nombre o un diseño largo alargan la tira. Encogerla a 200 mm dejaba el texto cortado.
+    max_h = _mm_to_pt(min(forced_mm if forced_mm is not None else 500.0, 500.0))
     cutter_pad = min(cutter_pad, _mm_to_pt(1.5))
     out_h = min(content_h + cutter_pad, max_h)
     fit = 1.0
@@ -612,6 +613,22 @@ def _textbox_shrink_to_fit(
     page.insert_textbox(rect, t, fontsize=min_fs, fontname=fontname, color=color, align=align)
 
 
+def _fontsize_that_fits_width(
+    text: str,
+    fontname: str,
+    width: float,
+    fontsize: float,
+    min_fs: float,
+) -> float:
+    """Baja el tamaño hasta que el texto quepa en una sola línea."""
+    shown = (text or "").strip() or "-"
+    fs = float(fontsize)
+    limit = max(width - 0.8, 4.0)
+    while fs > min_fs and fitz.get_text_length(shown, fontname=fontname, fontsize=fs) > limit:
+        fs -= 0.15
+    return max(fs, min_fs)
+
+
 def _field_inline(
     page: fitz.Page,
     rect: fitz.Rect,
@@ -624,6 +641,7 @@ def _field_inline(
     val_bold: bool = False,
     radius_pct: float = 0.42,
     placeholder_if_empty: str = "-",
+    single_line: bool = False,
 ) -> None:
     """Campo blanco redondeado con la etiqueta dentro a la izquierda y el valor a la derecha."""
     _draw_round_rect(page, rect, radius_pct=radius_pct, fill=_WHITE, stroke=_BOX_EDGE, width=0.28)
@@ -643,16 +661,22 @@ def _field_inline(
     shown = (value or "").strip()
     if not shown and placeholder_if_empty:
         shown = placeholder_if_empty
-    if shown:
-        _textbox_shrink_to_fit(
-            page,
-            rv,
-            shown,
-            fontsize=fs_val,
-            fontname=fn,
-            color=_INK,
-            align=fitz.TEXT_ALIGN_LEFT,
-        )
+    if not shown:
+        return
+    if single_line:
+        fs = _fontsize_that_fits_width(shown, fn, rv.width, fs_val, 6.0)
+        baseline = (rv.y0 + rv.y1) / 2.0 + fs * 0.32
+        page.insert_text(fitz.Point(rv.x0, baseline), shown, fontsize=fs, fontname=fn, color=_INK)
+        return
+    _textbox_shrink_to_fit(
+        page,
+        rv,
+        shown,
+        fontsize=fs_val,
+        fontname=fn,
+        color=_INK,
+        align=fitz.TEXT_ALIGN_LEFT,
+    )
 
 
 def _header_white_chip(page: fitz.Page, rect: fitz.Rect, text: str, *, fontsize: float = 10.0, bold: bool = True) -> None:
@@ -764,6 +788,31 @@ def _wrap_line(text: str, *, fs: float, max_w: float) -> list[str]:
             cur = word
     lines.append(cur)
     return lines
+
+
+def _value_box_height(
+    text: str,
+    width: float,
+    fontsize: float,
+    *,
+    min_h: float,
+    max_h: float,
+) -> float:
+    """Alto del campo para que el valor quepa entero y no se recorte a una línea."""
+    raw = (text or "").strip() or "-"
+    paragraphs = raw.split("\n")
+    total_lines = 0
+    usable = max(width, 8.0)
+    for para in paragraphs:
+        chunk = " ".join(para.split())
+        if not chunk:
+            total_lines += 1
+            continue
+        total_lines += max(len(_wrap_line(chunk, fs=fontsize, max_w=usable)), 1)
+    line_h = fontsize * 1.36
+    # pad vertical del campo más un margen para que insert_textbox no encoja la letra.
+    need = 4.0 + line_h * max(total_lines, 1) + 5.0
+    return min(max(need, min_h), max_h)
 
 
 def _ensure_contact_on_page(page: fitz.Page, mx: float) -> None:
@@ -977,10 +1026,6 @@ class PaymentReceiptPdfContext:
 def build_payment_receipt_pdf(ctx: PaymentReceiptPdfContext) -> bytes:
     global PAGE_W, PAGE_H
     PAGE_W = _mm_to_pt(_receipt_roll_width_mm())
-    PAGE_H = _mm_to_pt(200.0)
-
-    doc = fitz.open()
-    page = doc.new_page(width=PAGE_W, height=PAGE_H)
 
     mx = 6.0
     inner_w = PAGE_W - 2 * mx
@@ -988,15 +1033,38 @@ def build_payment_receipt_pdf(ctx: PaymentReceiptPdfContext) -> bytes:
     gray_pad_v = 3.0
     row_h = 15.5
     row_gap = 1.8
-    dis_h = 20.0
     gap_mid = 3.5
     banner_h = 18.0
     fs_lab, fs_val = 7.6, 8.8
+    half = (inner_w - gap_mid) / 2
+    name_box_w = half * 1.15
+    name_val_w = max(name_box_w - 4.0 - 46.0 - 2.0 - 4.0, 8.0)
+    identity_h = max(
+        row_h,
+        _value_box_height(ctx.client_name, name_val_w, 8.4, min_h=row_h, max_h=160.0),
+    )
+    diseno_parts: list[str] = []
+    body_d = _clean_detail_for_design(ctx.detail or "")
+    if body_d:
+        diseno_parts.append(body_d)
+    note = (ctx.payment_note or "").strip()
+    if note and not _skip_payment_note_in_design(note):
+        diseno_parts.append(f"Nota: {note}")
+    diseno_txt = "\n".join(diseno_parts).strip() or "-"
+    if len(diseno_txt) > 1400:
+        diseno_txt = diseno_txt[:1397] + "..."
+    design_val_w = max(inner_w - 4.0 - 50.0 - 2.0 - 4.0, 8.0)
+    dis_h = _value_box_height(diseno_txt, design_val_w, 8.6, min_h=20.0, max_h=420.0)
+    extra = max(0.0, identity_h - row_h) + max(0.0, dis_h - 20.0)
+    PAGE_H = _mm_to_pt(200.0) + extra
+
+    doc = fitz.open()
+    page = doc.new_page(width=PAGE_W, height=PAGE_H)
 
     show_amounts = bool(ctx.include_abono_amounts)
     y = header_h + gray_pad_v
     y_nom = y
-    y_ch = y_nom + row_h + row_gap
+    y_ch = y_nom + identity_h + row_gap
     y_em = y_ch + row_h + row_gap
     y_dis = y_em + row_h + row_gap
     y_pay = y_dis + dis_h + row_gap
@@ -1048,12 +1116,12 @@ def build_payment_receipt_pdf(ctx: PaymentReceiptPdfContext) -> bytes:
     cita_str, hora_str = _appointment_cita_y_hora(ctx.appointment_when)
     half = (inner_w - gap_mid) / 2
     _field_inline(
-        page, fitz.Rect(mx, y_nom, mx + half * 1.15, y_nom + row_h),
+        page, fitz.Rect(mx, y_nom, mx + half * 1.15, y_nom + identity_h),
         "NOMBRE:", ctx.client_name or "-", label_width=46.0, fs_label=fs_lab, fs_val=8.4, radius_pct=0.4,
     )
     _field_inline(
-        page, fitz.Rect(mx + half * 1.15 + gap_mid, y_nom, PAGE_W - mx, y_nom + row_h),
-        "CEL:", ctx.client_phone or "-", label_width=26.0, fs_label=fs_lab, fs_val=8.4, radius_pct=0.4,
+        page, fitz.Rect(mx + half * 1.15 + gap_mid, y_nom, PAGE_W - mx, y_nom + identity_h),
+        "CEL:", ctx.client_phone or "-", label_width=26.0, fs_label=fs_lab, fs_val=8.4, radius_pct=0.4, single_line=True,
     )
     _field_inline(
         page, fitz.Rect(mx, y_ch, mx + half, y_ch + row_h),
@@ -1068,16 +1136,6 @@ def build_payment_receipt_pdf(ctx: PaymentReceiptPdfContext) -> bytes:
         "E-MAIL:", ctx.client_email or "-", label_width=46.0, fs_label=fs_lab, fs_val=8.6, radius_pct=0.4,
     )
 
-    diseno_parts: list[str] = []
-    body_d = _clean_detail_for_design(ctx.detail or "")
-    if body_d:
-        diseno_parts.append(body_d)
-    note = (ctx.payment_note or "").strip()
-    if note and not _skip_payment_note_in_design(note):
-        diseno_parts.append(f"Nota: {note}")
-    diseno_txt = "\n".join(diseno_parts).strip() or "-"
-    if len(diseno_txt) > 1400:
-        diseno_txt = diseno_txt[:1397] + "..."
     _field_inline(
         page,
         fitz.Rect(mx, y_dis, PAGE_W - mx, y_dis + dis_h),
