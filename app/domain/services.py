@@ -12,6 +12,7 @@ import mysql.connector
 from app.domain.treatment_sent import treatment_sent_payload_from_appointment
 from app.domain.contract_kinds import (
     SurveyQuestionScope,
+    _appointment_service_type_value,
     appointment_requires_contract,
     appointment_to_contract_kind,
     service_type_to_assignee_panel_role,
@@ -634,6 +635,7 @@ class BusinessLogicService:
             total_amount=getattr(appointment, "total_amount", None),
             deposit=getattr(appointment, "deposit", None),
             pending_balance=getattr(appointment, "pending_balance", None),
+            service_type=_appointment_service_type_value(appointment),
         )
         if not ok_pay:
             raise ValueError(
@@ -718,6 +720,7 @@ class BusinessLogicService:
             total_amount=getattr(appointment, "total_amount", None),
             deposit=getattr(appointment, "deposit", None),
             pending_balance=getattr(appointment, "pending_balance", None),
+            service_type=_appointment_service_type_value(appointment),
         )
         if not ok_pay:
             raise ValueError(
@@ -2300,6 +2303,7 @@ class BusinessLogicService:
                 total_amount=getattr(appt, "total_amount", None),
                 deposit=getattr(appt, "deposit", None),
                 pending_balance=getattr(appt, "pending_balance", None),
+                service_type=_appointment_service_type_value(appt),
             )
             if not ok_pay:
                 raise ValueError(
@@ -2340,6 +2344,7 @@ class BusinessLogicService:
                 total_amount=getattr(appt, "total_amount", None),
                 deposit=getattr(appt, "deposit", None),
                 pending_balance=getattr(appt, "pending_balance", None),
+                service_type=_appointment_service_type_value(appt),
             )
             if not ok_pay:
                 raise ValueError(pay_err or "OT_NOT_PAID")
