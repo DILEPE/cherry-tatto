@@ -103,7 +103,7 @@ if _should_start_panel; then
   if [[ -n "$PANEL_ROOT" ]] && command -v npm >/dev/null 2>&1; then
     PANEL_EXTRA=()
     if [[ "$BIND_HOST" != "127.0.0.1" && "$BIND_HOST" != "localhost" ]]; then
-      PANEL_EXTRA+=(--allowed-hosts all)
+      PANEL_EXTRA+=(--allowed-hosts all --live-reload=false)
     fi
     (cd "$PANEL_ROOT" && npm start -- --host "$BIND_HOST" --port "$PANEL_PORT" "${PANEL_EXTRA[@]}") &
     PANEL_PID=$!

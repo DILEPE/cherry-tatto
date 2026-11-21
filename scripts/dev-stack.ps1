@@ -284,7 +284,8 @@ if (Should-StartPanel) {
         if ($npm) {
             $panelArgs = @("start", "--", "--host", $BindHost, "--port", "$PanelPort")
             if ($BindHost -ne "127.0.0.1" -and $BindHost -ne "localhost") {
-                $panelArgs += @("--allowed-hosts", "all")
+                # Sin esto, si la tableta pierde un instante la red, Vite recarga la página y se pierde el contrato.
+                $panelArgs += @("--allowed-hosts", "all", "--live-reload=false")
             }
             if ($Background) {
                 if (Test-PortOpen -Port $PanelPort) {
@@ -293,7 +294,7 @@ if (Should-StartPanel) {
                 else {
                     $panelCmd = "npm.cmd start -- --host $BindHost --port $PanelPort"
                     if ($BindHost -ne "127.0.0.1" -and $BindHost -ne "localhost") {
-                        $panelCmd += " --allowed-hosts all"
+                        $panelCmd += " --allowed-hosts all --live-reload=false"
                     }
                     Start-HiddenCmd -Command $panelCmd -WorkDir $panelRoot -LogName "panel.log" -PidName "panel" | Out-Null
                     Write-StackLine "[ok] Panel Angular en segundo plano → http://127.0.0.1:$PanelPort (host $BindHost, proxy API :$ApiPort)" Green
@@ -352,7 +353,7 @@ if ($Background) {
 Write-Host "[ok] API Litestar → http://127.0.0.1:$ApiPort (bind $BindHost)" -ForegroundColor Green
 Write-LanUrls
 if (-not $panelProc) {
-    Write-Host "[info] Panel Angular: en otra terminal, cd cherry_tattoo_angular && npx.cmd ng serve --host $BindHost --port $PanelPort" -ForegroundColor DarkGray
+    Write-Host "[info] Panel Angular: en otra terminal, cd cherry_tattoo_angular && npx.cmd ng serve --host $BindHost --port $PanelPort --live-reload=false" -ForegroundColor DarkGray
     Write-Host "[info] O: `$env:START_PANEL='1'; .\scripts\dev-stack.ps1" -ForegroundColor DarkGray
 }
 Write-Host "[info] Ctrl+C detiene la API. Si se abrió el panel en otra ventana, ciérrala aparte si sigue en :$PanelPort." -ForegroundColor DarkGray
