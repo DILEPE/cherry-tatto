@@ -257,7 +257,7 @@ function Start-AngularPanel([string]$AngularRoot) {
     $env:PORT = "$panelPort"
     $panelArgs = @("start", "--", "--host", $bind, "--port", "$panelPort")
     if ($bind -ne "127.0.0.1" -and $bind -ne "localhost") {
-        $panelArgs += @("--allowed-hosts", "all")
+        $panelArgs += @("--allowed-hosts", "all", "--live-reload=false")
     }
     Start-Process -WindowStyle Minimized -FilePath $npm.Source -ArgumentList $panelArgs -WorkingDirectory $AngularRoot
 }
