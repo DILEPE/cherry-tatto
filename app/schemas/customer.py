@@ -6,6 +6,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.domain.phone_numbers import normalize_customer_phone
+
 DocumentType = Literal["CC", "TI", "CE", "PAS"]
 
 # Redes / contacto social en BD: VARCHAR, texto plano.
@@ -93,6 +95,18 @@ class CustomerCreate(BaseModel):
         if v == "":
             return None
         return v
+
+    @field_validator("phone_number", mode="before")
+    @classmethod
+    def _phone_number_digits(cls, v: object) -> str:
+        return normalize_customer_phone(None if v is None else str(v), required=True) or ""
+
+    @field_validator("emergency_contact_phone", mode="before")
+    @classmethod
+    def _emergency_phone_digits(cls, v: object) -> str | None:
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        return normalize_customer_phone(str(v), required=False)
 
     @staticmethod
     def _subtract_years(base: date, years: int) -> date:
@@ -212,6 +226,18 @@ class CustomerUpdate(BaseModel):
         if v == "":
             return None
         return v
+
+    @field_validator("phone_number", mode="before")
+    @classmethod
+    def _phone_number_digits_u(cls, v: object) -> str:
+        return normalize_customer_phone(None if v is None else str(v), required=True) or ""
+
+    @field_validator("emergency_contact_phone", mode="before")
+    @classmethod
+    def _emergency_phone_digits_u(cls, v: object) -> str | None:
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        return normalize_customer_phone(str(v), required=False)
 
     @staticmethod
     def _subtract_years(base: date, years: int) -> date:
