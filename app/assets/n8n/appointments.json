@@ -20,7 +20,7 @@
     {
       "parameters": {
         "phoneNumberId": "1107930225741590",
-        "recipientPhoneNumber": "=57{{ $json.body.data.phone }}",
+        "recipientPhoneNumber": "={{ (() => { const d = String($json.body.data.phone || '').replace(/\\D/g, ''); if (d.startsWith('57') && d.length > 10) return d; if (d.length === 10 && d.startsWith('3')) return '57' + d; return d; })() }}",
         "template": "appoinmet_confirmation|es",
         "components": {
           "component": [

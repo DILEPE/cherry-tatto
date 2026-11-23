@@ -8,6 +8,7 @@ from typing import Literal, Optional
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.domain.models import AppointmentCreate
+from app.domain.phone_numbers import normalize_customer_phone
 from app.schemas.customer import CUSTOMER_EMBEDDED_IN_APPOINTMENT_DESCRIPTION, CustomerCreate
 
 _DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -127,6 +128,11 @@ class AppointmentCreateRequest(BaseModel):
     @classmethod
     def date_ok(cls, v: str) -> str:
         return normalize_appointment_datetime_string(v)
+
+    @field_validator("phone", mode="before")
+    @classmethod
+    def phone_ok(cls, v: object) -> str:
+        return normalize_customer_phone(None if v is None else str(v), required=True) or ""
 
 
 def appointment_request_to_domain(req: AppointmentCreateRequest) -> AppointmentCreate:

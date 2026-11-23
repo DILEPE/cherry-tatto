@@ -3,13 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional
 
-
-def phone_digits_international(raw: str | None) -> str:
-    """Dígitos en formato internacional sin +. Móvil CO de 10 dígitos → prefijo 57."""
-    digits = "".join(ch for ch in (raw or "") if ch.isdigit())
-    if len(digits) == 10 and digits.startswith("3"):
-        return f"57{digits}"
-    return digits
+from app.domain.phone_numbers import phone_digits_international
 
 
 def treatment_sent_service_type(contract_kind: str) -> str:
